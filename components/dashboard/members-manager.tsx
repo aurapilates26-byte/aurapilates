@@ -1,0 +1,850 @@
+"use client";
+
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { useToast } from "@/components/ui/toast-provider";
+import { Button, Checkbox, ConfirmDialog, Input, SelectMenu } from "@/components/ui";
+
+export type MembersManagerHandle = {
+  refresh: () => void;
+};
+type MembersManagerProps = {
+  viewMode: "list" | "form";
+  onChangeViewMode: (mode: "list" | "form") => void;
+};
+
+type MemberItem = {
+  id: string;
+  firstName: string | null;
+  lastName: string | null;
+  phone: string | null;
+  email: string | null;
+  birthDate: string | null;
+  pack: { id: string; name: string; durationDays: number | null } | null;
+  packStartedAt: string | null;
+  packExpiresAt: string | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  qrCode:
+    | {
+        qrId: string;
+        status: string;
+        updatedAt: string;
+      }
+    | null;
+};
+
+type MembersResponse = {
+  items: MemberItem[];
+  meta: { page: number; pageSize: number; total: number; totalPages: number };
+};
+
+type PackItem = {
+  id: string;
+  name: string;
+  isActive: boolean;
+};
+
+export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerProps>(function MembersManagerWithRef(
+  { viewMode, onChangeViewMode },
+  ref
+) {
+  const { toast } = useToast();
+  const [items, setItems] = useState<MemberItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [modalError, setModalError] = useState<string | null>(null);
+  const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
+  const [memberToDelete, setMemberToDelete] = useState<MemberItem | null>(null);
+  const initialQrPublicIdRef = useRef("");
+
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"ALL" | "ACTIVE" | "INACTIVE">("ALL");
+  const [packFilterId, setPackFilterId] = useState<string>("ALL");
+  const [packs, setPacks] = useState<PackItem[]>([]);
+
+  const [qrId, setQrId] = useState("");
+  const [qrKey, setQrKey] = useState<string | null>(null);
+  const [qrStatus, setQrStatus] = useState<"UNKNOWN" | "UNASSIGNED" | "ASSIGNED" | "NOT_FOUND">("UNKNOWN");
+  const [qrAssignedMemberId, setQrAssignedMemberId] = useState<string | null>(null);
+  const [isFetchingQrKey, setIsFetchingQrKey] = useState(false);
+
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [birthDate, setBirthDate] = useState("");
+  const [packId, setPackId] = useState("");
+  const [isActive, setIsActive] = useState(true);
+
+  const filteredItems = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter((m) => {
+      const name = `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim().toLowerCase();
+      const tel = (m.phone ?? "").toLowerCase();
+      return name.includes(q) || tel.includes(q);
+    });
+  }, [items, search]);
+
+  const visibleItems = useMemo(() => {
+    return filteredItems.filter((m) => {
+      const statusOk =
+        statusFilter === "ALL" ? true : statusFilter === "ACTIVE" ? m.isActive : !m.isActive;
+      const packOk = packFilterId === "ALL" ? true : m.pack?.id === packFilterId;
+      return statusOk && packOk;
+    });
+  }, [filteredItems, packFilterId, statusFilter]);
+
+  const qrIdentifyStatusText = useMemo(() => {
+    if (qrStatus === "UNKNOWN") return isFetchingQrKey ? "Verification..." : "Non verifie";
+    if (qrStatus === "UNASSIGNED") return "Disponible";
+    if (qrStatus === "ASSIGNED") {
+      if (editingMemberId && qrAssignedMemberId === editingMemberId) return "Lie a cet adherent";
+      return "Deja assigne";
+    }
+    return "Identifiant introuvable";
+  }, [qrStatus, isFetchingQrKey, editingMemberId, qrAssignedMemberId]);
+
+  const loadMembers = async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/admin/members?page=1&pageSize=50", { cache: "no-store" });
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(data?.error ?? "Impossible de charger les adherents.");
+      }
+      const data = (await response.json()) as MembersResponse;
+      setItems(data.items);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Une erreur est survenue.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const loadPacks = async () => {
+    const response = await fetch("/api/admin/packs", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error("Impossible de charger les packs.");
+    }
+    const data = (await response.json()) as { items: PackItem[] };
+    setPacks(data.items);
+  };
+
+  const packsForForm = useMemo(() => {
+    if (editingMemberId) return packs;
+    return packs.filter((item) => item.isActive);
+  }, [packs, editingMemberId]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadMembers();
+      void loadPacks();
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    const trimmed = qrId.trim();
+    if (trimmed.length < 10) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    const run = async () => {
+      setIsFetchingQrKey(true);
+      setModalError(null);
+      try {
+        const response = await fetch(`/api/admin/qrcode/${encodeURIComponent(trimmed)}/key`, { cache: "no-store" });
+        if (!response.ok) {
+          const data = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(data?.error ?? "QR code introuvable.");
+        }
+        const data = (await response.json()) as {
+          qrId: string;
+          assignmentStatus: "ASSIGNED" | "UNASSIGNED";
+          assignedMemberId: string | null;
+          qrKey: string;
+        };
+
+        if (isCancelled) return;
+        setQrKey(data.qrKey);
+        setQrStatus(data.assignmentStatus);
+        setQrAssignedMemberId(data.assignedMemberId ?? null);
+      } catch (e) {
+        if (isCancelled) return;
+        setQrKey(null);
+        setQrAssignedMemberId(null);
+        const message = e instanceof Error ? e.message : "Une erreur est survenue.";
+        if (message.toLowerCase().includes("introuvable") || message.toLowerCase().includes("not found")) {
+          setQrStatus("NOT_FOUND");
+        } else {
+          setQrStatus("UNKNOWN");
+        }
+        setModalError(message);
+      } finally {
+        if (!isCancelled) setIsFetchingQrKey(false);
+      }
+    };
+
+    void run();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [qrId]);
+
+  const resetForm = () => {
+    initialQrPublicIdRef.current = "";
+    setQrId("");
+    setQrKey(null);
+    setQrStatus("UNKNOWN");
+    setQrAssignedMemberId(null);
+    setFirstName("");
+    setLastName("");
+    setPhone("");
+    setEmail("");
+    setBirthDate("");
+    setPackId("");
+    setIsActive(true);
+    setModalError(null);
+    setIsSubmitting(false);
+    setIsFetchingQrKey(false);
+  };
+
+  useEffect(() => {
+    if (viewMode === "list") {
+      setEditingMemberId(null);
+    }
+  }, [viewMode]);
+
+  useEffect(() => {
+    if (viewMode === "form" && !editingMemberId) {
+      resetForm();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset baseline when opening blank form
+  }, [viewMode, editingMemberId]);
+
+  const handleStartEdit = (m: MemberItem) => {
+    initialQrPublicIdRef.current = m.qrCode?.qrId ?? "";
+    setEditingMemberId(m.id);
+    setQrId(m.qrCode?.qrId ?? "");
+    setQrKey(null);
+    setQrStatus(m.qrCode ? "UNKNOWN" : "UNKNOWN");
+    setQrAssignedMemberId(null);
+    setFirstName(m.firstName ?? "");
+    setLastName(m.lastName ?? "");
+    setPhone(m.phone ?? "");
+    setEmail(m.email ?? "");
+    setBirthDate(m.birthDate ? m.birthDate.split("T")[0] ?? "" : "");
+    setPackId(m.pack?.id ?? "");
+    setIsActive(m.isActive);
+    setModalError(null);
+    onChangeViewMode("form");
+  };
+
+  const handleSubmit = async () => {
+    setModalError(null);
+
+    const trimmedQr = qrId.trim();
+
+    const isEditMode = editingMemberId !== null;
+
+    if (!isEditMode && !trimmedQr) {
+      setModalError("Veuillez scanner ou saisir un qr_id.");
+      return;
+    }
+
+    if (!email.trim()) {
+      setModalError("L'email est obligatoire.");
+      return;
+    }
+
+    if (!packId) {
+      setModalError("Veuillez choisir un pack.");
+      return;
+    }
+
+    if (!isEditMode) {
+      if (qrStatus === "ASSIGNED") {
+        setModalError("Ce QR code est deja assigne a un adherent.");
+        return;
+      }
+    } else if (trimmedQr) {
+      const changingQr = trimmedQr !== initialQrPublicIdRef.current;
+      if (
+        changingQr &&
+        qrStatus === "ASSIGNED" &&
+        qrAssignedMemberId &&
+        qrAssignedMemberId !== editingMemberId
+      ) {
+        setModalError("Ce QR code est deja assigne a un autre adherent.");
+        return;
+      }
+    }
+
+    setIsSubmitting(true);
+    try {
+      if (!isEditMode) {
+        const response = await fetch("/api/admin/members", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            qrId: trimmedQr,
+            email: email.trim(),
+            firstName: firstName.trim() || undefined,
+            lastName: lastName.trim() || undefined,
+            phone: phone.trim() || undefined,
+            birthDate: birthDate || undefined,
+            packId,
+            isActive,
+          }),
+        });
+
+        if (!response.ok) {
+          const data = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(data?.error ?? "Creation impossible.");
+        }
+
+        await loadMembers();
+        setEditingMemberId(null);
+        onChangeViewMode("list");
+        resetForm();
+        toast({
+          variant: "success",
+          title: "Adherent cree",
+          description: "Le nouvel adherent a ete ajoute et le QR code a ete assigne.",
+        });
+        return;
+      }
+
+      const body: Record<string, unknown> = {
+        email: email.trim(),
+        isActive,
+      };
+      if (firstName.trim().length > 0 && firstName.trim().length < 2) {
+        setModalError("Le prenom doit contenir au moins 2 caracteres ou rester vide.");
+        return;
+      }
+      if (firstName.trim().length >= 2) body.firstName = firstName.trim();
+      if (lastName.trim().length > 0 && lastName.trim().length < 2) {
+        setModalError("Le nom doit contenir au moins 2 caracteres ou rester vide.");
+        return;
+      }
+      if (lastName.trim().length >= 2) body.lastName = lastName.trim();
+      if (phone.trim().length > 0 && phone.trim().length < 6) {
+        setModalError("Le numero de telephone doit contenir au moins 6 chiffres.");
+        return;
+      }
+      if (phone.trim().length >= 6) body.phone = phone.trim();
+      if (birthDate) body.birthDate = birthDate;
+      body.packId = packId;
+      if (trimmedQr !== initialQrPublicIdRef.current) {
+        body.qrId = trimmedQr || undefined;
+      }
+
+      const response = await fetch(`/api/admin/members/${encodeURIComponent(editingMemberId!)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(data?.error ?? "Mise a jour impossible.");
+      }
+
+      await loadMembers();
+      setEditingMemberId(null);
+      onChangeViewMode("list");
+      resetForm();
+      toast({
+        variant: "success",
+        title: "Adherent mis a jour",
+        description: "Les informations ont ete enregistrees.",
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Une erreur est survenue.";
+      setModalError(message);
+      toast({
+        variant: "error",
+        title: "Erreur",
+        description: message,
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleConfirmDeleteMember = async () => {
+    if (!memberToDelete) return;
+    const target = memberToDelete;
+    setIsDeleting(true);
+    try {
+      const response = await fetch(`/api/admin/members/${encodeURIComponent(target.id)}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        let message = "Suppression impossible.";
+        try {
+          const text = await response.text();
+          if (text) {
+            const parsed = JSON.parse(text) as { error?: string };
+            if (parsed.error) message = parsed.error;
+          }
+        } catch {
+          //
+        }
+        throw new Error(message);
+      }
+      setMemberToDelete(null);
+      await loadMembers();
+      toast({
+        variant: "success",
+        title: "Adherent supprime",
+        description:
+          `${target.firstName ?? ""} ${target.lastName ?? ""}`.trim() || "Profil retire — compte supprime.",
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Une erreur est survenue.";
+      toast({
+        variant: "error",
+        title: "Erreur",
+        description: message,
+      });
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleRenewPack = async (member: MemberItem) => {
+    if (!member.pack?.id) {
+      toast({
+        variant: "error",
+        title: "Aucun pack",
+        description: "Cet adherent n'a pas de pack a renouveler.",
+      });
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/admin/members/${encodeURIComponent(member.id)}/renew-pack`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(data?.error ?? "Renouvellement impossible.");
+      }
+      await loadMembers();
+      toast({
+        variant: "success",
+        title: "Pack renouvele",
+        description: `La date de pack a ete mise a jour pour ${member.firstName ?? "cet adherent"}.`,
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Une erreur est survenue.";
+      toast({
+        variant: "error",
+        title: "Erreur",
+        description: message,
+      });
+    }
+  };
+
+  // Expose actions for DashboardHeader buttons (avoid duplication)
+  useImperativeHandle(ref, () => {
+    return {
+      refresh() {
+        void loadMembers();
+      },
+    };
+  });
+
+  return (
+    <div className="space-y-6">
+      {viewMode === "list" ? isLoading ? (
+        <div className="rounded-2xl border border-brand-medium/20 bg-white p-6 text-sm text-brand-dark/70">
+          Chargement...
+        </div>
+      ) : error ? (
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-sm text-red-700">{error}</div>
+      ) : (
+        <div className="rounded-2xl border border-brand-medium/20 bg-white">
+          <div className="border-b border-brand-medium/20 px-5 py-4">
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                <div>
+                  <p className="text-base font-semibold text-brand-dark">Liste des adherents</p>
+                  <p className="mt-1 text-xs text-brand-dark/60">{visibleItems.length} resultat(s)</p>
+                </div>
+
+                <div className="grid min-w-0 w-full gap-2 md:max-w-3xl md:grid-cols-[minmax(320px,1fr)_160px_190px_140px] md:items-end">
+                  <Input
+                    id="members-search"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Nom, telephone..."
+                    className="mt-0 py-2.5"
+                  />
+                  <SelectMenu
+                    id="members-status"
+                    value={statusFilter}
+                    onChange={(value) => setStatusFilter(value)}
+                    options={[
+                      { value: "ALL", label: "Tous" },
+                      { value: "ACTIVE", label: "Actifs" },
+                      { value: "INACTIVE", label: "Inactifs" },
+                    ]}
+                  />
+                  <SelectMenu
+                    id="members-pack"
+                    value={packFilterId}
+                    onChange={(value) => setPackFilterId(value)}
+                    options={[
+                      { value: "ALL", label: "Tous les packs" },
+                      ...packs.map((pack) => ({ value: pack.id, label: pack.name })),
+                    ]}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearch("");
+                      setStatusFilter("ALL");
+                      setPackFilterId("ALL");
+                    }}
+                    aria-label="Reinitialiser les filtres"
+                    title="Reinitialiser"
+                    className="flex h-[42px] w-[42px] items-center justify-center rounded-xl border border-brand-medium/30 bg-white text-lg font-semibold text-brand-dark/70 transition hover:bg-zinc-50 hover:text-brand-dark"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          {visibleItems.length === 0 ? (
+            <div className="px-5 py-10 text-center text-sm text-brand-dark/60">
+              Aucun adherent. Ajustez la recherche ou les filtres.
+            </div>
+          ) : (
+            <>
+              <div className="divide-y divide-brand-medium/15 lg:hidden">
+                {visibleItems.map((m) => (
+                  <article key={m.id} className="space-y-2 px-4 py-3 text-sm">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-semibold text-brand-dark">
+                        {(m.firstName || m.lastName) ? `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() : "Adherent"}
+                      </p>
+                      <span
+                        className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
+                          m.isActive
+                            ? "border border-emerald-200 bg-emerald-50 text-emerald-900"
+                            : "border border-zinc-200 bg-zinc-50 text-zinc-800"
+                        }`}
+                      >
+                        {m.isActive ? "Actif" : "Inactif"}
+                      </span>
+                    </div>
+                    <p className="text-xs text-brand-dark/75">Pack: {m.pack?.name ?? "—"}</p>
+                    <p className="text-xs text-brand-dark/75">Email: {m.email ?? "—"}</p>
+                    <p className="text-xs text-brand-dark/75">Tel: {m.phone ?? "—"}</p>
+                    <div className="flex items-center justify-between gap-2">
+                      <span
+                        className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
+                          m.qrCode?.qrId
+                            ? "border border-emerald-200 bg-emerald-50 text-emerald-900"
+                            : "border border-amber-200 bg-amber-50 text-amber-900"
+                        }`}
+                      >
+                        QR: {m.qrCode?.qrId ? "Assigne" : "Non assigne"}
+                      </span>
+                      <div className="flex flex-wrap items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleStartEdit(m)}
+                          className="rounded-full border border-brand-medium/30 bg-white px-3 py-1.5 text-xs font-semibold text-brand-dark/80 transition hover:bg-zinc-50"
+                        >
+                          Modifier
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setMemberToDelete(m)}
+                          className="rounded-full border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50"
+                        >
+                          Supprimer
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleRenewPack(m)}
+                          disabled={!m.pack?.id}
+                          className="rounded-full border border-brand-medium/30 bg-white px-3 py-1.5 text-xs font-semibold text-brand-dark/80 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Renouveler
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+
+              <div className="hidden overflow-x-auto lg:block">
+                <table className="w-full min-w-[920px]">
+                  <thead>
+                    <tr className="border-b border-brand-medium/15 bg-zinc-50/60 text-left text-xs font-semibold text-brand-dark/70">
+                      <th className="px-5 py-3">Nom</th>
+                      <th className="px-4 py-3">Statut</th>
+                      <th className="px-4 py-3">Pack</th>
+                      <th className="px-4 py-3">QR</th>
+                      <th className="px-4 py-3">Email</th>
+                      <th className="px-4 py-3">Telephone</th>
+                      <th className="px-4 py-3">Pack expire</th>
+                      <th className="px-4 py-3 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-brand-medium/15">
+                    {visibleItems.map((m) => (
+                      <tr key={m.id} className="text-sm">
+                        <td className="px-5 py-4 font-semibold text-brand-dark">
+                          {(m.firstName || m.lastName) ? `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() : "Adherent"}
+                        </td>
+                        <td className="px-4 py-4">
+                          <span
+                            className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
+                              m.isActive
+                                ? "border border-emerald-200 bg-emerald-50 text-emerald-900"
+                                : "border border-zinc-200 bg-zinc-50 text-zinc-800"
+                            }`}
+                          >
+                            {m.isActive ? "Actif" : "Inactif"}
+                          </span>
+                        </td>
+                        <td className="px-4 py-4 text-brand-dark/80">{m.pack?.name ?? "—"}</td>
+                        <td className="px-4 py-4">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
+                                m.qrCode?.qrId
+                                  ? "border border-emerald-200 bg-emerald-50 text-emerald-900"
+                                  : "border border-amber-200 bg-amber-50 text-amber-900"
+                              }`}
+                            >
+                              {m.qrCode?.qrId ? "Assigne" : "Non assigne"}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-4 text-brand-dark/80">{m.email ?? "—"}</td>
+                        <td className="px-4 py-4 text-brand-dark/80">{m.phone ?? "—"}</td>
+                        <td className="px-4 py-4 text-xs text-brand-dark/60">
+                          {m.packExpiresAt ? new Date(m.packExpiresAt).toLocaleDateString("fr-FR") : "—"}
+                        </td>
+                        <td className="px-4 py-4 text-right">
+                          <div className="flex flex-wrap items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleStartEdit(m)}
+                              className="rounded-full border border-brand-medium/30 bg-white px-3 py-1.5 text-xs font-semibold text-brand-dark/80 transition hover:bg-zinc-50"
+                            >
+                              Modifier
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setMemberToDelete(m)}
+                              className="rounded-full border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50"
+                            >
+                              Supprimer
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleRenewPack(m)}
+                              disabled={!m.pack?.id}
+                              className="rounded-full border border-brand-medium/30 bg-white px-3 py-1.5 text-xs font-semibold text-brand-dark/80 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              Renouveler
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
+      ) : (
+        <div className="rounded-2xl border border-brand-medium/20 bg-white p-6 shadow-sm">
+          <h3 className="text-xl font-semibold text-brand-dark">
+            {editingMemberId ? "Modifier un adherent" : "Ajouter un adherent"}
+          </h3>
+          <p className="mt-2 text-sm text-brand-dark/70">
+            {editingMemberId ? (
+              <>Mettez a jour les infos, le pack ou le QR code associe si necessaire.</>
+            ) : (
+              <>
+                Scannez un QR code vierge puis collez l&apos;identifiant du QR code. La cle associee sera chargee
+                automatiquement.
+              </>
+            )}
+          </p>
+
+          <div className="mt-5 space-y-4">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div>
+                  <Input
+                    id="member-qrid"
+                    label={`Identifiant QR: ${qrIdentifyStatusText}`}
+                    value={qrId}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setQrId(next);
+
+                      if (next.trim().length < 10) {
+                        setQrKey(null);
+                        setQrStatus("UNKNOWN");
+                        setQrAssignedMemberId(null);
+                        setModalError(null);
+                      }
+                    }}
+                    placeholder="Ex: identifiant qr code"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="member-qrkey" className="text-sm font-medium text-brand-dark">
+                    Clé qr code
+                  </label>
+                  <div
+                    id="member-qrkey"
+                    className="mt-2 min-h-[42px] w-full rounded-xl border border-brand-medium/35 bg-zinc-50 px-4 py-2.5 text-sm text-brand-dark/80"
+                  >
+                    {isFetchingQrKey ? "Chargement..." : qrKey ?? "—"}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div>
+                  <Input
+                    id="member-first"
+                    label="Prenom"
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <Input
+                    id="member-last"
+                    label="Nom"
+                    value={lastName}
+                    onChange={(e) => setLastName(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div>
+                  <Input
+                    id="member-email"
+                    label="Email"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <Input
+                    id="member-birthdate"
+                    label="Date de naissance"
+                    type="date"
+                    value={birthDate}
+                    onChange={(e) => setBirthDate(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div>
+                  <SelectMenu
+                    id="member-pack"
+                    value={packId}
+                    onChange={(value) => setPackId(value)}
+                    label="Pack choisi"
+                    placeholder="Choisir un pack"
+                    options={[
+                      { value: "" as string, label: "Choisir un pack" },
+                      ...packsForForm.map((pack) => ({
+                        value: pack.id,
+                        label: `${pack.name}${pack.isActive ? "" : " (inactive)"}`,
+                      })),
+                    ]}
+                  />
+                </div>
+                <div>
+                  <Input
+                    id="member-phone"
+                    label="Telephone"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <Checkbox checked={isActive} onChange={(e) => setIsActive(e.target.checked)} label="Actif" />
+          </div>
+
+          {modalError ? (
+            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {modalError}
+            </div>
+          ) : null}
+
+          <div className="mt-6 flex justify-end gap-3">
+            <button
+              type="button"
+              onClick={() => onChangeViewMode("list")}
+              disabled={isSubmitting}
+              className="rounded-full border border-brand-medium/35 bg-white px-4 py-2 text-sm font-medium text-brand-dark transition hover:bg-zinc-50"
+            >
+              Retour a la liste
+            </button>
+            <Button type="button" onClick={() => void handleSubmit()} disabled={isSubmitting}>
+              {isSubmitting
+                ? editingMemberId
+                  ? "Enregistrement..."
+                  : "Creation..."
+                : editingMemberId
+                  ? "Mettre a jour"
+                  : "Confirmer"}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <ConfirmDialog
+        isOpen={Boolean(memberToDelete)}
+        title="Supprimer cet adherent ?"
+        description={
+          memberToDelete
+            ? `${memberToDelete.firstName ?? ""} ${memberToDelete.lastName ?? ""}`.trim() ||
+              memberToDelete.email ||
+              "Cette fiche sera supprimee ainsi que le compte utilisateur associe."
+            : undefined
+        }
+        confirmText="Supprimer"
+        isConfirming={isDeleting}
+        onClose={() => {
+          if (!isDeleting) setMemberToDelete(null);
+        }}
+        onConfirm={() => void handleConfirmDeleteMember()}
+      />
+    </div>
+  );
+});
+

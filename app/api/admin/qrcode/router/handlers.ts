@@ -1,0 +1,374 @@
+import { createHash, randomBytes, randomInt } from "crypto";
+import { mkdir, unlink, writeFile } from "fs/promises";
+import { join } from "path";
+import { Prisma, QrCodeStatus } from "@prisma/client";
+import QRCode from "qrcode";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/auth";
+import { checkRateLimit } from "@/lib/rate-limit";
+import { createQrCodeSchema, listQrCodeQuerySchema, updateQrCodeSchema } from "./schemas";
+import { prisma as db } from "@/lib/prisma";
+
+function errorResponse(message: string, status: number) {
+  return Response.json({ error: message }, { status });
+}
+
+function tooManyRequestsResponse(retryAfterSeconds: number) {
+  return Response.json(
+    {
+      error: "Trop de generations de QR code. Veuillez reessayer dans quelques instants.",
+    },
+    {
+      status: 429,
+      headers: {
+        "Retry-After": String(retryAfterSeconds),
+      },
+    }
+  );
+}
+
+async function requireAdminSession() {
+  const session = await getServerSession(authOptions);
+
+  if (!session?.user) {
+    return { error: errorResponse("Unauthorized", 401) };
+  }
+
+  if (session.user.role !== "ADMIN") {
+    return { error: errorResponse("Forbidden", 403) };
+  }
+
+  return { session };
+}
+
+function buildPublicId() {
+  const seed = `${Date.now()}-${randomBytes(16).toString("hex")}`;
+  return createHash("sha256").update(seed).digest("hex").slice(0, 24);
+}
+
+function buildQrKey() {
+  // 4 digits, cryptographically random (non-sequential).
+  return String(randomInt(0, 10_000)).padStart(4, "0");
+}
+
+async function buildUniqueQrKey() {
+  // Keep retrying random 4-digit keys to avoid collisions.
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const candidate = buildQrKey();
+    const existing = await db.qrCode.findFirst({
+      where: { qrKey: candidate },
+      select: { id: true },
+    });
+    if (!existing) return candidate;
+  }
+  throw new Error("QR_KEY_POOL_EXHAUSTED");
+}
+
+function buildQrImageUrl(publicId: string) {
+  return `/qrcode/${publicId}.png`;
+}
+
+function getRequestOrigin(request: Request) {
+  try {
+    const url = new URL(request.url);
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+function isLocalOrigin(origin: string) {
+  try {
+    const url = new URL(origin);
+    return url.hostname === "localhost" || url.hostname === "127.0.0.1";
+  } catch {
+    return false;
+  }
+}
+
+function buildPublicScanUrl(publicId: string, request: Request) {
+  const requestOrigin = getRequestOrigin(request);
+
+  // Deep-audit safety:
+  // - If you generate from localhost, always encode localhost in the QR,
+  //   even if NEXT_PUBLIC_SITE_URL is mistakenly set to production.
+  if (requestOrigin && isLocalOrigin(requestOrigin)) {
+    return `${requestOrigin.replace(/\/+$/, "")}/id/${publicId}`;
+  }
+
+  const rawBaseUrl =
+    process.env.NEXT_PUBLIC_SITE_URL ??
+    process.env.NEXTAUTH_URL ??
+    requestOrigin ??
+    "https://aurapilates.tn";
+  const baseUrl = rawBaseUrl.replace(/\/+$/, "");
+  return `${baseUrl}/id/${publicId}`;
+}
+
+async function writeQrCodeFile(params: {
+  publicId: string;
+  targetUrl: string; // Contenu encode dans le QR (scan URL)
+}) {
+  const outputDir = join(process.cwd(), "public", "qrcode");
+  await mkdir(outputDir, { recursive: true });
+
+  const outputPath = join(outputDir, `${params.publicId}.png`);
+
+  const pngBuffer = await QRCode.toBuffer(params.targetUrl, {
+    width: 512,
+    color: {
+      dark: "#000000",
+      light: "#FFFFFF",
+    },
+    margin: 1,
+  });
+  await writeFile(outputPath, pngBuffer);
+}
+
+function mapQrCode(
+  record: {
+  id: string;
+  publicId: string;
+  name: string;
+  status: QrCodeStatus;
+  assignedMemberId: string | null;
+  createdByUserId: string;
+  assignedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+  },
+  request: Request
+) {
+  const version = record.updatedAt.getTime();
+  return {
+    publicId: record.publicId,
+    name: record.name,
+    status: record.status,
+    assignedMemberId: record.assignedMemberId,
+    createdByUserId: record.createdByUserId,
+    assignedAt: record.assignedAt,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    // Cache-buster: fixes "image not shown until refresh" after generation.
+    imageUrl: `${buildQrImageUrl(record.publicId)}?v=${version}`,
+    scanUrl: buildPublicScanUrl(record.publicId, request),
+  };
+}
+
+export async function listAdminQrCodes(request: Request) {
+  const sessionResult = await requireAdminSession();
+  if ("error" in sessionResult) return sessionResult.error;
+
+  const url = new URL(request.url);
+  const parsedQuery = listQrCodeQuerySchema.safeParse({
+    search: url.searchParams.get("search") ?? undefined,
+    status: url.searchParams.get("status") ?? undefined,
+    assignment: url.searchParams.get("assignment") ?? undefined,
+    page: url.searchParams.get("page") ?? "1",
+    pageSize: url.searchParams.get("pageSize") ?? "10",
+  });
+
+  if (!parsedQuery.success) {
+    return errorResponse("Invalid query parameters", 400);
+  }
+
+  const { search, status, assignment, page, pageSize } = parsedQuery.data;
+
+  const where: Prisma.QrCodeWhereInput = {
+    ...(status ? { status } : {}),
+    ...(assignment === "ASSIGNED"
+      ? { assignedMemberId: { not: null } }
+      : assignment === "UNASSIGNED"
+        ? { assignedMemberId: null }
+        : {}),
+    ...(search
+      ? {
+          OR: [
+            { name: { contains: search, mode: "insensitive" } },
+            { publicId: { contains: search, mode: "insensitive" } },
+          ],
+        }
+      : {}),
+  };
+
+  const [items, total] = await Promise.all([
+    db.qrCode.findMany({
+      where,
+      orderBy: { updatedAt: "desc" },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    }),
+    db.qrCode.count({ where }),
+  ]);
+
+  return Response.json({
+    items: items.map((item) => mapQrCode(item, request)),
+    meta: {
+      page,
+      pageSize,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    },
+  });
+}
+
+export async function createAdminQrCode(request: Request) {
+  const sessionResult = await requireAdminSession();
+  if ("error" in sessionResult) return sessionResult.error;
+
+  const rateLimit = checkRateLimit(`admin-qrcode-create:${sessionResult.session.user.id}`, {
+    maxRequests: 30,
+    windowMs: 5 * 60 * 1000,
+  });
+
+  if (!rateLimit.allowed) {
+    return tooManyRequestsResponse(rateLimit.retryAfterSeconds);
+  }
+
+  const rawBody = await request.json().catch(() => null);
+  const parsedBody = createQrCodeSchema.safeParse(rawBody);
+
+  if (!parsedBody.success) {
+    return errorResponse("Invalid request payload", 400);
+  }
+
+  const data = parsedBody.data;
+  const createdItems = [];
+
+  for (let index = 0; index < data.quantity; index += 1) {
+    const numberedName = data.quantity > 1 ? `${data.name} ${String(index + 1).padStart(2, "0")}` : data.name;
+    const publicId = buildPublicId();
+    const qrKey = await buildUniqueQrKey();
+    const scanUrl = buildPublicScanUrl(publicId, request);
+    const created = await db.qrCode.create({
+      data: {
+        publicId,
+        qrKey,
+        name: numberedName,
+        status: QrCodeStatus.DRAFT,
+        assignedMember: data.assignedMemberId ? { connect: { id: data.assignedMemberId } } : undefined,
+        assignedAt: data.assignedMemberId ? new Date() : null,
+        createdByUser: { connect: { id: sessionResult.session.user.id } },
+      },
+    });
+
+    await writeQrCodeFile({
+      publicId,
+      // On encode dans l'image un lien de scan public ne revelant aucune info sensible.
+      targetUrl: scanUrl,
+    });
+
+    createdItems.push(mapQrCode(created, request));
+  }
+
+  return Response.json({ items: createdItems }, { status: 201 });
+}
+
+export async function getAdminQrCodeByPublicId(publicId: string, request: Request) {
+  const sessionResult = await requireAdminSession();
+  if ("error" in sessionResult) return sessionResult.error;
+
+  const item = await db.qrCode.findUnique({
+    where: { publicId },
+  });
+
+  if (!item) {
+    return errorResponse("QR code not found", 404);
+  }
+
+  return Response.json({ item: mapQrCode(item, request) });
+}
+
+export async function updateAdminQrCodeByPublicId(publicId: string, request: Request) {
+  const sessionResult = await requireAdminSession();
+  if ("error" in sessionResult) return sessionResult.error;
+
+  const rawBody = await request.json().catch(() => null);
+  const parsedBody = updateQrCodeSchema.safeParse(rawBody);
+
+  if (!parsedBody.success) {
+    return errorResponse("Invalid request payload", 400);
+  }
+
+  const data = parsedBody.data;
+
+  const existing = await db.qrCode.findUnique({
+    where: { publicId },
+    select: { id: true },
+  });
+
+  if (!existing) {
+    return errorResponse("QR code not found", 404);
+  }
+
+  const updated = await db.qrCode.update({
+    where: { publicId },
+    data: {
+      ...(data.name ? { name: data.name } : {}),
+      ...(data.status ? { status: data.status } : {}),
+      ...(data.assignedMemberId !== undefined
+        ? data.assignedMemberId
+          ? { assignedMember: { connect: { id: data.assignedMemberId } } }
+          : { assignedMember: { disconnect: true } }
+        : {}),
+      ...(data.assignedMemberId !== undefined
+        ? data.assignedMemberId
+          ? { assignedAt: new Date() }
+          : { assignedAt: null }
+        : {}),
+    },
+  });
+
+  return Response.json({ item: mapQrCode(updated, request) });
+}
+
+export async function getAdminQrKeyByPublicId(publicId: string) {
+  const sessionResult = await requireAdminSession();
+  if ("error" in sessionResult) return sessionResult.error;
+
+  const item = await db.qrCode.findUnique({
+    where: { publicId },
+    select: {
+      publicId: true,
+      qrKey: true,
+      assignedMemberId: true,
+    },
+  });
+
+  if (!item) {
+    return errorResponse("QR code not found", 404);
+  }
+
+  // Only reveal qrKey in secured admin context.
+  return Response.json({
+    qrId: item.publicId,
+    assignmentStatus: item.assignedMemberId ? "ASSIGNED" : "UNASSIGNED",
+    assignedMemberId: item.assignedMemberId,
+    qrKey: item.qrKey,
+  });
+}
+
+export async function deleteAdminQrCodeByPublicId(publicId: string) {
+  const sessionResult = await requireAdminSession();
+  if ("error" in sessionResult) return sessionResult.error;
+
+  const existing = await db.qrCode.findUnique({
+    where: { publicId },
+    select: { id: true, publicId: true },
+  });
+
+  if (!existing) {
+    return errorResponse("QR code not found", 404);
+  }
+
+  await db.qrCode.delete({
+    where: { id: existing.id },
+  });
+
+  const imagePath = join(process.cwd(), "public", "qrcode", `${existing.publicId}.png`);
+  await unlink(imagePath).catch(() => {
+    // Keep API resilient if file was already removed manually.
+  });
+
+  return Response.json({ success: true });
+}

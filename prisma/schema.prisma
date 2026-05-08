@@ -1,0 +1,288 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  MEMBRE
+}
+
+enum QrCodeStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum DayOfWeek {
+  MON
+  TUE
+  WED
+  THU
+  FRI
+  SAT
+  SUN
+}
+
+enum PlanningLevel {
+  ALL_LEVELS
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+
+enum BookingWindow {
+  WEEKLY
+  FIFTEEN_DAYS
+  ONE_MONTH
+}
+
+enum ReservationStatus {
+  BOOKED
+  WAITLIST
+  CANCELLED
+  ATTENDED
+}
+
+model User {
+  id             String    @id @default(cuid())
+  name           String?
+  email          String    @unique
+  image          String?
+  password       String?
+  role           UserRole  @default(MEMBRE)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  sessions       Session[]
+  memberProfile  Member?
+  createdQrCodes QrCode[]  @relation("QrCodeCreatedBy")
+
+  @@map("users")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model Member {
+  id              String   @id @default(cuid())
+  userId          String?  @unique
+  firstName       String?
+  lastName        String?
+  phone           String?
+  birthDate       DateTime?
+  packId          String?
+  packStartedAt   DateTime?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  user            User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pack            Pack?    @relation(fields: [packId], references: [id], onDelete: SetNull)
+  assignedQrCodes QrCode[] @relation("QrCodeAssignedMember")
+  checkIns        CheckIn[]
+  reservations    Reservation[]
+  attendance      Attendance[]
+  packBalances    MemberPackBalance[]
+
+  @@index([packId])
+  @@map("members")
+}
+
+model MemberPackBalance {
+  id         String   @id @default(cuid())
+  memberId   String
+  packId     String
+  courseSlug String?
+  remaining  Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  pack   Pack   @relation(fields: [packId], references: [id], onDelete: Cascade)
+
+  @@unique([memberId, packId, courseSlug])
+  @@index([memberId])
+  @@index([packId])
+  @@map("member_pack_balances")
+}
+
+model Pack {
+  id           String   @id @default(cuid())
+  category     String?
+  name         String   @unique
+  description  String?
+  sessionCount Int?
+  priceCents   Int?
+  durationDays Int?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  members      Member[]
+  features     PackFeature[]
+  courseQuotas PackCourseQuota[]
+  memberBalances MemberPackBalance[]
+
+  @@map("packs")
+}
+
+model PackCourseQuota {
+  id           String   @id @default(cuid())
+  packId       String
+  courseSlug   String
+  sessionCount Int
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  pack Pack @relation(fields: [packId], references: [id], onDelete: Cascade)
+
+  @@unique([packId, courseSlug])
+  @@index([packId])
+  @@index([courseSlug])
+  @@map("pack_course_quotas")
+}
+
+model PackFeature {
+  id        String   @id @default(cuid())
+  packId    String
+  label     String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  pack      Pack     @relation(fields: [packId], references: [id], onDelete: Cascade)
+
+  @@index([packId])
+  @@index([packId, sortOrder])
+  @@map("pack_features")
+}
+
+model Coach {
+  id          String   @id @default(cuid())
+  imageUrl    String?
+  firstName   String
+  lastName    String
+  description String?
+  email       String?  @unique
+  phone       String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  planning    Planning[]
+
+  @@index([lastName, firstName])
+  @@map("coaches")
+}
+
+model Planning {
+  id               String    @id @default(cuid())
+  courseSlug       String
+  coachId          String?
+  dayOfWeek        DayOfWeek
+  level            PlanningLevel @default(ALL_LEVELS)
+  bookingWindow    BookingWindow @default(WEEKLY)
+  startTime        String    @default("00:00")
+  endTime          String    @default("00:00")
+  durationMinutes  Int
+  capacity         Int
+  waitlistCapacity Int?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  coach            Coach?    @relation(fields: [coachId], references: [id], onDelete: SetNull)
+  reservations     Reservation[]
+  attendance       Attendance[]
+
+  @@index([dayOfWeek])
+  @@index([coachId])
+  @@index([courseSlug])
+  @@index([dayOfWeek, startTime])
+  @@map("planning")
+}
+
+model Reservation {
+  id          String            @id @default(cuid())
+  memberId    String
+  planningId  String
+  sessionDate DateTime          @db.Date
+  status      ReservationStatus @default(BOOKED)
+  packRefundedAt DateTime?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  member      Member            @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  planning    Planning          @relation(fields: [planningId], references: [id], onDelete: Cascade)
+  attendance  Attendance?
+  checkIn     CheckIn?
+
+  @@unique([memberId, planningId, sessionDate])
+  @@index([planningId, sessionDate])
+  @@index([memberId, sessionDate])
+  @@map("reservations")
+}
+
+model Attendance {
+  id            String      @id @default(cuid())
+  reservationId String      @unique
+  memberId      String
+  planningId    String
+  sessionDate   DateTime    @db.Date
+  markedAt      DateTime    @default(now())
+  markedBy      String      @default("STAFF_KEY") // "STAFF_KEY" | "ADMIN"
+
+  reservation Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  member      Member      @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  planning    Planning    @relation(fields: [planningId], references: [id], onDelete: Cascade)
+
+  @@index([planningId, sessionDate])
+  @@index([memberId, sessionDate])
+  @@map("attendance")
+}
+
+model QrCode {
+  id              String         @id @default(cuid())
+  publicId        String         @unique
+  qrKey           String         @default("")
+  name            String
+  status          QrCodeStatus   @default(DRAFT)
+  assignedMemberId String?
+  createdByUserId String
+  assignedAt      DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  assignedMember  Member?        @relation("QrCodeAssignedMember", fields: [assignedMemberId], references: [id], onDelete: SetNull)
+  createdByUser   User           @relation("QrCodeCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  checkIns        CheckIn[]
+
+  @@index([publicId])
+  @@index([status])
+  @@index([assignedMemberId])
+  @@index([createdByUserId])
+  @@map("qrcodes")
+}
+
+model CheckIn {
+  id            String   @id @default(cuid())
+  memberId      String
+  qrCodeId      String
+  reservationId String?  @unique
+  scannedAt     DateTime @default(now())
+  method        String // "STAFF_KEY" | "ADMIN_SESSION" (kept string for flexibility)
+
+  member      Member       @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  qrCode      QrCode       @relation(fields: [qrCodeId], references: [id], onDelete: Cascade)
+  reservation Reservation? @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+
+  @@index([memberId])
+  @@index([qrCodeId])
+  @@index([scannedAt])
+  @@map("checkins")
+}
