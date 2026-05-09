@@ -2,7 +2,7 @@
 
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { useToast } from "@/components/ui/toast-provider";
-import { Button, Checkbox, ConfirmDialog, Input, SelectMenu } from "@/components/ui";
+import { Button, Checkbox, ConfirmDialog, Input, Modal, SelectMenu } from "@/components/ui";
 
 export type MembersManagerHandle = {
   refresh: () => void;
@@ -43,6 +43,9 @@ type PackItem = {
   id: string;
   name: string;
   isActive: boolean;
+  sessionCount?: number | null;
+  durationDays?: number | null;
+  courseQuotas?: { courseSlug: string; sessionCount: number }[];
 };
 
 export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerProps>(function MembersManagerWithRef(
@@ -56,9 +59,13 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isRenewing, setIsRenewing] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
+  const [renewModalError, setRenewModalError] = useState<string | null>(null);
   const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
   const [memberToDelete, setMemberToDelete] = useState<MemberItem | null>(null);
+  const [memberToRenew, setMemberToRenew] = useState<MemberItem | null>(null);
+  const [renewPackId, setRenewPackId] = useState<string>("");
   const initialQrPublicIdRef = useRef("");
 
   const [search, setSearch] = useState("");
@@ -140,6 +147,62 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     if (editingMemberId) return packs;
     return packs.filter((item) => item.isActive);
   }, [packs, editingMemberId]);
+
+  const activePacks = useMemo(() => packs.filter((item) => item.isActive), [packs]);
+
+  const selectedRenewPack = useMemo(
+    () => activePacks.find((pack) => pack.id === renewPackId) ?? null,
+    [activePacks, renewPackId]
+  );
+
+  const computePackExpiresAt = (startAt: string | null, durationDays: number | null | undefined) => {
+    if (!startAt || !durationDays) return null;
+    const started = new Date(startAt);
+    return new Date(started.getTime() + durationDays * 24 * 60 * 60 * 1000);
+  };
+
+  const formatDateFr = (value: Date | string | null | undefined) => {
+    if (!value) return "—";
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return "—";
+    return date.toLocaleDateString("fr-FR");
+  };
+
+  const oldPackExpiresAt = useMemo(
+    () => computePackExpiresAt(memberToRenew?.packStartedAt ?? null, memberToRenew?.pack?.durationDays),
+    [memberToRenew]
+  );
+
+  const oldPackStatus = useMemo(() => {
+    if (!memberToRenew?.pack?.id) return { label: "Aucun pack", toneClass: "border-zinc-200 bg-zinc-50 text-zinc-800" };
+    if (!oldPackExpiresAt) return { label: "Actif", toneClass: "border-emerald-200 bg-emerald-50 text-emerald-900" };
+    const now = new Date();
+    const isActive = oldPackExpiresAt.getTime() > now.getTime();
+    return isActive
+      ? { label: "Ancien pack actif", toneClass: "border-emerald-200 bg-emerald-50 text-emerald-900" }
+      : { label: "Ancien pack expiré", toneClass: "border-zinc-200 bg-zinc-50 text-zinc-800" };
+  }, [memberToRenew, oldPackExpiresAt]);
+
+  const renewalStartDate = useMemo(() => {
+    const now = new Date();
+    if (oldPackExpiresAt && oldPackExpiresAt.getTime() > now.getTime()) {
+      return oldPackExpiresAt;
+    }
+    return now;
+  }, [oldPackExpiresAt]);
+
+  const renewalEndDate = useMemo(() => {
+    if (!selectedRenewPack?.durationDays) return null;
+    return new Date(renewalStartDate.getTime() + selectedRenewPack.durationDays * 24 * 60 * 60 * 1000);
+  }, [renewalStartDate, selectedRenewPack]);
+
+  const getPackSessionCount = (pack: PackItem | null) => {
+    if (!pack) return null;
+    if (Array.isArray(pack.courseQuotas) && pack.courseQuotas.length > 0) {
+      return pack.courseQuotas.reduce((sum, q) => sum + q.sessionCount, 0);
+    }
+    return pack.sessionCount ?? null;
+  };
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -424,38 +487,54 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     }
   };
 
-  const handleRenewPack = async (member: MemberItem) => {
-    if (!member.pack?.id) {
-      toast({
-        variant: "error",
-        title: "Aucun pack",
-        description: "Cet adherent n'a pas de pack a renouveler.",
-      });
+  const openRenewPackModal = (member: MemberItem) => {
+    setMemberToRenew(member);
+    setRenewPackId(member.pack?.id ?? "");
+    setRenewModalError(null);
+  };
+
+  const closeRenewPackModal = () => {
+    if (isRenewing) return;
+    setMemberToRenew(null);
+    setRenewPackId("");
+    setRenewModalError(null);
+  };
+
+  const handleRenewPack = async () => {
+    if (!memberToRenew) return;
+    if (!renewPackId) {
+      setRenewModalError("Veuillez choisir un pack pour continuer.");
       return;
     }
 
+    setIsRenewing(true);
+    setRenewModalError(null);
     try {
-      const response = await fetch(`/api/admin/members/${encodeURIComponent(member.id)}/renew-pack`, {
+      const response = await fetch(`/api/admin/members/${encodeURIComponent(memberToRenew.id)}/renew-pack`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ packId: renewPackId }),
       });
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(data?.error ?? "Renouvellement impossible.");
       }
+
+      const payload = (await response.json().catch(() => null)) as { renewalStartAt?: string } | null;
+      const renewalStartLabel = formatDateFr(payload?.renewalStartAt ?? renewalStartDate);
+
       await loadMembers();
       toast({
         variant: "success",
         title: "Pack renouvele",
-        description: `La date de pack a ete mise a jour pour ${member.firstName ?? "cet adherent"}.`,
+        description: `Nouveau pack actif a partir du ${renewalStartLabel}.`,
       });
+      closeRenewPackModal();
     } catch (e) {
       const message = e instanceof Error ? e.message : "Une erreur est survenue.";
-      toast({
-        variant: "error",
-        title: "Erreur",
-        description: message,
-      });
+      setRenewModalError(message);
     }
+    setIsRenewing(false);
   };
 
   // Expose actions for DashboardHeader buttons (avoid duplication)
@@ -569,24 +648,36 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                         <button
                           type="button"
                           onClick={() => handleStartEdit(m)}
-                          className="rounded-full border border-brand-medium/30 bg-white px-3 py-1.5 text-xs font-semibold text-brand-dark/80 transition hover:bg-zinc-50"
+                          aria-label="Modifier l'adherent"
+                          title="Modifier"
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-brand-medium/30 bg-brand-light/40 text-brand-dark transition hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-medium/30"
                         >
-                          Modifier
+                          <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current" aria-hidden="true">
+                            <path d="M4 17.25V20h2.75l8.12-8.12-2.75-2.75L4 17.25zm12.71-9.04a1 1 0 000-1.41l-1.5-1.5a1 1 0 00-1.41 0l-1.17 1.17 2.75 2.75 1.33-1.01z" />
+                          </svg>
                         </button>
                         <button
                           type="button"
                           onClick={() => setMemberToDelete(m)}
-                          className="rounded-full border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50"
+                          aria-label="Supprimer l'adherent"
+                          title="Supprimer"
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 transition hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200"
                         >
-                          Supprimer
+                          <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current" aria-hidden="true">
+                            <path d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z" />
+                          </svg>
                         </button>
                         <button
                           type="button"
-                          onClick={() => void handleRenewPack(m)}
+                          onClick={() => openRenewPackModal(m)}
                           disabled={!m.pack?.id}
-                          className="rounded-full border border-brand-medium/30 bg-white px-3 py-1.5 text-xs font-semibold text-brand-dark/80 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          aria-label="Renouveler le pack"
+                          title="Renouveler"
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-brand-medium/30 bg-white text-brand-dark/80 transition hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-medium/30 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                          Renouveler
+                          <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current" aria-hidden="true">
+                            <path d="M12 5a7 7 0 016.65 4.8h-2.2A5 5 0 107 12H4a8 8 0 118-7zm-1 1v4.59l2.7 2.7 1.3-1.3-2-2V6h-2z" />
+                          </svg>
                         </button>
                       </div>
                     </div>
@@ -649,24 +740,36 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                             <button
                               type="button"
                               onClick={() => handleStartEdit(m)}
-                              className="rounded-full border border-brand-medium/30 bg-white px-3 py-1.5 text-xs font-semibold text-brand-dark/80 transition hover:bg-zinc-50"
+                              aria-label="Modifier l'adherent"
+                              title="Modifier"
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-brand-medium/30 bg-brand-light/40 text-brand-dark transition hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-medium/30"
                             >
-                              Modifier
+                              <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current" aria-hidden="true">
+                                <path d="M4 17.25V20h2.75l8.12-8.12-2.75-2.75L4 17.25zm12.71-9.04a1 1 0 000-1.41l-1.5-1.5a1 1 0 00-1.41 0l-1.17 1.17 2.75 2.75 1.33-1.01z" />
+                              </svg>
                             </button>
                             <button
                               type="button"
                               onClick={() => setMemberToDelete(m)}
-                              className="rounded-full border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50"
+                              aria-label="Supprimer l'adherent"
+                              title="Supprimer"
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 transition hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200"
                             >
-                              Supprimer
+                              <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current" aria-hidden="true">
+                                <path d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z" />
+                              </svg>
                             </button>
                             <button
                               type="button"
-                              onClick={() => void handleRenewPack(m)}
+                              onClick={() => openRenewPackModal(m)}
                               disabled={!m.pack?.id}
-                              className="rounded-full border border-brand-medium/30 bg-white px-3 py-1.5 text-xs font-semibold text-brand-dark/80 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
+                              aria-label="Renouveler le pack"
+                              title="Renouveler"
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-brand-medium/30 bg-white text-brand-dark/80 transition hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-medium/30 disabled:cursor-not-allowed disabled:opacity-50"
                             >
-                              Renouveler
+                              <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current" aria-hidden="true">
+                                <path d="M12 5a7 7 0 016.65 4.8h-2.2A5 5 0 107 12H4a8 8 0 118-7zm-1 1v4.59l2.7 2.7 1.3-1.3-2-2V6h-2z" />
+                              </svg>
                             </button>
                           </div>
                         </td>
@@ -844,6 +947,89 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
         }}
         onConfirm={() => void handleConfirmDeleteMember()}
       />
+
+      <Modal
+        isOpen={Boolean(memberToRenew)}
+        title="Renouveler le pack"
+        description="Consultez l'ancien pack puis choisissez le nouveau pack avant validation."
+        onClose={closeRenewPackModal}
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={closeRenewPackModal}
+              disabled={isRenewing}
+              className="rounded-full border border-brand-medium/35 bg-white px-4 py-2 text-sm font-medium text-brand-dark transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Annuler
+            </button>
+            <Button
+              type="button"
+              onClick={() => void handleRenewPack()}
+              disabled={isRenewing || !renewPackId}
+              className="border-brand-dark/30 bg-brand-dark text-white hover:bg-brand-dark/90 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isRenewing ? "Validation..." : "Valider le renouvellement"}
+            </Button>
+          </>
+        }
+      >
+        {memberToRenew ? (
+          <div className="space-y-4">
+            <div className="rounded-xl border border-brand-medium/20 bg-zinc-50/60 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-semibold text-brand-dark">Ancien pack</p>
+                <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${oldPackStatus.toneClass}`}>
+                  {oldPackStatus.label}
+                </span>
+              </div>
+              <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-brand-dark/80 sm:grid-cols-2">
+                <p>Nom: {memberToRenew.pack?.name ?? "Aucun pack"}</p>
+                <p>Duree (jours): {memberToRenew.pack?.durationDays ?? "—"}</p>
+                <p>Date de debut: {formatDateFr(memberToRenew.packStartedAt)}</p>
+                <p>Date d'expiration: {formatDateFr(oldPackExpiresAt)}</p>
+              </div>
+            </div>
+
+            <div>
+              <SelectMenu
+                id="renew-pack-select"
+                label="Nouveau pack"
+                value={renewPackId}
+                onChange={(value) => {
+                  setRenewPackId(value);
+                  setRenewModalError(null);
+                }}
+                options={[
+                  { value: "", label: "Choisir un pack" },
+                  ...activePacks.map((pack) => ({ value: pack.id, label: pack.name })),
+                ]}
+              />
+            </div>
+
+            <div className="rounded-xl border border-brand-medium/20 bg-white p-3">
+              <p className="text-sm font-semibold text-brand-dark">Pack selectionne</p>
+              {selectedRenewPack ? (
+                <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-brand-dark/80 sm:grid-cols-2">
+                  <p>Nom: {selectedRenewPack.name}</p>
+                  <p>Nombre de seances: {getPackSessionCount(selectedRenewPack) ?? "—"}</p>
+                  <p>Duree (jours): {selectedRenewPack.durationDays ?? "—"}</p>
+                  <p>Date de debut: {formatDateFr(renewalStartDate)}</p>
+                  <p className="sm:col-span-2">Date d'expiration estimee: {formatDateFr(renewalEndDate)}</p>
+                </div>
+              ) : (
+                <p className="mt-2 text-xs text-brand-dark/60">Choisissez un pack pour afficher ses details.</p>
+              )}
+            </div>
+
+            {renewModalError ? (
+              <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {renewModalError}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </Modal>
     </div>
   );
 });

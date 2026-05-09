@@ -13,6 +13,10 @@ ENV NODE_ENV=production
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+# Inlined into the client bundle at build time (host .env is not copied — see .dockerignore).
+ARG NEXT_PUBLIC_SITE_URL
+ENV NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL
+
 RUN npx prisma generate
 RUN npm run build
 

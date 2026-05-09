@@ -36,3 +36,7 @@ export const updateMemberSchema = z.object({
   qrId: z.string().trim().min(10).optional(),
 });
 
+export const renewMemberPackSchema = z.object({
+  packId: z.string().trim().cuid(),
+});
+

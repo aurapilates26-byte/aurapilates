@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/auth";
-import { createMemberSchema, listMembersQuerySchema, updateMemberSchema } from "./schemas";
+import { createMemberSchema, listMembersQuerySchema, renewMemberPackSchema, updateMemberSchema } from "./schemas";
 import { randomInt } from "crypto";
 import { prisma } from "@/lib/prisma";
 
@@ -468,14 +468,60 @@ export async function deleteAdminMemberById(id: string) {
   return new Response(null, { status: 204 });
 }
 
-export async function renewAdminMemberPackById(id: string) {
+export async function renewAdminMemberPackById(id: string, request: Request) {
   const sessionResult = await requireAdminSession();
   if ("error" in sessionResult) return sessionResult.error;
 
+  const rawBody = await request.json().catch(() => null);
+  const parsedBody = renewMemberPackSchema.safeParse(rawBody);
+  if (!parsedBody.success) {
+    return errorResponse("Invalid request payload", 400);
+  }
+
+  const { packId } = parsedBody.data;
+
+  const selectedPack = await db.pack.findUnique({
+    where: { id: packId },
+    select: { id: true, isActive: true },
+  });
+  if (!selectedPack) {
+    return errorResponse("Pack not found", 404);
+  }
+  if (!selectedPack.isActive) {
+    return errorResponse("Selected pack is inactive", 409);
+  }
+
+  const now = new Date();
+  let renewalStartAt = now;
+
   const updated = await db.$transaction(async (tx) => {
+    const memberCurrent = await tx.member.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        packStartedAt: true,
+        pack: {
+          select: {
+            durationDays: true,
+          },
+        },
+      },
+    });
+
+    if (!memberCurrent) {
+      throw new Error("Member not found");
+    }
+
+    const previousPackExpiresAt =
+      memberCurrent.packStartedAt && memberCurrent.pack?.durationDays
+        ? new Date(memberCurrent.packStartedAt.getTime() + memberCurrent.pack.durationDays * 24 * 60 * 60 * 1000)
+        : null;
+    renewalStartAt =
+      previousPackExpiresAt && previousPackExpiresAt.getTime() > now.getTime() ? previousPackExpiresAt : now;
+
     const member = await tx.member.update({
       where: { id },
-      data: { packStartedAt: new Date() },
+      data: { packId, packStartedAt: renewalStartAt },
       select: { id: true, packId: true },
     });
 
@@ -497,6 +543,6 @@ export async function renewAdminMemberPackById(id: string) {
     });
   });
 
-  return Response.json({ item: mapMember(updated) });
+  return Response.json({ item: mapMember(updated), renewalStartAt });
 }
 
