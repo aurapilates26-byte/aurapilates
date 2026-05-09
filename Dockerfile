@@ -39,6 +39,9 @@ COPY --from=builder /app/prisma ./prisma
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x ./docker-entrypoint.sh
 
+# COPY leaves root ownership; Next.js (image cache) and QR writes need a writable tree.
+RUN chown -R nextjs:nodejs /app
+
 USER nextjs
 EXPOSE 3000
 

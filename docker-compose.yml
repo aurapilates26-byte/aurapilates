@@ -6,8 +6,9 @@ services:
       POSTGRES_DB: aurapilates
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
+    # Bind to loopback only — avoids Internet scanners hammering Postgres on :5432.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - aurapilates_db:/var/lib/postgresql/data
 
