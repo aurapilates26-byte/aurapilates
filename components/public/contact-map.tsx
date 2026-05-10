@@ -27,12 +27,17 @@ const LEAFLET_CSS_ID = "leaflet-css-cdn";
 const LEAFLET_SCRIPT_ID = "leaflet-js-cdn";
 const DEFAULT_POSITION: [number, number] = [36.8065, 10.1815];
 
+type LeafletMapInstance = {
+  setView: (coords: [number, number], zoom: number) => void;
+  remove: () => void;
+};
+
 export function ContactMap() {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let mounted = true;
-    let mapInstance: { remove: () => void } | null = null;
+    let mapInstance: LeafletMapInstance | null = null;
 
     const ensureLeafletCss = () => {
       if (document.getElementById(LEAFLET_CSS_ID)) {
