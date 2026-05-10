@@ -36,23 +36,23 @@ export const homeText: HomeText = {
     },
     tarif: {
       title: "Tarif",
-      subtitle: "Section tarif prete pour ajouter vos formules et prix.",
+      subtitle: "Choisissez une formule flexible avec un planning adapte.",
     },
     coach: {
       title: "Coach",
-      subtitle: "Section coach prete pour ajouter les profils.",
+      subtitle: "Une approche experte et bienveillante pour chaque pratiquante.",
     },
     inscription: {
       title: "Inscription",
-      subtitle: "Section inscription prete pour votre formulaire.",
+      subtitle: "Inscription simple, rapide et accompagnee etape par etape.",
     },
     faq: {
       title: "FAQ",
-      subtitle: "Section FAQ prete pour ajouter les questions frequentes.",
+      subtitle: "Les reponses aux questions les plus frequentes avant de commencer.",
     },
     contact: {
       title: "Contact",
-      subtitle: "Section contact prete pour les informations du studio.",
+      subtitle: "Parlez-nous de votre objectif, nous vous orientons vers le bon format.",
     },
   },
 };
