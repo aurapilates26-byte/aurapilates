@@ -23,7 +23,7 @@ export async function GET(_request: Request, { params }: Params) {
   const outputPath = join(outputDir, `${publicId}.png`);
   try {
     const existing = await readFile(outputPath);
-    return new Response(existing, {
+    return new Response(new Uint8Array(existing), {
       headers: {
         "Content-Type": "image/png",
         "Cache-Control": "public, max-age=31536000, immutable",
@@ -48,6 +48,7 @@ export async function GET(_request: Request, { params }: Params) {
   }
 
   return new Response(pngBuffer, {
+  return new Response(new Uint8Array(pngBuffer), {
     headers: {
       "Content-Type": "image/png",
       "Cache-Control": "no-store",
