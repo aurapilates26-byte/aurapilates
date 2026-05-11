@@ -47,7 +47,6 @@ export async function GET(_request: Request, { params }: Params) {
     // ignore
   }
 
-  return new Response(pngBuffer, {
   return new Response(new Uint8Array(pngBuffer), {
     headers: {
       "Content-Type": "image/png",
