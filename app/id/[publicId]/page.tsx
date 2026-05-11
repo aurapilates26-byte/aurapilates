@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import { redirect } from "next/navigation";
 import { QrIdVerifyClient } from "@/components/public/qr-id-verify-client";
 
 const db = new PrismaClient();
@@ -8,7 +9,14 @@ type Params = {
 };
 
 export default async function PublicQrIdPage({ params }: Params) {
-  const { publicId } = await params;
+  const { publicId: rawPublicId } = await params;
+
+  // Backward-compat: some old QR images may encode `/id/<publicId>.png`.
+  if (rawPublicId.toLowerCase().endsWith(".png")) {
+    redirect(`/id/${rawPublicId.slice(0, -4)}`);
+  }
+
+  const publicId = rawPublicId;
 
   const item = await db.qrCode.findUnique({
     where: { publicId },
