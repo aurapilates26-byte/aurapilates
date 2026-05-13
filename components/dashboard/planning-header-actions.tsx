@@ -73,7 +73,7 @@ export function PlanningHeaderActions({ managerRef, viewMode, onToggleViewMode }
         onClick={onToggleViewMode}
         className="rounded-full bg-brand-dark px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
       >
-        {viewMode === "form" ? "Revenir au planning" : "Ajouter seance"}
+        {viewMode === "form" ? "Revenir au planning" : "Ajouter une séance"}
       </button>
     </>
   );

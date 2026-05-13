@@ -263,7 +263,7 @@ export async function GET(request: Request) {
         scannedMember: qr?.assignedMember ?? member,
         sessionDate: sessionDateYmd,
         nowTime,
-        message: "Aucun cours reserve pour ce membre (aujourd'hui ou apres).",
+        message: "Aucun cours réservé pour ce membre (aujourd'hui ou après).",
         class: null,
         upcomingClass: null,
         nextUpcomingClass: null,

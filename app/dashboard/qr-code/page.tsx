@@ -12,7 +12,7 @@ export default async function AdminQrCodePage() {
         role="ADMIN"
         showRoleLine={false}
         title="QR codes"
-        description="Preparez ici les QR codes pour l'acces, le check-in et le suivi des seances. Cette etape reste volontairement concentree sur l'interface avant l'integration backend."
+        description="Préparez ici les QR codes pour l'accès, le pointage et le suivi des séances. Cette étape reste volontairement concentrée sur l'interface avant l'intégration backend."
         actions={<QrCodeHeaderActions />}
       />
 

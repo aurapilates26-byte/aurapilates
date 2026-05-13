@@ -12,6 +12,7 @@ import {
 } from "@/lib/calendar-day";
 import { broadcastMemberBookingRefresh } from "@/lib/member-booking-stream";
 import { prisma } from "@/lib/prisma";
+import { addPackDurationToStartDate } from "@/lib/pack-duration";
 import { requireMemberSession } from "@/lib/require-member";
 import { getEligibilityForPack } from "@/lib/pack-eligibility";
 import { z } from "zod";
@@ -145,7 +146,7 @@ export async function POST(request: Request) {
   const raw = await request.json().catch(() => null);
   const parsed = createSchema.safeParse(raw);
   if (!parsed.success) {
-    return errorResponse("Donnees invalides", 400);
+    return errorResponse("Données invalides", 400);
   }
 
   const { planningId, sessionDate: sessionDateStr } = parsed.data;
@@ -157,7 +158,7 @@ export async function POST(request: Request) {
 
   const today = startOfLocalToday();
   if (sessionDateLocal.getTime() < today.getTime()) {
-    return errorResponse("Impossible de reserver une date passee", 409);
+    return errorResponse("Impossible de réserver une date passée", 409);
   }
 
   try {
@@ -206,9 +207,7 @@ export async function POST(request: Request) {
           throw new Error(PACK_ERRORS.packNotStarted);
         }
         const expiresAt =
-          memberWithPack.packStartedAt && pack.durationDays
-            ? new Date(memberWithPack.packStartedAt.getTime() + pack.durationDays * 24 * 60 * 60 * 1000)
-            : null;
+          packStartDate && pack.durationDays ? addPackDurationToStartDate(packStartDate, pack.durationDays) : null;
         if (expiresAt && expiresAt.getTime() < today.getTime()) {
           throw new Error(PACK_ERRORS.packExpired);
         }
@@ -394,19 +393,19 @@ export async function POST(request: Request) {
   } catch (e) {
     const code = e instanceof Error ? e.message : "";
     if (code === "PLANNING_NOT_FOUND") return errorResponse("Cours introuvable", 404);
-    if (code === "DAY_MISMATCH") return errorResponse("Ce cours n'a pas lieu a cette date", 409);
-    if (code === "ALREADY_RESERVED") return errorResponse("Vous etes deja inscrit sur ce creneau", 409);
-    if (code === "ALREADY_ATTENDED") return errorResponse("Presence deja enregistree pour ce creneau", 409);
-    if (code === "FULL") return errorResponse("Complet (capacite et liste d'attente)", 409);
-    if (code === PACK_ERRORS.notAllowedCourse) return errorResponse("Ce pack ne permet pas de reserver ce cours", 409);
+    if (code === "DAY_MISMATCH") return errorResponse("Ce cours n'a pas lieu à cette date", 409);
+    if (code === "ALREADY_RESERVED") return errorResponse("Vous êtes déjà inscrite sur ce créneau", 409);
+    if (code === "ALREADY_ATTENDED") return errorResponse("Présence déjà enregistrée pour ce créneau", 409);
+    if (code === "FULL") return errorResponse("Complet (capacité et liste d'attente)", 409);
+    if (code === PACK_ERRORS.notAllowedCourse) return errorResponse("Ce pack ne permet pas de réserver ce cours", 409);
     if (code === PACK_ERRORS.packCategoryMismatch) {
-      return errorResponse("Votre pack ne permet pas de reserver ce type de cours", 409);
+      return errorResponse("Votre pack ne permet pas de réserver ce type de cours", 409);
     }
-    if (code === PACK_ERRORS.noSessionsLeft) return errorResponse("Vous n'avez plus de seances disponibles pour ce cours", 409);
-    if (code === PACK_ERRORS.noPack) return errorResponse("Aucun pack actif n'est associe a votre compte", 409);
+    if (code === PACK_ERRORS.noSessionsLeft) return errorResponse("Vous n'avez plus de séances disponibles pour ce cours", 409);
+    if (code === PACK_ERRORS.noPack) return errorResponse("Aucun pack actif n'est associé à votre compte", 409);
     if (code === PACK_ERRORS.packInactive) return errorResponse("Votre pack est inactif", 409);
-    if (code === PACK_ERRORS.packNotStarted) return errorResponse("Votre pack n'est pas encore active (date de debut manquante)", 409);
-    if (code === PACK_ERRORS.packExpired) return errorResponse("Votre pack est expire", 409);
-    return errorResponse("Reservation impossible", 409);
+    if (code === PACK_ERRORS.packNotStarted) return errorResponse("Votre pack n'est pas encore actif (date de début manquante)", 409);
+    if (code === PACK_ERRORS.packExpired) return errorResponse("Votre pack est expiré", 409);
+    return errorResponse("Réservation impossible", 409);
   }
 }

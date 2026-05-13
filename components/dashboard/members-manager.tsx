@@ -3,6 +3,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { useToast } from "@/components/ui/toast-provider";
 import { Button, Checkbox, ConfirmDialog, Input, Modal, SelectMenu } from "@/components/ui";
+import { addPackDurationToStartDate } from "@/lib/pack-duration";
 
 export type MembersManagerHandle = {
   refresh: () => void;
@@ -19,7 +20,7 @@ type MemberItem = {
   phone: string | null;
   email: string | null;
   birthDate: string | null;
-  pack: { id: string; name: string; durationDays: number | null } | null;
+  pack: { id: string; name: string; durationDays: string | null } | null;
   packStartedAt: string | null;
   packExpiresAt: string | null;
   isActive: boolean;
@@ -44,7 +45,7 @@ type PackItem = {
   name: string;
   isActive: boolean;
   sessionCount?: number | null;
-  durationDays?: number | null;
+  durationDays?: string | null;
   courseQuotas?: { courseSlug: string; sessionCount: number }[];
 };
 
@@ -110,8 +111,8 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     if (qrStatus === "UNKNOWN") return isFetchingQrKey ? "Verification..." : "Non verifie";
     if (qrStatus === "UNASSIGNED") return "Disponible";
     if (qrStatus === "ASSIGNED") {
-      if (editingMemberId && qrAssignedMemberId === editingMemberId) return "Lie a cet adherent";
-      return "Deja assigne";
+      if (editingMemberId && qrAssignedMemberId === editingMemberId) return "Lié à cet adhérent";
+      return "Déjà assigné";
     }
     return "Identifiant introuvable";
   }, [qrStatus, isFetchingQrKey, editingMemberId, qrAssignedMemberId]);
@@ -123,7 +124,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
       const response = await fetch("/api/admin/members?page=1&pageSize=50", { cache: "no-store" });
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(data?.error ?? "Impossible de charger les adherents.");
+        throw new Error(data?.error ?? "Impossible de charger les adhérents.");
       }
       const data = (await response.json()) as MembersResponse;
       setItems(data.items);
@@ -155,10 +156,11 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     [activePacks, renewPackId]
   );
 
-  const computePackExpiresAt = (startAt: string | null, durationDays: number | null | undefined) => {
-    if (!startAt || !durationDays) return null;
+  const computePackExpiresAt = (startAt: string | null, durationLabel: string | null | undefined) => {
+    if (!startAt || !durationLabel) return null;
     const started = new Date(startAt);
-    return new Date(started.getTime() + durationDays * 24 * 60 * 60 * 1000);
+    if (Number.isNaN(started.getTime())) return null;
+    return addPackDurationToStartDate(started, durationLabel);
   };
 
   const formatDateFr = (value: Date | string | null | undefined) => {
@@ -193,7 +195,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
 
   const renewalEndDate = useMemo(() => {
     if (!selectedRenewPack?.durationDays) return null;
-    return new Date(renewalStartDate.getTime() + selectedRenewPack.durationDays * 24 * 60 * 60 * 1000);
+    return addPackDurationToStartDate(renewalStartDate, selectedRenewPack.durationDays);
   }, [renewalStartDate, selectedRenewPack]);
 
   const getPackSessionCount = (pack: PackItem | null) => {
@@ -337,7 +339,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
 
     if (!isEditMode) {
       if (qrStatus === "ASSIGNED") {
-        setModalError("Ce QR code est deja assigne a un adherent.");
+        setModalError("Ce QR code est déjà assigné à un adhérent.");
         return;
       }
     } else if (trimmedQr) {
@@ -348,7 +350,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
         qrAssignedMemberId &&
         qrAssignedMemberId !== editingMemberId
       ) {
-        setModalError("Ce QR code est deja assigne a un autre adherent.");
+        setModalError("Ce QR code est déjà assigné à un autre adhérent.");
         return;
       }
     }
@@ -382,8 +384,8 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
         resetForm();
         toast({
           variant: "success",
-          title: "Adherent cree",
-          description: "Le nouvel adherent a ete ajoute et le QR code a ete assigne.",
+          title: "Adhérent créé",
+          description: "Le nouvel adhérent a été ajouté et le QR code a été assigné.",
         });
         return;
       }
@@ -403,7 +405,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
       }
       if (lastName.trim().length >= 2) body.lastName = lastName.trim();
       if (phone.trim().length > 0 && phone.trim().length < 6) {
-        setModalError("Le numero de telephone doit contenir au moins 6 chiffres.");
+        setModalError("Le numéro de téléphone doit contenir au moins 6 chiffres.");
         return;
       }
       if (phone.trim().length >= 6) body.phone = phone.trim();
@@ -430,8 +432,8 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
       resetForm();
       toast({
         variant: "success",
-        title: "Adherent mis a jour",
-        description: "Les informations ont ete enregistrees.",
+        title: "Adhérent mis à jour",
+        description: "Les informations ont été enregistrées.",
       });
     } catch (e) {
       const message = e instanceof Error ? e.message : "Une erreur est survenue.";
@@ -471,7 +473,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
       await loadMembers();
       toast({
         variant: "success",
-        title: "Adherent supprime",
+        title: "Adhérent supprimé",
         description:
           `${target.firstName ?? ""} ${target.lastName ?? ""}`.trim() || "Profil retire — compte supprime.",
       });
@@ -560,8 +562,8 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
             <div className="flex flex-col gap-4">
               <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
                 <div>
-                  <p className="text-base font-semibold text-brand-dark">Liste des adherents</p>
-                  <p className="mt-1 text-xs text-brand-dark/60">{visibleItems.length} resultat(s)</p>
+                  <p className="text-base font-semibold text-brand-dark">Liste des adhérents</p>
+                  <p className="mt-1 text-xs text-brand-dark/60">{visibleItems.length} résultat(s)</p>
                 </div>
 
                 <div className="grid min-w-0 w-full gap-2 md:max-w-3xl md:grid-cols-[minmax(320px,1fr)_160px_190px_140px] md:items-end">
@@ -569,7 +571,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                     id="members-search"
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Nom, telephone..."
+                    placeholder="Nom, téléphone..."
                     className="mt-0 py-2.5"
                   />
                   <SelectMenu
@@ -598,8 +600,8 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                       setStatusFilter("ALL");
                       setPackFilterId("ALL");
                     }}
-                    aria-label="Reinitialiser les filtres"
-                    title="Reinitialiser"
+                    aria-label="Réinitialiser les filtres"
+                    title="Réinitialiser"
                     className="flex h-[42px] w-[42px] items-center justify-center rounded-xl border border-brand-medium/30 bg-white text-lg font-semibold text-brand-dark/70 transition hover:bg-zinc-50 hover:text-brand-dark"
                   >
                     ×
@@ -610,7 +612,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
           </div>
           {visibleItems.length === 0 ? (
             <div className="px-5 py-10 text-center text-sm text-brand-dark/60">
-              Aucun adherent. Ajustez la recherche ou les filtres.
+              Aucun adhérent. Ajustez la recherche ou les filtres.
             </div>
           ) : (
             <>
@@ -619,7 +621,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                   <article key={m.id} className="space-y-2 px-4 py-3 text-sm">
                     <div className="flex items-center justify-between gap-2">
                       <p className="font-semibold text-brand-dark">
-                        {(m.firstName || m.lastName) ? `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() : "Adherent"}
+                        {(m.firstName || m.lastName) ? `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() : "Adhérent"}
                       </p>
                       <span
                         className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
@@ -642,13 +644,13 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                             : "border border-amber-200 bg-amber-50 text-amber-900"
                         }`}
                       >
-                        QR: {m.qrCode?.qrId ? "Assigne" : "Non assigne"}
+                        QR: {m.qrCode?.qrId ? "Assigné" : "Non assigné"}
                       </span>
                       <div className="flex flex-wrap items-center justify-end gap-2">
                         <button
                           type="button"
                           onClick={() => handleStartEdit(m)}
-                          aria-label="Modifier l'adherent"
+                          aria-label="Modifier l'adhérent"
                           title="Modifier"
                           className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-brand-medium/30 bg-brand-light/40 text-brand-dark transition hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-medium/30"
                         >
@@ -659,7 +661,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                         <button
                           type="button"
                           onClick={() => setMemberToDelete(m)}
-                          aria-label="Supprimer l'adherent"
+                          aria-label="Supprimer l'adhérent"
                           title="Supprimer"
                           className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 transition hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200"
                         >
@@ -694,7 +696,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                       <th className="px-4 py-3">Pack</th>
                       <th className="px-4 py-3">QR</th>
                       <th className="px-4 py-3">Email</th>
-                      <th className="px-4 py-3">Telephone</th>
+                      <th className="px-4 py-3">Téléphone</th>
                       <th className="px-4 py-3">Pack expire</th>
                       <th className="px-4 py-3 text-right">Action</th>
                     </tr>
@@ -703,7 +705,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                     {visibleItems.map((m) => (
                       <tr key={m.id} className="text-sm">
                         <td className="px-5 py-4 font-semibold text-brand-dark">
-                          {(m.firstName || m.lastName) ? `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() : "Adherent"}
+                          {(m.firstName || m.lastName) ? `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim() : "Adhérent"}
                         </td>
                         <td className="px-4 py-4">
                           <span
@@ -726,7 +728,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                                   : "border border-amber-200 bg-amber-50 text-amber-900"
                               }`}
                             >
-                              {m.qrCode?.qrId ? "Assigne" : "Non assigne"}
+                              {m.qrCode?.qrId ? "Assigné" : "Non assigné"}
                             </span>
                           </div>
                         </td>
@@ -740,7 +742,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                             <button
                               type="button"
                               onClick={() => handleStartEdit(m)}
-                              aria-label="Modifier l'adherent"
+                              aria-label="Modifier l'adhérent"
                               title="Modifier"
                               className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-brand-medium/30 bg-brand-light/40 text-brand-dark transition hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-medium/30"
                             >
@@ -751,7 +753,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                             <button
                               type="button"
                               onClick={() => setMemberToDelete(m)}
-                              aria-label="Supprimer l'adherent"
+                              aria-label="Supprimer l'adhérent"
                               title="Supprimer"
                               className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 transition hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200"
                             >
@@ -784,7 +786,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
       ) : (
         <div className="rounded-2xl border border-brand-medium/20 bg-white p-6 shadow-sm">
           <h3 className="text-xl font-semibold text-brand-dark">
-            {editingMemberId ? "Modifier un adherent" : "Ajouter un adherent"}
+            {editingMemberId ? "Modifier un adhérent" : "Ajouter un adhérent"}
           </h3>
           <p className="mt-2 text-sm text-brand-dark/70">
             {editingMemberId ? (
@@ -892,7 +894,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                 <div>
                   <Input
                     id="member-phone"
-                    label="Telephone"
+                    label="Téléphone"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
                   />
@@ -932,7 +934,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
 
       <ConfirmDialog
         isOpen={Boolean(memberToDelete)}
-        title="Supprimer cet adherent ?"
+        title="Supprimer cet adhérent ?"
         description={
           memberToDelete
             ? `${memberToDelete.firstName ?? ""} ${memberToDelete.lastName ?? ""}`.trim() ||
@@ -985,8 +987,8 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
               </div>
               <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-brand-dark/80 sm:grid-cols-2">
                 <p>Nom: {memberToRenew.pack?.name ?? "Aucun pack"}</p>
-                <p>Duree (jours): {memberToRenew.pack?.durationDays ?? "—"}</p>
-                <p>Date de debut: {formatDateFr(memberToRenew.packStartedAt)}</p>
+                <p>Duree: {memberToRenew.pack?.durationDays ?? "—"}</p>
+                <p>Date de début : {formatDateFr(memberToRenew.packStartedAt)}</p>
                 <p>Date d'expiration: {formatDateFr(oldPackExpiresAt)}</p>
               </div>
             </div>
@@ -1012,9 +1014,9 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
               {selectedRenewPack ? (
                 <div className="mt-2 grid grid-cols-1 gap-1 text-xs text-brand-dark/80 sm:grid-cols-2">
                   <p>Nom: {selectedRenewPack.name}</p>
-                  <p>Nombre de seances: {getPackSessionCount(selectedRenewPack) ?? "—"}</p>
-                  <p>Duree (jours): {selectedRenewPack.durationDays ?? "—"}</p>
-                  <p>Date de debut: {formatDateFr(renewalStartDate)}</p>
+                  <p>Nombre de séances : {getPackSessionCount(selectedRenewPack) ?? "—"}</p>
+                  <p>Duree: {selectedRenewPack.durationDays ?? "—"}</p>
+                  <p>Date de début : {formatDateFr(renewalStartDate)}</p>
                   <p className="sm:col-span-2">Date d'expiration estimee: {formatDateFr(renewalEndDate)}</p>
                 </div>
               ) : (

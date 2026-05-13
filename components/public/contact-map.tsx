@@ -11,6 +11,7 @@ declare global {
       ) => {
         setView: (coords: [number, number], zoom: number) => void;
         remove: () => void;
+        invalidateSize: () => void;
       };
       tileLayer: (
         urlTemplate: string,
@@ -25,19 +26,37 @@ declare global {
 
 const LEAFLET_CSS_ID = "leaflet-css-cdn";
 const LEAFLET_SCRIPT_ID = "leaflet-js-cdn";
-const DEFAULT_POSITION: [number, number] = [36.8065, 10.1815];
+const STUDIO_POSITION: [number, number] = [36.7411865, 10.3009188];
+const STUDIO_ZOOM = 16;
 
 type LeafletMapInstance = {
   setView: (coords: [number, number], zoom: number) => void;
   remove: () => void;
+  invalidateSize: () => void;
 };
 
-export function ContactMap() {
+type ContactMapProps = {
+  /** Colonne grille : meme hauteur que le formulaire (parent en flex / grid). */
+  layout?: "default" | "split";
+};
+
+const mapMinHeight: Record<NonNullable<ContactMapProps["layout"]>, string> = {
+  default: "min-h-[520px]",
+  /** Colonne grille : hauteur fixée par le parent (alignée sur le formulaire) sur lg. */
+  split: "min-h-[320px] lg:min-h-0",
+};
+
+export function ContactMap({ layout = "default" }: ContactMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
 
   useEffect(() => {
+    // Init unique Leaflet ; `layout` via ref (deps `[]` stables — evite erreurs Fast Refresh / HMR).
+    const layoutMode = layoutRef.current;
     let mounted = true;
     let mapInstance: LeafletMapInstance | null = null;
+    let resizeObserver: ResizeObserver | null = null;
 
     const ensureLeafletCss = () => {
       if (document.getElementById(LEAFLET_CSS_ID)) {
@@ -88,16 +107,28 @@ export function ContactMap() {
         }
 
         mapInstance = window.L.map(containerRef.current, { zoomControl: true });
-        mapInstance.setView(DEFAULT_POSITION, 14);
+        mapInstance.setView(STUDIO_POSITION, STUDIO_ZOOM);
 
         window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
           attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
           maxZoom: 19,
         }).addTo(mapInstance);
 
-        window.L.marker(DEFAULT_POSITION)
+        window.L.marker(STUDIO_POSITION)
           .addTo(mapInstance)
           .bindPopup("Aura Pilates Studio");
+
+        const el = containerRef.current;
+        if (layoutMode === "split" && el) {
+          resizeObserver = new ResizeObserver(() => {
+            mapInstance?.invalidateSize();
+          });
+          resizeObserver.observe(el);
+        }
+
+        requestAnimationFrame(() => {
+          mapInstance?.invalidateSize();
+        });
       } catch {
         // Keep graceful fallback UI if the map CDN cannot be loaded.
       }
@@ -107,13 +138,18 @@ export function ContactMap() {
 
     return () => {
       mounted = false;
+      resizeObserver?.disconnect();
       mapInstance?.remove();
     };
   }, []);
 
   return (
-    <div className="relative z-0 h-full overflow-hidden rounded-xl border border-brand-medium/30 bg-white shadow-sm">
-      <div ref={containerRef} className="h-full min-h-[520px] w-full bg-zinc-100" aria-label="Carte du studio" />
+    <div className="relative z-0 h-full min-h-0 overflow-hidden rounded-xl border border-brand-medium/30 bg-white shadow-sm">
+      <div
+        ref={containerRef}
+        className={`h-full w-full bg-zinc-100 ${mapMinHeight[layout]}`}
+        aria-label="Carte du studio"
+      />
       <style jsx global>{`
         .leaflet-container,
         .leaflet-pane,

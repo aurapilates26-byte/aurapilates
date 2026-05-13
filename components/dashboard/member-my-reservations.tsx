@@ -4,23 +4,18 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ConfirmDialog } from "@/components/ui";
 import { useToast } from "@/components/ui/toast-provider";
+import { planningLevelLabelFr } from "@/lib/planning-public-labels";
 import { useMemberBookingStore } from "@/store/member/member-booking-store";
 import type { MemberReservationItem } from "@/types/member/booking";
 
-const levelLabels: Record<string, string> = {
-  ALL_LEVELS: "Tous niveaux",
-  BEGINNER: "Debutant",
-  INTERMEDIATE: "Intermediaire",
-  ADVANCED: "Avance",
-};
 const cancelBtnClass =
   "inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200 disabled:cursor-not-allowed disabled:opacity-60";
 
 const historyStatusLabels: Record<string, string> = {
-  BOOKED: "Confirme",
+  BOOKED: "Confirmé",
   WAITLIST: "En attente",
-  CANCELLED: "Annule",
-  ATTENDED: "Presence enregistree",
+  CANCELLED: "Annulé",
+  ATTENDED: "Présence enregistrée",
 };
 
 function formatReservationPassedAt(iso: string): string {
@@ -49,18 +44,18 @@ const TOAST_BOOKING_MS = 10_000;
 
 function cancelDetailLine(r: MemberReservationItem): string {
   const coach = r.planning.coachName?.trim() ? r.planning.coachName.trim() : "—";
-  return `${r.planning.courseLabel}, coach ${coach}, le ${formatCourseDateWithWeekday(r.sessionDate)} de ${r.planning.startTime} a ${r.planning.endTime}`;
+  return `${r.planning.courseLabel}, coach ${coach}, le ${formatCourseDateWithWeekday(r.sessionDate)} de ${r.planning.startTime} à ${r.planning.endTime}`;
 }
 
 function upcomingStatusLabel(status: string): string {
-  return status === "WAITLIST" ? "En attente" : "Confirme";
+  return status === "WAITLIST" ? "En attente" : "Confirmé";
 }
 
 type ReservationsTab = "upcoming" | "history";
 
 function cancellationRefundLabel(r: MemberReservationItem) {
   if (r.status !== "CANCELLED") return null;
-  return r.packRefundedAt ? "Annulation: seance rendue au pack" : "Annulation tardive: seance non rendue";
+  return r.packRefundedAt ? "Annulation : séance rendue au pack" : "Annulation tardive : séance non rendue";
 }
 
 export function MemberMyReservations({ limit = 3 }: { limit?: number }) {
@@ -101,14 +96,14 @@ export function MemberMyReservations({ limit = 3 }: { limit?: number }) {
         const detail = cancelDetailLine(row);
         const refundLine =
           data?.refundable === true
-            ? "La seance a ete rendue au pack."
+            ? "La séance a été rendue au pack."
             : data?.refundable === false
-              ? "Annulation tardive: la seance n'a pas ete rendue au pack."
+              ? "Annulation tardive : la séance n'a pas été rendue au pack."
               : null;
         toast({
           variant: "success",
-          title: "Annulation enregistree",
-          description: refundLine ? `Annulation enregistree pour le cours de ${detail}. ${refundLine}` : `Annulation enregistree pour le cours de ${detail}.`,
+          title: "Annulation enregistrée",
+          description: refundLine ? `Annulation enregistrée pour le cours de ${detail}. ${refundLine}` : `Annulation enregistrée pour le cours de ${detail}.`,
           durationMs: TOAST_BOOKING_MS,
         });
         await loadAll();
@@ -135,26 +130,26 @@ export function MemberMyReservations({ limit = 3 }: { limit?: number }) {
 
   const listForTab = tab === "upcoming" ? upcomingItems : reservationHistory;
   const emptyMessage =
-    tab === "upcoming" ? "Aucune reservation a venir." : "Aucune reservation dans l'historique.";
+    tab === "upcoming" ? "Aucune réservation à venir." : "Aucune réservation dans l'historique.";
 
   return (
     <section className="mt-6 rounded-2xl border border-brand-medium/20 bg-white p-4 shadow-sm sm:p-6">
       <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-        <h2 className="text-base font-semibold text-brand-dark sm:text-lg lg:text-xl">Mes reservations</h2>
+        <h2 className="text-base font-semibold text-brand-dark sm:text-lg lg:text-xl">Mes réservations</h2>
       </div>
 
       {!loading ? (
         <div
           className="mt-3 flex rounded-xl border border-brand-medium/20 bg-zinc-50/80 p-1 sm:mt-4"
           role="group"
-          aria-label="Affichage des reservations"
+          aria-label="Affichage des réservations"
         >
           <button
             type="button"
             className={`${tabBtnBase} ${tab === "upcoming" ? tabBtnActive : tabBtnIdle}`}
             onClick={() => setTab("upcoming")}
           >
-            Prochaines seances
+            Prochaines séances
           </button>
           <button
             type="button"
@@ -169,8 +164,8 @@ export function MemberMyReservations({ limit = 3 }: { limit?: number }) {
       {!loading && tab === "upcoming" ? (
         <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900 sm:text-xs lg:text-sm">
           <p>
-            <span className="font-semibold">Note:</span> les annulations sont acceptees jusqu&apos;a 6 heures avant le cours ;
-            passe ce delai, la seance est facturee.
+            <span className="font-semibold">Note :</span> les annulations sont acceptées jusqu&apos;à 6 heures avant le cours ;
+            passé ce délai, la séance est facturée.
           </p>
         </div>
       ) : null}
@@ -192,7 +187,7 @@ export function MemberMyReservations({ limit = 3 }: { limit?: number }) {
                       className={cancelBtnClass}
                       disabled={actionKey === `cancel-${r.id}`}
                       onClick={() => setReservationToCancel(r)}
-                      aria-label="Supprimer la reservation"
+                      aria-label="Supprimer la réservation"
                     >
                       <svg
                         xmlns="http://www.w3.org/2000/svg"
@@ -228,10 +223,10 @@ export function MemberMyReservations({ limit = 3 }: { limit?: number }) {
                 </p>
               </div>
               <p className="mt-2 text-xs font-medium text-brand-dark/85 sm:text-sm lg:text-base">
-                Date du cours: {formatCourseDateWithWeekday(r.sessionDate)}
+                Date du cours : {formatCourseDateWithWeekday(r.sessionDate)}
               </p>
               <p className="mt-1 text-xs text-brand-dark/85 sm:text-sm lg:text-base">
-                Statut de reservation:{" "}
+                Statut de réservation :{" "}
                 <span className="font-semibold text-brand-dark">
                   {tab === "upcoming" ? upcomingStatusLabel(r.status) : historyStatusLabels[r.status] ?? r.status}
                 </span>
@@ -242,13 +237,13 @@ export function MemberMyReservations({ limit = 3 }: { limit?: number }) {
                 </p>
               ) : null}
               <p className="mt-1 text-xs text-brand-dark/80 sm:text-sm lg:text-base">
-                Heure du cours: {r.planning.startTime} - {r.planning.endTime}
+                Heure du cours : {r.planning.startTime} - {r.planning.endTime}
               </p>
               <p className="mt-1 text-[11px] text-brand-dark/70 sm:text-xs lg:text-sm">
-                Niveau: <span className="font-semibold">{levelLabels[r.planning.level] ?? r.planning.level}</span>
+                Niveau : <span className="font-semibold">{planningLevelLabelFr(r.planning.level)}</span>
               </p>
               <p className="mt-1 text-[11px] text-brand-dark/70 sm:text-xs lg:text-sm">
-                Date de reservation: <span className="font-semibold">{formatReservationPassedAt(r.reservedAt)}</span>
+                Date de réservation : <span className="font-semibold">{formatReservationPassedAt(r.reservedAt)}</span>
               </p>
             </article>
           ))}
@@ -257,7 +252,7 @@ export function MemberMyReservations({ limit = 3 }: { limit?: number }) {
 
       <ConfirmDialog
         isOpen={Boolean(reservationToCancel)}
-        title="Annuler cette reservation ?"
+        title="Annuler cette réservation ?"
         description={
           reservationToCancel
             ? `${reservationToCancel.planning.courseLabel} · ${formatCourseDateWithWeekday(reservationToCancel.sessionDate)}`

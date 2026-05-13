@@ -14,7 +14,7 @@ export function AdminPlanningClient() {
       <DashboardHeader
         role="ADMIN"
         title="Planning"
-        description="Creez et organisez les seances par jour, heure, duree et capacite."
+        description="Créez et organisez les séances par jour, heure, durée et capacité."
         showRoleLine={false}
         actions={
           <PlanningHeaderActions

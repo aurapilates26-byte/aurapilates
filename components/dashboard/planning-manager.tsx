@@ -4,9 +4,14 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from "r
 import { useToast } from "@/components/ui/toast-provider";
 import { Button, ConfirmDialog, Input, SelectMenu } from "@/components/ui";
 import { PlanningSessionCard } from "@/components/dashboard/planning-session-card";
+import { badgeClasses } from "@/lib/badge-classes";
+import { planningLevelBadgeClass } from "@/lib/planning-level-badge";
+import { PLANNING_LEVEL_FORM_OPTIONS, planningLevelLabelFr } from "@/lib/planning-public-labels";
 import { usePlanningStore } from "@/store";
 import type { AdminCoach } from "@/types/admin/coach";
 import type { AdminPlanningItem, PlanningDayOfWeek, PlanningLevel } from "@/types/admin/planning";
+
+type LevelFormValue = "NONE" | PlanningLevel;
 
 export type PlanningManagerHandle = {
   refresh: () => void;
@@ -25,7 +30,7 @@ const courseOptions = [
   { value: "pilates-reformer", label: "Pilates reformer" },
   { value: "mat-pilates", label: "Mat pilates" },
   { value: "yoga", label: "Yoga" },
-  { value: "dance", label: "Dance" },
+  { value: "dance", label: "Danse" },
 ] as const;
 
 const courseLabelBySlug = courseOptions.reduce<Record<string, string>>((acc, option) => {
@@ -43,21 +48,7 @@ const dayLabels: Record<PlanningDayOfWeek, string> = {
   SUN: "Dimanche",
 };
 
-const levelLabels: Record<PlanningLevel, string> = {
-  ALL_LEVELS: "Tous niveaux",
-  BEGINNER: "Debutant",
-  INTERMEDIATE: "Intermediaire",
-  ADVANCED: "Avance",
-};
-
 const orderedDays: PlanningDayOfWeek[] = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
-
-function levelBadgeClass(level: PlanningLevel) {
-  if (level === "BEGINNER") return "border-emerald-200 bg-emerald-50 text-emerald-900";
-  if (level === "INTERMEDIATE") return "border-sky-200 bg-sky-50 text-sky-900";
-  if (level === "ADVANCED") return "border-violet-200 bg-violet-50 text-violet-900";
-  return "border-zinc-200 bg-zinc-50 text-zinc-700";
-}
 
 function todayPlanningDay(): PlanningDayOfWeek {
   const jsDay = new Date().getDay();
@@ -89,7 +80,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   const [courseSlug, setCourseSlug] = useState<string>("NONE");
   const [coachId, setCoachId] = useState<string>("NONE");
   const [dayOfWeek, setDayOfWeekLocal] = useState<"NONE" | PlanningDayOfWeek>("NONE");
-  const [level, setLevel] = useState<PlanningLevel>("ALL_LEVELS");
+  const [level, setLevel] = useState<LevelFormValue>("NONE");
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
   const [durationMinutes, setDurationMinutes] = useState("");
@@ -144,7 +135,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     setCourseSlug("NONE");
     setCoachId("NONE");
     setDayOfWeekLocal("NONE");
-    setLevel("ALL_LEVELS");
+    setLevel("NONE");
     setStartTime("");
     setEndTime("");
     setDurationMinutes("");
@@ -174,8 +165,12 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
       setFormError("Veuillez choisir le jour.");
       return;
     }
+    if (level === "NONE") {
+      setFormError("Veuillez sélectionner un niveau.");
+      return;
+    }
     if (!startTime) {
-      setFormError("Heure de debut invalide.");
+      setFormError("Heure de début invalide.");
       return;
     }
     if (!endTime) {
@@ -187,15 +182,15 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     const waitCap = waitlistCapacity.trim() ? Number(waitlistCapacity) : null;
 
     if (!Number.isFinite(duration) || duration < 10) {
-      setFormError("La duree doit etre au moins 10 minutes.");
+      setFormError("La durée doit être d'au moins 10 minutes.");
       return;
     }
     if (endTime <= startTime) {
-      setFormError("L'heure de fin doit etre apres l'heure de debut.");
+      setFormError("L'heure de fin doit être après l'heure de début.");
       return;
     }
     if (!Number.isFinite(cap) || cap < 1) {
-      setFormError("Capacite invalide.");
+      setFormError("Capacité invalide.");
       return;
     }
     if (waitCap !== null && (!Number.isFinite(waitCap) || waitCap < 0)) {
@@ -213,7 +208,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
           courseSlug: courseSlug.trim(),
           coachId: coachId === "NONE" ? undefined : coachId,
           dayOfWeek: dayOfWeek as PlanningDayOfWeek,
-          level,
+          level: level as PlanningLevel,
           startTime,
           endTime,
           durationMinutes: duration,
@@ -230,7 +225,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
       onChangeViewMode("list");
       toast({
         variant: "success",
-        title: isEditMode ? "Seance modifiee" : "Seance ajoutee",
+        title: isEditMode ? "Séance modifiée" : "Séance ajoutée",
       });
     } catch (e) {
       const message = e instanceof Error ? e.message : "Une erreur est survenue.";
@@ -267,7 +262,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
       }
       setItemToDelete(null);
       await loadPlanning();
-      toast({ variant: "success", title: "Seance supprimee" });
+      toast({ variant: "success", title: "Séance supprimée" });
     } catch (e) {
       const message = e instanceof Error ? e.message : "Une erreur est survenue.";
       toast({ variant: "error", title: "Erreur", description: message });
@@ -297,7 +292,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
                 <div>
                   <p className="text-base font-semibold text-brand-dark">Planning</p>
                   <p className="mt-1 text-xs text-brand-dark/60">
-                    {visibleItemsByDay.length} resultat(s) — {dayLabels[selectedDay]}
+                    {visibleItemsByDay.length} résultat(s) — {dayLabels[selectedDay]}
                   </p>
                 </div>
                 <div className="grid min-w-0 w-full gap-2 md:max-w-3xl md:grid-cols-[minmax(320px,1fr)_42px] md:items-end">
@@ -314,46 +309,52 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
                       resetFilters();
                       setSelectedDay(todayPlanningDay());
                     }}
-                    aria-label="Reinitialiser les filtres"
-                    title="Reinitialiser"
+                    aria-label="Réinitialiser les filtres"
+                    title="Réinitialiser"
                     className="flex h-[42px] w-[42px] items-center justify-center rounded-xl border border-brand-medium/30 bg-white text-lg font-semibold text-brand-dark/70 transition hover:bg-zinc-50 hover:text-brand-dark"
                   >
                     ×
                   </button>
                 </div>
               </div>
-              <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-                {orderedDays.map((day) => (
-                  <button
-                    key={day}
-                    type="button"
-                    onClick={() => {
-                      setSelectedDay(day);
-                      setDayOfWeek(day);
-                    }}
-                    className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition sm:px-3 sm:py-1 sm:text-xs lg:text-sm ${
-                      selectedDay === day
-                        ? "border-brand-dark/30 bg-brand-dark text-white"
-                        : "border-brand-medium/35 bg-white text-brand-dark/80 hover:bg-zinc-50"
-                    }`}
-                  >
-                    {dayLabels[day].toUpperCase()}
-                  </button>
-                ))}
+              <div
+                className="planning-days-scroll -mx-5 mt-4 flex items-center justify-start overflow-x-auto overflow-y-hidden overscroll-x-contain px-5 pb-2 touch-pan-x lg:justify-center"
+                aria-label="Jours de la semaine, défilement horizontal"
+              >
+                <div className="flex w-max flex-nowrap items-center gap-2 pr-1">
+                  {orderedDays.map((day) => (
+                    <button
+                      key={day}
+                      type="button"
+                      onClick={() => {
+                        setSelectedDay(day);
+                        setDayOfWeek(day);
+                      }}
+                      className={`inline-flex shrink-0 items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition sm:px-3 sm:py-1 sm:text-xs lg:text-sm ${
+                        selectedDay === day
+                          ? "border-brand-dark/30 bg-brand-dark text-white"
+                          : "border-brand-medium/35 bg-white text-brand-dark/80 hover:bg-zinc-50"
+                      }`}
+                    >
+                      {dayLabels[day].toUpperCase()}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
             {visibleItemsByDay.length === 0 ? (
-              <div className="px-5 py-10 text-center text-sm text-brand-dark/60">Aucune seance planifiee.</div>
+              <div className="px-5 py-10 text-center text-sm text-brand-dark/60">Aucune séance planifiée.</div>
             ) : (
               <div className="grid grid-cols-1 gap-3 p-4 md:grid-cols-2 sm:p-5 lg:grid-cols-3">
                 {visibleItemsByDay.map((item) => (
                   <PlanningSessionCard
                     key={item.id}
+                    variant="admin"
                     courseLabel={courseLabelBySlug[item.courseSlug] ?? item.courseSlug}
                     startTime={item.startTime}
-                    levelLabel={levelLabels[item.level]}
-                    levelToneClass={levelBadgeClass(item.level)}
+                    levelLabel={planningLevelLabelFr(item.level)}
+                    levelToneClass={planningLevelBadgeClass(item.level)}
                     coachName={item.coach ? `${item.coach.firstName} ${item.coach.lastName}` : null}
                     coachImageUrl={item.coach?.imageUrl ?? null}
                     topRightActions={
@@ -361,7 +362,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
                         <button
                           type="button"
                           onClick={() => handleStartEdit(item)}
-                          aria-label="Modifier la seance"
+                          aria-label="Modifier la séance"
                           title="Modifier"
                           className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-brand-medium/30 bg-brand-light/40 text-brand-dark focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-medium/30 disabled:cursor-not-allowed disabled:opacity-60"
                         >
@@ -372,7 +373,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
                         <button
                           type="button"
                           onClick={() => setItemToDelete(item)}
-                          aria-label="Supprimer la seance"
+                          aria-label="Supprimer la séance"
                           title="Supprimer"
                           className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200 disabled:cursor-not-allowed disabled:opacity-60"
                         >
@@ -384,15 +385,9 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
                     }
                     statsBadges={
                       <>
-                        <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-900 sm:text-xs">
-                          Duree: {item.durationMinutes} min
-                        </span>
-                        <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-900 sm:text-xs">
-                          Places: {item.capacity}
-                        </span>
-                        <span className="inline-flex items-center rounded-full border border-orange-200 bg-orange-50 px-2 py-0.5 text-[11px] font-semibold text-orange-900 sm:text-xs">
-                          Attente: {item.waitlistCapacity ?? "—"}
-                        </span>
+                        <span className={badgeClasses.availability}>Durée: {item.durationMinutes} min</span>
+                        <span className={badgeClasses.availability}>Places: {item.capacity}</span>
+                        <span className={badgeClasses.waitlist}>Attente: {item.waitlistCapacity ?? "—"}</span>
                       </>
                     }
                   />
@@ -403,8 +398,8 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
         )
       ) : (
         <div className="rounded-2xl border border-brand-medium/20 bg-white p-6 shadow-sm">
-          <h3 className="text-xl font-semibold text-brand-dark">{editingId ? "Modifier seance" : "Ajouter une seance"}</h3>
-          <p className="mt-2 text-sm text-brand-dark/70">Configurez le jour, l'heure, la duree et la capacite.</p>
+          <h3 className="text-xl font-semibold text-brand-dark">{editingId ? "Modifier la séance" : "Ajouter une séance"}</h3>
+          <p className="mt-2 text-sm text-brand-dark/70">Configurez le jour, l'heure, la durée et la capacité.</p>
 
           <div className="mt-5 space-y-4">
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -438,21 +433,6 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
 
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <SelectMenu
-                id="planning-level"
-                label="Niveau"
-                value={level}
-                onChange={(value) => setLevel(value as PlanningLevel)}
-                options={[
-                  { value: "ALL_LEVELS", label: "Tous niveaux" },
-                  { value: "BEGINNER", label: "Debutant" },
-                  { value: "INTERMEDIATE", label: "Intermediaire" },
-                  { value: "ADVANCED", label: "Avance" },
-                ]}
-              />
-            </div>
-
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <SelectMenu
                 id="planning-coach"
                 label="Coach"
                 value={coachId}
@@ -462,12 +442,22 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
                   ...coaches.map((c) => ({ value: c.id, label: `${c.firstName} ${c.lastName}` })),
                 ]}
               />
+              <SelectMenu<LevelFormValue>
+                id="planning-level"
+                label="Niveau"
+                value={level}
+                onChange={(value) => setLevel(value)}
+                options={[
+                  { value: "NONE", label: "Sélectionner un niveau" },
+                  ...PLANNING_LEVEL_FORM_OPTIONS,
+                ]}
+              />
             </div>
 
             <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
               <Input
                 id="planning-start-time"
-                label="Heure de debut"
+                label="Heure de début"
                 type="time"
                 value={startTime}
                 onChange={(e) => setStartTime(e.target.value)}
@@ -481,7 +471,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
               />
               <Input
                 id="planning-duration"
-                label="Duree (minutes)"
+                label="Durée (minutes)"
                 type="number"
                 min={10}
                 value={durationMinutes}
@@ -493,7 +483,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <Input
                 id="planning-capacity"
-                label="Capacite"
+                label="Capacité"
                 type="number"
                 min={1}
                 value={capacity}
@@ -528,7 +518,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
               Annuler
             </button>
             <Button onClick={() => void handleSubmit()} disabled={isSubmitting}>
-              {isSubmitting ? "Enregistrement..." : editingId ? "Mettre a jour" : "Enregistrer"}
+              {isSubmitting ? "Enregistrement..." : editingId ? "Mettre à jour" : "Enregistrer"}
             </Button>
           </div>
         </div>
@@ -536,7 +526,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
 
       <ConfirmDialog
         isOpen={Boolean(itemToDelete)}
-        title="Supprimer cette seance ?"
+        title="Supprimer cette séance ?"
         description={itemToDelete ? `${dayLabels[itemToDelete.dayOfWeek]} - ${itemToDelete.startTime}` : undefined}
         confirmText="Supprimer"
         isConfirming={isDeleting}

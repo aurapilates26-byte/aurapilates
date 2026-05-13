@@ -1,17 +1,18 @@
-import { courseContent } from "@/lib/text";
-import { PACK_CATEGORY_MIXED_REFORMER_MAT } from "@/lib/pack-categories";
+import {
+  normalizePackCategory,
+  PACK_CATEGORY_MIXED_REFORMER_MAT,
+} from "@/lib/pack-categories";
 
 export type PackEligibility = {
   mode: "mixed" | "single" | "unknown";
-  allowedCourseSlugs: string[]; // planning.courseSlug values allowed for booking
+  allowedCourseSlugs: string[];
 };
 
-const titleToSlug: Map<string, string> = new Map(courseContent.map((c) => [c.title, c.slug] as const));
-
-const titleToSlugAliases: Record<string, string[]> = {
-  // Support legacy planning slugs used elsewhere in the codebase.
-  "Cours de yoga": ["cours-de-yoga", "yoga"],
-  "Cours de dance": ["cours-de-dance", "dance"],
+const SINGLE_CATEGORY_ALLOWED_SLUGS: Record<string, string[]> = {
+  "Pilates reformer": ["pilates-reformer"],
+  "Mat pilates": ["mat-pilates"],
+  Yoga: ["cours-de-yoga", "yoga"],
+  Danse: ["cours-de-dance", "dance"],
 };
 
 export function getEligibilityForPack(input: {
@@ -26,11 +27,9 @@ export function getEligibilityForPack(input: {
   }
 
   if (!input.category) return { mode: "unknown", allowedCourseSlugs: [] };
-  if (input.category === PACK_CATEGORY_MIXED_REFORMER_MAT) return { mode: "mixed", allowedCourseSlugs: [] };
+  const cat = normalizePackCategory(input.category);
+  if (cat === PACK_CATEGORY_MIXED_REFORMER_MAT) return { mode: "mixed", allowedCourseSlugs: [] };
 
-  const direct = titleToSlug.get(input.category) ?? null;
-  const aliases = titleToSlugAliases[input.category] ?? [];
-  const allowed = [...new Set([...(direct ? [direct] : []), ...aliases])];
+  const allowed = SINGLE_CATEGORY_ALLOWED_SLUGS[cat] ?? [];
   return { mode: allowed.length ? "single" : "unknown", allowedCourseSlugs: allowed };
 }
-

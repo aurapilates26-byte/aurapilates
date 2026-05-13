@@ -16,11 +16,11 @@ const navigationByRole = {
   ADMIN: [
     { label: "Vue d'ensemble", href: "/dashboard" },
     { label: "Planning", href: "/dashboard/planning" },
-    { label: "Reservations", href: "/dashboard/reservations-admin" },
-    { label: "Adherents", href: "/dashboard/adherents" },
+    { label: "Réservations", href: "/dashboard/reservations-admin" },
+    { label: "Adhérents", href: "/dashboard/adherents" },
     { label: "Packs", href: "/dashboard/packs" },
     { label: "Coachs", href: "/dashboard/coachs" },
-    { label: "Presence", href: "/dashboard/presence" },
+    { label: "Présence", href: "/dashboard/presence" },
     { label: "QR code", href: "/dashboard/qr-code" },
   ],
   MEMBRE: [
@@ -162,7 +162,9 @@ export function DashboardSidebar({ role, variant = "desktop", onRequestClose }: 
               href={item.href}
               onClick={() => onRequestClose?.()}
               className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition ${
-                active ? "bg-brand-light/60 text-brand-dark shadow-sm" : "text-brand-dark hover:bg-brand-light/40"
+                active
+                  ? "bg-sidebar-nav-active text-brand-dark shadow-sm ring-1 ring-brand-dark/15"
+                  : "text-brand-dark hover:bg-sidebar-nav-hover"
               }`}
             >
               <NavIcon href={item.href} active={active} />

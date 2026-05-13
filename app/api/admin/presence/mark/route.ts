@@ -20,13 +20,13 @@ const CHECKIN_METHOD = "STAFF_ROSTER" as const;
 const ATTENDANCE_MARKED_BY = "STAFF_KEY" as const;
 
 const ERRORS = {
-  FORBIDDEN: "Forbidden",
-  PAYLOAD_INVALID: "Payload invalide",
-  RESERVATION_NOT_FOUND: "Reservation introuvable",
-  RESERVATION_CANCELLED: "Reservation annulee",
-  RESERVATION_NOT_ELIGIBLE: "Statut non eligible",
-  NO_QR_ASSIGNED: "Aucun QR assigne a ce membre",
-  TOO_EARLY: "Presence disponible 15 minutes avant le debut du cours",
+  FORBIDDEN: "Accès refusé",
+  PAYLOAD_INVALID: "Données invalides",
+  RESERVATION_NOT_FOUND: "Réservation introuvable",
+  RESERVATION_CANCELLED: "Réservation annulée",
+  RESERVATION_NOT_ELIGIBLE: "Statut non éligible",
+  NO_QR_ASSIGNED: "Aucun QR code assigné à ce membre",
+  TOO_EARLY: "Présence disponible 15 minutes avant le début du cours",
 } as const;
 
 const bodySchema = z.object({
@@ -160,7 +160,7 @@ export async function POST(request: Request) {
     // DB non migrée: la colonne reservationId (CheckIn) est absente.
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2022") {
       return errorResponse(
-        "Base de donnees non synchronisee: appliquez la migration Prisma (reservationId sur checkins).",
+        "Base de données non synchronisée : appliquez la migration Prisma (reservationId sur checkins).",
         500,
       );
     }

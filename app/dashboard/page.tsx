@@ -4,6 +4,7 @@ import { MemberMyReservations } from "@/components/dashboard/member-my-reservati
 import { MemberReservationsClient } from "@/components/dashboard/member-reservations-client";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { addPackDurationToStartDate } from "@/lib/pack-duration";
 import {
   formatYmdLocal,
   formatYmdPrismaDate,
@@ -16,20 +17,20 @@ import {
 const contentByRole = {
   ADMIN: {
     title: "Pilotage global du studio",
-    highlightsTitle: "Priorites administrateur",
+    highlightsTitle: "Priorités administrateur",
     highlights: [
-      "Verifier les nouvelles inscriptions et leur attribution de role.",
-      "Superviser les reservations des cours et l'occupation des places.",
-      "Mettre a jour les contenus visibles par les membres depuis un espace unique.",
+      "Vérifier les nouvelles inscriptions et leur attribution de rôle.",
+      "Superviser les réservations des cours et l'occupation des places.",
+      "Mettre à jour les contenus visibles par les membres depuis un espace unique.",
     ],
   },
   MEMBRE: {
     title: "Votre espace personnel",
-    highlightsTitle: "Mes reservations",
+    highlightsTitle: "Mes réservations",
     highlights: [
       "Consulter les cours disponibles selon votre abonnement.",
-      "Retrouver rapidement vos reservations a venir.",
-      "Mettre a jour vos informations personnelles et suivre votre progression.",
+      "Retrouver rapidement vos réservations à venir.",
+      "Mettre à jour vos informations personnelles et suivre votre progression.",
     ],
   },
 } as const;
@@ -111,7 +112,14 @@ export default async function DashboardPage() {
 
           const expiresAt =
             member.packStartedAt && member.pack?.durationDays
-              ? new Date(member.packStartedAt.getTime() + member.pack.durationDays * 24 * 60 * 60 * 1000)
+              ? addPackDurationToStartDate(
+                  new Date(
+                    member.packStartedAt.getFullYear(),
+                    member.packStartedAt.getMonth(),
+                    member.packStartedAt.getDate(),
+                  ),
+                  member.pack.durationDays,
+                )
               : null;
 
           /**
@@ -238,7 +246,7 @@ export default async function DashboardPage() {
 
           const subscriptionPackLine =
             member.pack != null
-              ? `Pack : ${member.pack.name}${member.pack.durationDays ? ` · ${member.pack.durationDays} jours` : ""}`
+              ? `Pack : ${member.pack.name}${member.pack.durationDays ? ` · ${member.pack.durationDays}` : ""}`
               : "Pack : —";
           const subscriptionStatusLine =
             mixedRemainingLine

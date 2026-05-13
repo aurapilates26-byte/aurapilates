@@ -65,7 +65,7 @@ async function buildUniqueQrKey() {
 }
 
 function buildQrImageUrl(publicId: string) {
-  return `/qrcode/${publicId}.png`;
+  return `/qrcode/${publicId}`;
 }
 
 function getRequestOrigin(request: Request) {

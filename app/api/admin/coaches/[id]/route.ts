@@ -56,8 +56,8 @@ function errorResponse(message: string, status: number) {
 
 async function requireAdmin() {
   const session = await getServerSession(authOptions);
-  if (!session?.user) return { error: errorResponse("Unauthorized", 401) };
-  if (session.user.role !== "ADMIN") return { error: errorResponse("Forbidden", 403) };
+  if (!session?.user) return { error: errorResponse("Non autorisé", 401) };
+  if (session.user.role !== "ADMIN") return { error: errorResponse("Accès refusé", 403) };
   return { session };
 }
 
@@ -71,7 +71,7 @@ export async function PUT(request: Request, { params }: Params) {
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     const field = issue?.path?.[0];
-    const message = field ? `${String(field)}: ${issue.message}` : issue?.message ?? "Invalid request payload";
+    const message = field ? `${String(field)} : ${issue.message}` : issue?.message ?? "Données invalides";
     return errorResponse(message, 400);
   }
 
@@ -94,12 +94,12 @@ export async function PUT(request: Request, { params }: Params) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected error";
     if (message.includes("Record to update not found")) {
-      return errorResponse("Coach not found", 404);
+      return errorResponse("Coach introuvable", 404);
     }
     if (message.includes("Unique constraint")) {
-      return errorResponse("Email already used", 409);
+      return errorResponse("E-mail déjà utilisé", 409);
     }
-    return errorResponse("Unable to update coach", 400);
+    return errorResponse("Impossible de mettre à jour ce coach", 400);
   }
 }
 
@@ -117,8 +117,8 @@ export async function DELETE(_request: Request, { params }: Params) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected error";
     if (message.includes("Record to delete does not exist")) {
-      return errorResponse("Coach not found", 404);
+      return errorResponse("Coach introuvable", 404);
     }
-    return errorResponse("Unable to delete coach", 400);
+    return errorResponse("Impossible de supprimer ce coach", 400);
   }
 }

@@ -4,6 +4,7 @@ import { authOptions } from "@/auth";
 import { createMemberSchema, listMembersQuerySchema, renewMemberPackSchema, updateMemberSchema } from "./schemas";
 import { randomInt } from "crypto";
 import { prisma } from "@/lib/prisma";
+import { addPackDurationToStartDate } from "@/lib/pack-duration";
 
 const db = prisma;
 
@@ -84,13 +85,13 @@ function mapMember(record: {
   createdAt: Date;
   updatedAt: Date;
   user: { email: string } | null;
-  pack: { id: string; name: string; durationDays: number | null } | null;
+  pack: { id: string; name: string; durationDays: string | null } | null;
   assignedQrCodes: { publicId: string; status: string; updatedAt: Date }[];
 }) {
   const qr = record.assignedQrCodes[0] ?? null;
   const packExpiresAt =
     record.packStartedAt && record.pack?.durationDays
-      ? new Date(record.packStartedAt.getTime() + record.pack.durationDays * 24 * 60 * 60 * 1000)
+      ? addPackDurationToStartDate(record.packStartedAt, record.pack.durationDays)
       : null;
 
   return {
@@ -514,7 +515,7 @@ export async function renewAdminMemberPackById(id: string, request: Request) {
 
     const previousPackExpiresAt =
       memberCurrent.packStartedAt && memberCurrent.pack?.durationDays
-        ? new Date(memberCurrent.packStartedAt.getTime() + memberCurrent.pack.durationDays * 24 * 60 * 60 * 1000)
+        ? addPackDurationToStartDate(memberCurrent.packStartedAt, memberCurrent.pack.durationDays)
         : null;
     renewalStartAt =
       previousPackExpiresAt && previousPackExpiresAt.getTime() > now.getTime() ? previousPackExpiresAt : now;

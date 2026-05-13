@@ -2,7 +2,8 @@ import { PrismaClient } from "@prisma/client";
 import { getServerSession } from "next-auth";
 import { z } from "zod";
 import { authOptions } from "@/auth";
-import { isValidPackCategory } from "@/lib/pack-categories";
+import { isValidPackCategory, normalizePackCategory } from "@/lib/pack-categories";
+import { normalizeDurationForApi } from "@/lib/pack-duration";
 
 const db = new PrismaClient();
 
@@ -18,7 +19,7 @@ const createPackSchema = z.object({
   description: z.string().trim().max(2000).optional(),
   sessionCount: z.number().int().positive().optional(),
   priceCents: z.number().int().nonnegative().optional(),
-  durationDays: z.number().int().positive().optional(),
+  durationDays: z.string().trim().max(50).nullable().optional(),
   isActive: z.boolean().optional(),
 });
 
@@ -84,10 +85,14 @@ export async function POST(request: Request) {
   if (!parsed.success) return errorResponse("Invalid request payload", 400);
 
   const data = parsed.data;
-  if (data.category && !isValidPackCategory(data.category)) {
+  const categoryRaw = data.category?.trim();
+  const categoryForDb = categoryRaw ? normalizePackCategory(categoryRaw) : null;
+  if (categoryRaw && !isValidPackCategory(categoryRaw)) {
     return errorResponse("Categorie invalide", 400);
   }
   const features = parseDescriptionPoints(data.description);
+  const dur = normalizeDurationForApi(data.durationDays ?? null);
+  if (!dur.ok) return errorResponse(dur.error, 400);
   let created:
     | {
         id: string;
@@ -96,7 +101,7 @@ export async function POST(request: Request) {
         description: string | null;
         sessionCount: number | null;
         priceCents: number | null;
-        durationDays: number | null;
+        durationDays: string | null;
         isActive: boolean;
         features: { label: string }[];
         courseQuotas: { courseSlug: string; sessionCount: number }[];
@@ -105,12 +110,12 @@ export async function POST(request: Request) {
   try {
     created = await db.pack.create({
       data: {
-        category: data.category ?? null,
+        category: categoryForDb,
         name: data.name,
         description: data.description ?? null,
         sessionCount: data.sessionCount ?? null,
         priceCents: data.priceCents ?? null,
-        durationDays: data.durationDays ?? null,
+        durationDays: dur.value,
         isActive: data.isActive ?? true,
         features: {
           create: features.map((label, index) => ({

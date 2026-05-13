@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DashboardHeader } from "@/components/dashboard/header";
 import { Input } from "@/components/ui";
 import { badgeClasses } from "@/lib/badge-classes";
+import { planningLevelBadgeClass } from "@/lib/planning-level-badge";
+import { planningLevelLabelFr } from "@/lib/planning-public-labels";
 import { useToast } from "@/components/ui/toast-provider";
 
 type SlotRow = {
@@ -83,18 +85,11 @@ type SearchResponse = {
   items: SearchItem[];
 };
 
-const levelLabels: Record<string, string> = {
-  ALL_LEVELS: "Tous niveaux",
-  BEGINNER: "Debutant",
-  INTERMEDIATE: "Intermediaire",
-  ADVANCED: "Avance",
-};
-
 const statusLabels: Record<string, string> = {
-  BOOKED: "Confirme",
+  BOOKED: "Confirmé",
   WAITLIST: "Liste d'attente",
-  ATTENDED: "Present",
-  CANCELLED: "Annule",
+  ATTENDED: "Présent",
+  CANCELLED: "Annulé",
 };
 
 function statusBadgeClass(status: RosterRow["status"]) {
@@ -109,14 +104,7 @@ function statusBadgeClass(status: RosterRow["status"]) {
 
 function cancelledPackInfoLabel(r: RosterRow) {
   if (r.status !== "CANCELLED") return null;
-  return r.packRefundedAt ? "Seance rendue au pack" : "Annulation tardive (non rendue)";
-}
-
-function levelBadgeClass(level: string) {
-  if (level === "BEGINNER") return "border-emerald-200 bg-emerald-50 text-emerald-900";
-  if (level === "INTERMEDIATE") return "border-sky-200 bg-sky-50 text-sky-900";
-  if (level === "ADVANCED") return "border-violet-200 bg-violet-50 text-violet-900";
-  return "border-zinc-200 bg-zinc-50 text-zinc-700";
+  return r.packRefundedAt ? "Séance rendue au pack" : "Annulation tardive (non rendue)";
 }
 
 function toYmd(d: Date) {
@@ -345,7 +333,7 @@ export function AdminReservationsClient() {
             {rosterLoadingKey === key ? (
               <p className="text-sm text-brand-dark/65">Chargement...</p>
             ) : !roster ? (
-              <p className="text-sm text-brand-dark/65">Aucune reservation sur ce creneau.</p>
+              <p className="text-sm text-brand-dark/65">Aucune réservation sur ce créneau.</p>
             ) : (
               <>
                 {/* Desktop table */}
@@ -354,9 +342,9 @@ export function AdminReservationsClient() {
                     <thead>
                       <tr className="border-b border-brand-medium/15 bg-white/60 text-left text-xs font-semibold text-brand-dark/70">
                         <th className="px-4 py-3">Membre</th>
-                        <th className="px-4 py-3">Telephone</th>
+                        <th className="px-4 py-3">Téléphone</th>
                         <th className="px-4 py-3">Statut</th>
-                        <th className="px-4 py-3">Presence</th>
+                        <th className="px-4 py-3">Présence</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-brand-medium/15 bg-white">
@@ -420,7 +408,7 @@ export function AdminReservationsClient() {
                           </span>
                         </div>
                         <p className="mt-2 text-xs text-brand-dark/70">
-                          Presence:{" "}
+                          Présence :{" "}
                           <span className="font-semibold text-brand-dark/80">
                             {r.attendance
                               ? `Oui (${new Date(r.attendance.markedAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })})`
@@ -450,7 +438,7 @@ export function AdminReservationsClient() {
 
         {filteredSlots.length === 0 ? (
           <p className="text-sm text-brand-dark/65">
-            {searchData && memberQuery.trim().length >= 2 ? "Aucun resultat pour cette date." : "Aucun creneau pour cette date."}
+            {searchData && memberQuery.trim().length >= 2 ? "Aucun résultat pour cette date." : "Aucun créneau pour cette date."}
           </p>
         ) : (
           <div className="mt-4 space-y-3">
@@ -489,14 +477,14 @@ export function AdminReservationsClient() {
                     </p>
                     <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-brand-dark/70 sm:text-sm">
                       <span
-                        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold sm:text-xs ${levelBadgeClass(
+                        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold sm:text-xs ${planningLevelBadgeClass(
                           s.level
                         )}`}
                       >
                         <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 fill-current" aria-hidden="true">
                           <path d="M12 3l2.47 5 5.53.8-4 3.9.95 5.5L12 15.9 7.05 18.2 8 12.7 4 8.8 9.53 8z" />
                         </svg>
-                        Niveau: {levelLabels[s.level] ?? s.level}
+                        Niveau : {planningLevelLabelFr(s.level)}
                       </span>
                       <span className="inline-flex items-center gap-1.5">
                         <span className="h-7 w-7 overflow-hidden rounded-full border border-brand-medium/20 bg-white">
@@ -506,17 +494,17 @@ export function AdminReservationsClient() {
                             <span className="flex h-full w-full items-center justify-center text-[10px] font-semibold text-brand-dark/50">—</span>
                           )}
                         </span>
-                        <span>Coach: {s.coachName ?? "—"}</span>
+                        <span>Coach : {s.coachName ?? "—"}</span>
                       </span>
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                     <span className={badgeClasses.availability}>
-                      Places: {s.stats.booked + s.stats.attended}/{s.capacity} (libre: {s.stats.spotsRemaining})
+                      Places : {s.stats.booked + s.stats.attended}/{s.capacity} (libre : {s.stats.spotsRemaining})
                     </span>
                     {s.waitlistCapacity != null ? (
                       <span className={badgeClasses.waitlist}>
-                        Attente: {s.stats.waitlist}/{s.waitlistCapacity}
+                        Attente : {s.stats.waitlist}/{s.waitlistCapacity}
                       </span>
                     ) : null}
                   </div>
@@ -534,8 +522,8 @@ export function AdminReservationsClient() {
     <>
       <DashboardHeader
         role="ADMIN"
-        title="Reservations"
-        description="Filtrez par date/heure et membre pour suivre les reservations du jour, a venir, ou passees."
+        title="Réservations"
+        description="Filtrez par date ou heure et par membre pour suivre les réservations du jour, à venir ou passées."
         showRoleLine={false}
       />
 
@@ -559,7 +547,7 @@ export function AdminReservationsClient() {
             />
             <Input
               id="admin-res-member"
-              label="Recherche membre (nom ou telephone)"
+              label="Recherche membre (nom ou téléphone)"
               value={memberQuery}
               onChange={(e) => setMemberQuery(e.target.value)}
               placeholder="Ex: dupont ou 55..."
@@ -570,19 +558,19 @@ export function AdminReservationsClient() {
               disabled={loadingWeek || loadingSlots}
               className="h-11 w-full rounded-full border border-brand-medium/30 bg-white px-5 py-2.5 text-sm font-medium text-brand-dark transition hover:bg-zinc-50 disabled:opacity-60 sm:w-auto"
             >
-              Reinitialiser
+              Réinitialiser
             </button>
           </div>
 
           <p className="mt-3 text-xs text-brand-dark/60">
-            Les filtres s'appliquent automatiquement a la saisie. Utilisez Reinitialiser pour revenir a l'etat par defaut.
+            Les filtres s&apos;appliquent automatiquement à la saisie. Utilisez Réinitialiser pour revenir à l&apos;état par défaut.
           </p>
 
           {loadingSearch ? (
             <p className="mt-3 text-xs text-brand-dark/60">Recherche en cours...</p>
           ) : searchData && memberQuery.trim().length >= 2 ? (
             <p className="mt-3 text-xs text-brand-dark/60">
-              Resultats: <span className="font-semibold">{searchData.items.length}</span> creneau(x) — periode{" "}
+              Résultats : <span className="font-semibold">{searchData.items.length}</span> créneau(x) — période{" "}
               <span className="font-semibold">
                 {searchData.from} → {searchData.to}
               </span>
@@ -593,10 +581,10 @@ export function AdminReservationsClient() {
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-lg font-semibold text-brand-dark">
                 {date
-                  ? (date < todayYmd ? `Historique des reservations · ${slots?.date ?? date}` : `Reservations du ${slots?.date ?? date}`)
+                  ? (date < todayYmd ? `Historique des réservations · ${slots?.date ?? date}` : `Réservations du ${slots?.date ?? date}`)
                   : searchData && memberQuery.trim().length >= 2
-                    ? "Resultats de recherche (7 jours)"
-                    : "Reservations des 7 prochains jours"}
+                    ? "Résultats de recherche (7 jours)"
+                    : "Réservations des 7 prochains jours"}
               </h2>
               {date && date < todayYmd ? (
                 <span className="inline-flex items-center gap-1 rounded-full border border-zinc-300 bg-zinc-100 px-2.5 py-0.5 text-xs font-semibold text-zinc-700">
@@ -614,7 +602,7 @@ export function AdminReservationsClient() {
               ) : slots ? (
                 <div className="mt-4 space-y-6">{renderDaySection(`Date · ${slots.date}`, slots.date, orderedSlots)}</div>
               ) : (
-                <p className="mt-3 text-sm text-brand-dark/65">Aucun creneau pour cette date.</p>
+                <p className="mt-3 text-sm text-brand-dark/65">Aucun créneau pour cette date.</p>
               )
             ) : loadingWeek ? (
               <p className="mt-3 text-sm text-brand-dark/65">Chargement...</p>

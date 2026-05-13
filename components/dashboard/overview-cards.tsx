@@ -22,7 +22,7 @@ type OverviewCard = {
 
 const contentByRole: OverviewCard[] = [
   { title: "Utilisateurs", value: "128", description: "Comptes actifs sur la plateforme.", valueStyle: "stat" },
-  { title: "Reservations", value: "42", description: "Reservations en attente de suivi.", valueStyle: "stat" },
+  { title: "Réservations", value: "42", description: "Réservations en attente de suivi.", valueStyle: "stat" },
   { title: "Cours actifs", value: "12", description: "Cours actuellement visibles par les membres.", valueStyle: "stat" },
 ];
 
@@ -38,12 +38,12 @@ export function DashboardOverviewCards({ role, memberStats }: DashboardOverviewC
     role === "MEMBRE"
       ? [
           {
-            title: "Cours reserves",
+            title: "Cours réservés",
             value: String(memberStats?.reservedThisWeek ?? 0),
             valueStyle: "stat",
           },
           {
-            title: "Prochaine seance",
+            title: "Prochaine séance",
             value: memberStats?.nextSessionDayAndTime ?? "—",
             valueSecondary: memberStats?.nextSessionDateYmd ?? "—",
             valueStyle: "detail",

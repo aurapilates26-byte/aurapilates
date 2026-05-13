@@ -1,5 +1,7 @@
+import type { PlanningLevel } from "@prisma/client";
+
+export type { PlanningLevel };
 export type PlanningDayOfWeek = "MON" | "TUE" | "WED" | "THU" | "FRI" | "SAT" | "SUN";
-export type PlanningLevel = "ALL_LEVELS" | "BEGINNER" | "INTERMEDIATE" | "ADVANCED";
 export type PlanningBookingWindow = "WEEKLY" | "FIFTEEN_DAYS" | "ONE_MONTH";
 
 export type AdminPlanningItem = {

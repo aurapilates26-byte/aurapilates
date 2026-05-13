@@ -14,7 +14,7 @@ export function AdminPacksClient() {
       <DashboardHeader
         role="ADMIN"
         title="Packs"
-        description="Gerez les packs du studio avec categorie, duree, prix et points de description."
+        description="Gérez les packs du studio avec catégorie, durée, prix et points de description."
         showRoleLine={false}
         actions={
           <PacksHeaderActions

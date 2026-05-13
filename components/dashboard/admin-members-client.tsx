@@ -13,8 +13,8 @@ export function AdminMembersClient() {
     <>
       <DashboardHeader
         role="ADMIN"
-        title="Adherents"
-        description="Ajoutez des adherents en scannant des QR codes vierges, puis assignez-les de maniere securisee."
+        title="Adhérents"
+        description="Ajoutez des adhérents en scannant des QR codes vierges, puis assignez-les de manière sécurisée."
         showRoleLine={false}
         actions={
           <MembersHeaderActions

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DashboardHeader } from "@/components/dashboard/header";
 import { useToast } from "@/components/ui/toast-provider";
+import { planningLevelLabelFr } from "@/lib/planning-public-labels";
 import { Input, Switch } from "@/components/ui";
 
 type RosterMember = {
@@ -83,18 +84,11 @@ type RosterResponse = {
   } | null;
 };
 
-const levelLabels: Record<string, string> = {
-  ALL_LEVELS: "Tous niveaux",
-  BEGINNER: "Debutant",
-  INTERMEDIATE: "Intermediaire",
-  ADVANCED: "Avance",
-};
-
 const statusLabels: Record<string, string> = {
-  BOOKED: "Confirme",
+  BOOKED: "Confirmé",
   WAITLIST: "Liste d'attente",
-  ATTENDED: "Present",
-  CANCELLED: "Annule",
+  ATTENDED: "Présent",
+  CANCELLED: "Annulé",
 };
 
 function minus15(clock: string) {
@@ -294,10 +288,10 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
           const opensAt = start ? presenceOpensAt(start) : null;
           toast({
             variant: "warning",
-            title: "Trop tot",
+            title: "Trop tôt",
             description: opensAt
-              ? `Revenez a partir de ${opensAt} (15 min avant ${start}).`
-              : "Revenez 15 minutes avant le debut du cours.",
+              ? `Revenez à partir de ${opensAt} (15 min avant ${start}).`
+              : "Revenez 15 minutes avant le début du cours.",
           });
           return;
         }
@@ -305,10 +299,10 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
       }
       toast({
         variant: "success",
-        title: data.alreadyMarked ? "Deja marque" : "Presence enregistree",
+        title: data.alreadyMarked ? "Déjà marqué" : "Présence enregistrée",
         description: data.alreadyMarked
-          ? "Ce membre etait deja marque present pour ce creneau."
-          : "Check-in enregistre et reservation mise a jour.",
+          ? "Ce membre était déjà marqué présent pour ce créneau."
+          : "Check-in enregistré et réservation mise à jour.",
       });
       if (qrPublicId.trim()) {
         await fetchRosterByQr(qrPublicId.trim());
@@ -332,8 +326,8 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
     <>
       <DashboardHeader
         role="ADMIN"
-        title="Presence aux cours"
-        description="Apres scan du QR membre et validation avec la cle staff, la liste des inscrits du creneau s'affiche ici."
+        title="Présence aux cours"
+        description="Après scan du QR membre et validation avec la clé staff, la liste des inscrits du créneau s'affiche ici."
         showRoleLine={false}
       />
 
@@ -348,7 +342,7 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
           />
           <Input
             id="presence-filter-phone"
-            label="Recherche par numero"
+            label="Recherche par numéro"
             value={memberPhoneFilter}
             onChange={(e) => setMemberPhoneFilter(e.target.value)}
             placeholder="Ex: 5522..."
@@ -371,7 +365,7 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
               }}
               className="rounded-full border border-brand-medium/35 bg-white px-5 py-2.5 text-sm font-medium text-brand-dark transition hover:bg-zinc-50"
             >
-              Reinitialiser
+              Réinitialiser
             </button>
           </div>
         </div>
@@ -379,7 +373,7 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
 
         {!qrPublicId.trim() && suggestions.length > 1 ? (
           <div className="mt-3 rounded-xl border border-brand-medium/20 bg-white">
-            <div className="px-4 py-2 text-xs font-semibold text-brand-dark/70">Membres trouves</div>
+            <div className="px-4 py-2 text-xs font-semibold text-brand-dark/70">Membres trouvés</div>
             <ul className="divide-y divide-brand-medium/15">
               {suggestions.map((s) => (
                 <li key={s.id}>
@@ -454,10 +448,10 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                 <h2 className="text-lg font-semibold text-brand-dark">
                   {card.courseLabel} — {card.startTime} - {card.endTime}
                 </h2>
-                <p className="text-xs font-medium text-brand-dark/70">Date: {card.dateLabel}</p>
+                <p className="text-xs font-medium text-brand-dark/70">Date : {card.dateLabel}</p>
                 {mode === "active" ? (
                   <p className="text-xs text-brand-dark/70">
-                    Fenetre active:{" "}
+                    Fenêtre active :{" "}
                     <span className="font-semibold text-brand-dark">
                       {minus15(card.startTime)} → {card.endTime}
                     </span>
@@ -465,7 +459,7 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                 ) : null}
                 <div className="flex flex-wrap items-center gap-3 text-xs text-brand-dark/70">
                   <span>
-                    Niveau: <span className="font-semibold text-brand-dark">{levelLabels[card.level] ?? card.level}</span>
+                    Niveau : <span className="font-semibold text-brand-dark">{planningLevelLabelFr(card.level)}</span>
                   </span>
                   <span>
                     Places: <span className="font-semibold text-brand-dark">{card.capacity}</span>
@@ -483,12 +477,12 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                     )}
                   </div>
                   <p className="text-xs text-brand-dark/70">
-                    Coach: <span className="font-semibold text-brand-dark">{card.coachName ?? "—"}</span>
+                    Coach : <span className="font-semibold text-brand-dark">{card.coachName ?? "—"}</span>
                   </p>
                 </div>
                 {mode === "upcoming" && card.opensAt ? (
                   <p className="text-xs text-brand-dark/70">
-                    Presence disponible a partir de <span className="font-semibold text-brand-dark">{card.opensAt}</span>.
+                    Présence disponible à partir de <span className="font-semibold text-brand-dark">{card.opensAt}</span>.
                   </p>
                 ) : null}
               </div>
@@ -497,7 +491,7 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
 
               {roster?.class ? (
                 filteredReservations.length === 0 ? (
-                  <p className="mt-3 text-sm text-brand-dark/60">Aucun inscrit sur ce creneau.</p>
+                  <p className="mt-3 text-sm text-brand-dark/60">Aucun inscrit sur ce créneau.</p>
                 ) : (
                   <ul className="mt-4 divide-y divide-brand-medium/15 rounded-xl border border-brand-medium/15 bg-white">
                     {filteredReservations.map((row) => {
@@ -515,10 +509,10 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                           <div className="w-full">
                             <p className="font-medium text-brand-dark">
                               {`${row.member.firstName ?? ""} ${row.member.lastName ?? ""}`.trim() || "Membre"}
-                              {isScannedMember ? <span className="ml-2 text-xs font-semibold text-brand-dark/70">(scanne)</span> : null}
+                              {isScannedMember ? <span className="ml-2 text-xs font-semibold text-brand-dark/70">(scannée)</span> : null}
                             </p>
                             <p className="mt-1 text-xs font-semibold text-brand-dark/70">
-                              Statut: <span className="text-brand-dark">{statusLabels[row.status] ?? row.status}</span>
+                              Statut : <span className="text-brand-dark">{statusLabels[row.status] ?? row.status}</span>
                             </p>
                           </div>
 
@@ -526,7 +520,7 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                             <Switch
                               checked={isPresent}
                               disabled={!canMark || markingId === row.id || isPresent}
-                              ariaLabel="Marquer present"
+                              ariaLabel="Marquer présent"
                               onCheckedChange={(next) => {
                                 if (!next) return;
                                 void markPresent(row.id);
@@ -551,13 +545,13 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                     {roster.nextUpcomingClass.courseLabel} — {roster.nextUpcomingClass.startTime} - {roster.nextUpcomingClass.endTime}
                   </h3>
                   <p className="text-xs font-medium text-brand-dark/70">
-                    Date: {roster.nextUpcomingClass.dayLabel} ({roster.nextUpcomingClass.sessionDate})
+                    Date : {roster.nextUpcomingClass.dayLabel} ({roster.nextUpcomingClass.sessionDate})
                   </p>
                   <div className="flex flex-wrap items-center gap-3 text-xs text-brand-dark/70">
                     <span>
-                      Niveau:{" "}
+                      Niveau :{" "}
                       <span className="font-semibold text-brand-dark">
-                        {levelLabels[roster.nextUpcomingClass.level] ?? roster.nextUpcomingClass.level}
+                        {planningLevelLabelFr(roster.nextUpcomingClass.level)}
                       </span>
                     </span>
                     <span>
@@ -577,11 +571,11 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                       )}
                     </div>
                     <p className="text-xs text-brand-dark/70">
-                      Coach: <span className="font-semibold text-brand-dark">{roster.nextUpcomingClass.coachName ?? "—"}</span>
+                      Coach : <span className="font-semibold text-brand-dark">{roster.nextUpcomingClass.coachName ?? "—"}</span>
                     </p>
                   </div>
                   <p className="text-xs text-brand-dark/70">
-                    Presence disponible a partir de <span className="font-semibold text-brand-dark">{roster.nextUpcomingClass.opensAt}</span>.
+                    Présence disponible à partir de <span className="font-semibold text-brand-dark">{roster.nextUpcomingClass.opensAt}</span>.
                   </p>
                 </div>
               </section>

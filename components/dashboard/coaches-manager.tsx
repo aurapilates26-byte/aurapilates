@@ -163,7 +163,7 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
       onChangeViewMode("list");
       toast({
         variant: "success",
-        title: isEditMode ? "Coach modifie" : "Coach ajoute",
+        title: isEditMode ? "Coach modifié" : "Coach ajouté",
       });
     } catch (e) {
       const message = e instanceof Error ? e.message : "Une erreur est survenue.";
@@ -201,7 +201,7 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
       }
       setCoachToDelete(null);
       await loadCoaches();
-      toast({ variant: "success", title: "Coach supprime" });
+      toast({ variant: "success", title: "Coach supprimé" });
     } catch (e) {
       const message = e instanceof Error ? e.message : "Une erreur est survenue.";
       toast({ variant: "error", title: "Erreur", description: message });
@@ -254,14 +254,14 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
                 <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
                   <div>
                     <p className="text-base font-semibold text-brand-dark">Liste des coachs</p>
-                    <p className="mt-1 text-xs text-brand-dark/60">{visibleItems.length} resultat(s)</p>
+                    <p className="mt-1 text-xs text-brand-dark/60">{visibleItems.length} résultat(s)</p>
                   </div>
                   <div className="grid min-w-0 w-full gap-2 md:max-w-2xl md:grid-cols-[minmax(320px,1fr)_180px_42px] md:items-end">
                     <Input
                       id="coaches-search"
                       value={filters.search}
                       onChange={(event) => setSearch(event.target.value)}
-                      placeholder="Nom, email, telephone..."
+                      placeholder="Nom, email, téléphone..."
                       className="mt-0 py-2.5"
                     />
                     <select
@@ -278,8 +278,8 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
                     <button
                       type="button"
                       onClick={() => resetFilters()}
-                      aria-label="Reinitialiser les filtres"
-                      title="Reinitialiser"
+                      aria-label="Réinitialiser les filtres"
+                      title="Réinitialiser"
                       className="flex h-[42px] w-[42px] items-center justify-center rounded-xl border border-brand-medium/30 bg-white text-lg font-semibold text-brand-dark/70 transition hover:bg-zinc-50 hover:text-brand-dark"
                     >
                       ×
@@ -355,7 +355,7 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
                       <tr className="border-b border-brand-medium/15 bg-zinc-50/60 text-left text-xs font-semibold text-brand-dark/70">
                         <th className="px-5 py-3">Coach</th>
                         <th className="px-4 py-3">Email</th>
-                        <th className="px-4 py-3">Telephone</th>
+                        <th className="px-4 py-3">Téléphone</th>
                         <th className="px-4 py-3">Description</th>
                         <th className="px-4 py-3">Statut</th>
                         <th className="px-4 py-3 text-right">Action</th>
@@ -428,7 +428,7 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
         )
       ) : (
         <div className="rounded-2xl border border-brand-medium/20 bg-white p-6 shadow-sm">
-          <h3 className="text-xl font-semibold text-brand-dark">{editingCoachId ? "Modifier coach" : "Ajouter coach"}</h3>
+          <h3 className="text-xl font-semibold text-brand-dark">{editingCoachId ? "Modifier un coach" : "Ajouter un coach"}</h3>
           <p className="mt-2 text-sm text-brand-dark/70">
             Ajoutez les informations du coach avec un formulaire harmonise au dashboard.
           </p>
@@ -507,7 +507,7 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
               />
               <Input
                 id="coach-phone"
-                label="Telephone"
+                label="Téléphone"
                 value={phone}
                 onChange={(event) => setPhone(event.target.value)}
                 placeholder="Ex: +216 22 000 000"
@@ -520,7 +520,7 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
               value={description}
               onChange={(event) => setDescription(event.target.value)}
               rows={5}
-              placeholder="Ex: Coach Pilates reformer, specialisee post-partum..."
+              placeholder="Ex. : coach Pilates reformer, spécialisée post-partum..."
             />
 
             <Checkbox
@@ -547,7 +547,7 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
               Annuler
             </button>
             <Button onClick={() => void handleSubmit()} disabled={isSubmitting}>
-              {isSubmitting ? "Enregistrement..." : editingCoachId ? "Mettre a jour" : "Enregistrer"}
+              {isSubmitting ? "Enregistrement..." : editingCoachId ? "Mettre à jour" : "Enregistrer"}
             </Button>
           </div>
         </div>
@@ -558,7 +558,7 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
         title="Supprimer ce coach ?"
         description={
           coachToDelete
-            ? `Cette action supprimera ${coachToDelete.firstName} ${coachToDelete.lastName} de maniere definitive.`
+            ? `Cette action supprimera ${coachToDelete.firstName} ${coachToDelete.lastName} de manière définitive.`
             : undefined
         }
         confirmText="Supprimer"

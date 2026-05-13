@@ -4,16 +4,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { DashboardHeader } from "@/components/dashboard/header";
 import { Button, Modal } from "@/components/ui";
 import { useToast } from "@/components/ui/toast-provider";
+import { PlanningLevelPill } from "@/components/dashboard/planning-session-card";
 import { badgeClasses } from "@/lib/badge-classes";
+import { planningLevelBadgeClass } from "@/lib/planning-level-badge";
+import { planningLevelLabelFr } from "@/lib/planning-public-labels";
 import { useMemberBookingStore } from "@/store/member/member-booking-store";
 import type { MemberPlanningWindow } from "@/types/member/booking";
-
-const levelLabels: Record<string, string> = {
-  ALL_LEVELS: "Tous niveaux",
-  BEGINNER: "Debutant",
-  INTERMEDIATE: "Intermediaire",
-  ADVANCED: "Avance",
-};
 
 const dayLabels: Record<number, string> = {
   0: "Dimanche",
@@ -87,7 +83,7 @@ function bookingDetailLine(o: BookingOccurrenceLite): string {
   const coach = o.coachName?.trim() ? o.coachName.trim() : "—";
   const day = dayLabelFromYmd(o.sessionDate);
   const date = formatDateFrFromYmd(o.sessionDate);
-  return `${o.courseLabel}, coach ${coach}, le ${day} ${date} de ${o.startTime} a ${o.endTime}`;
+  return `${o.courseLabel}, coach ${coach}, le ${day} ${date} de ${o.startTime} à ${o.endTime}`;
 }
 
 export function MemberReservationsClient({ embedded = false }: { embedded?: boolean }) {
@@ -167,16 +163,16 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
       });
       const data = (await res.json().catch(() => null)) as { error?: string; item?: { status: string } };
       if (!res.ok) {
-        throw new Error(data?.error ?? "Reservation impossible.");
+        throw new Error(data?.error ?? "Réservation impossible.");
       }
       const detail = bookingDetailLine(occurrence);
       toast({
         variant: "success",
-        title: data.item?.status === "WAITLIST" ? "Liste d'attente" : "Reservation",
+        title: data.item?.status === "WAITLIST" ? "Liste d'attente" : "Réservation",
         description:
           data.item?.status === "WAITLIST"
-            ? `Liste d'attente enregistree pour le cours de ${detail}.`
-            : `Reservation enregistree pour le cours de ${detail}.`,
+            ? `Liste d'attente enregistrée pour le cours de ${detail}.`
+            : `Réservation enregistrée pour le cours de ${detail}.`,
         durationMs: TOAST_BOOKING_MS,
       });
       await loadAll();
@@ -223,8 +219,8 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
       {!embedded ? (
         <DashboardHeader
           role="MEMBRE"
-          title="Reservations"
-          description="Consultez le planning et reservez selon les places disponibles."
+          title="Réservations"
+          description="Consultez le planning et réservez selon les places disponibles."
           showRoleLine={false}
         />
       ) : null}
@@ -233,20 +229,24 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
         <div className="flex flex-col gap-1">
           <h2 className="text-base font-semibold text-brand-dark sm:text-lg lg:text-xl">Planning</h2>
           <p className="text-[11px] text-brand-dark/70 sm:text-xs lg:text-sm">
-            Periode de reservation: <span className="font-semibold">{formatRange(planningRange)}</span>
+            Période de réservation : <span className="font-semibold">{formatRange(planningRange)}</span>
           </p>
           <p className="text-[11px] text-brand-dark/70 sm:text-xs lg:text-sm">
-            Periode configuree par le studio: <span className="font-semibold">{planningWindowLabel(planningWindow)}</span>
+            Période configurée par le studio : <span className="font-semibold">{planningWindowLabel(planningWindow)}</span>
           </p>
         </div>
 
         {loading ? (
           <p className="mt-4 text-sm text-brand-dark/65">Chargement...</p>
         ) : nextOccurrences.length === 0 ? (
-          <p className="mt-4 text-sm text-brand-dark/65">Aucun creneau planifie pour le moment.</p>
+          <p className="mt-4 text-sm text-brand-dark/65">Aucun créneau planifié pour le moment.</p>
         ) : (
           <>
-            <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+            <div
+              className="planning-days-scroll -mx-4 mt-3 flex items-center justify-start overflow-x-auto overflow-y-hidden overscroll-x-contain px-4 pb-2 touch-pan-x sm:-mx-6 sm:px-6 lg:justify-center"
+              aria-label="Jours de la semaine, défilement horizontal"
+            >
+              <div className="flex w-max flex-nowrap items-center gap-2 pr-1">
               {orderedDays.map((d) => (
                 <button
                   key={d}
@@ -254,7 +254,7 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
                   onClick={() => {
                     setSelectedDay(d);
                   }}
-                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition sm:px-3 sm:py-1 sm:text-xs lg:text-sm ${
+                  className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition sm:px-3 sm:py-1 sm:text-xs lg:text-sm ${
                     selectedDay === d
                       ? "border-brand-dark/30 bg-brand-dark text-white"
                       : d === todayDay
@@ -268,12 +268,13 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
                       className={`h-1.5 w-1.5 shrink-0 rounded-full ${
                         selectedDay === d ? "bg-white" : "bg-brand-dark"
                       }`}
-                      title="Vous avez une reservation ce jour-la"
+                      title="Vous avez une réservation ce jour-là"
                       aria-hidden
                     />
                   ) : null}
                 </button>
               ))}
+              </div>
             </div>
 
             {visible.length === 0 ? (
@@ -282,7 +283,7 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
                   <span className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-brand-medium/30 text-xs font-bold">
                     i
                   </span>
-                  <span>Aucune seance planifiee pour ce jour.</span>
+                  <span>Aucune séance planifiée pour ce jour.</span>
                 </div>
               </div>
             ) : (
@@ -301,15 +302,15 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
                     (o.waitSpotsRemaining ?? 0) > 0;
                   const full = !o.myReservation && !canBookMain && !canWait;
                   const enrolled = Boolean(o.myReservation);
-                  const enrolledLabel = o.myReservation?.status === "WAITLIST" ? "En attente" : "Deja inscrit";
+                  const enrolledLabel = o.myReservation?.status === "WAITLIST" ? "En attente" : "Déjà inscrite";
 
                   const onAlreadyEnrolled = () => {
                     toast({
                       variant: "warning",
-                      title: "Vous etes deja inscrit dans ce cours",
+                      title: "Vous êtes déjà inscrite sur ce cours",
                       description: `${o.courseLabel} · ${dayLabelFromYmd(o.sessionDate)} ${formatDateFrFromYmd(
                         o.sessionDate,
-                      )} · ${o.startTime}-${o.endTime} · ${levelLabels[o.level] ?? o.level}`,
+                      )} · ${o.startTime}-${o.endTime} · ${planningLevelLabelFr(o.level)}`,
                     });
                   };
 
@@ -338,7 +339,7 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
                             </p>
                           </div>
                           <p className="mt-1 text-xs text-brand-dark/75 sm:text-sm lg:text-base">
-                            {o.startTime} - {o.endTime} · {levelLabels[o.level] ?? o.level}
+                            {o.startTime} - {o.endTime}
                           </p>
                           {categoryBlocked && !enrolled ? (
                             <p className="mt-2">
@@ -366,7 +367,7 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
                                   ? toast({
                                       variant: "warning",
                                       title: "Pack incompatible",
-                                      description: "Votre pack ne permet pas de reserver ce type de cours.",
+                                      description: "Votre pack ne permet pas de réserver ce type de cours.",
                                     })
                                   : openMainReservationConfirmation({
                                       planningId: o.planningId,
@@ -390,7 +391,7 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
                                   ? toast({
                                       variant: "warning",
                                       title: "Pack incompatible",
-                                      description: "Votre pack ne permet pas de reserver ce type de cours.",
+                                      description: "Votre pack ne permet pas de réserver ce type de cours.",
                                     })
                                   : void reserve(o.planningId, o.sessionDate, "wait", {
                                       courseLabel: o.courseLabel,
@@ -410,13 +411,17 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
                       </div>
 
                       <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <PlanningLevelPill
+                          levelLabel={planningLevelLabelFr(o.level)}
+                          levelToneClass={planningLevelBadgeClass(o.level)}
+                        />
                         {!categoryBlocked || enrolled ? (
                           <>
                             <span className={badgeClasses.availability}>
-                              {o.spotsRemaining} Places disponible / {o.capacity}
+                              {o.spotsRemaining} places disponibles / {o.capacity}
                             </span>
                             <span className={badgeClasses.waitlist}>
-                              Attente:{" "}
+                              Attente :{" "}
                               {o.waitlistCapacity == null ? "—" : `${o.waitlistCount}/${o.waitlistCapacity}`}
                             </span>
                           </>
@@ -434,8 +439,8 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
 
       <Modal
         isOpen={Boolean(pendingMainReservation)}
-        title="Confirmer la reservation"
-        description="Veuillez confirmer avant de finaliser votre inscription a cette seance."
+        title="Confirmer la réservation"
+        description="Veuillez confirmer avant de finaliser votre inscription à cette séance."
         onClose={() => {
           if (actionKey) return;
           setPendingMainReservation(null);
@@ -459,7 +464,7 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
               onClick={() => void confirmMainReservation()}
               disabled={!confirmationChecked || Boolean(actionKey)}
             >
-              {actionKey ? "Enregistrement..." : "Confirmer ma reservation"}
+              {actionKey ? "Enregistrement..." : "Confirmer ma réservation"}
             </Button>
           </>
         }
@@ -474,14 +479,14 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
                 </svg>
               </span>
               <p className="leading-relaxed">
-                <span className="font-semibold">Note importante:</span> les annulations sont acceptees jusqu&apos;a 6 heures
-                avant le cours ; passe ce delai, la seance est facturee.
+                <span className="font-semibold">Note importante :</span> les annulations sont acceptées jusqu&apos;à 6 heures
+                avant le cours ; passé ce délai, la séance est facturée.
               </p>
             </div>
           </div>
 
           <div className="space-y-1.5 text-sm text-brand-dark">
-            <p>J&apos;ai lu et compris cette regle.</p>
+            <p>J&apos;ai lu et compris cette règle.</p>
             <label className="flex items-start gap-3">
               <input
                 type="checkbox"
@@ -489,7 +494,7 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
                 onChange={(e) => setConfirmationChecked(e.target.checked)}
                 className="mt-0.5 h-4 w-4 rounded border-brand-medium/35"
               />
-              <span className="font-medium">Je confirme ma reservation.</span>
+              <span className="font-medium">Je confirme ma réservation.</span>
             </label>
           </div>
         </div>

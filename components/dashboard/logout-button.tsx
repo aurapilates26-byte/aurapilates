@@ -18,7 +18,7 @@ export function LogoutButton() {
       disabled={isLoading}
       className="w-full rounded-lg border border-brand-medium/30 bg-white px-3 py-2 text-left text-sm font-medium text-brand-dark transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-70"
     >
-      {isLoading ? "Deconnexion..." : "Se deconnecter"}
+      {isLoading ? "Déconnexion…" : "Se déconnecter"}
     </button>
   );
 }

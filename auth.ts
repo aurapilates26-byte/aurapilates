@@ -105,7 +105,9 @@ export const authOptions: NextAuthOptions = {
           const staffKeyHash = process.env.STAFF_QR_KEY_HASH;
           const adminEmail = process.env.ADMIN_LOGIN_EMAIL?.trim();
 
-          if (staffKeyHash && sha256(key) === staffKeyHash) {
+          // `key` is the staff secret (plain). We store only its SHA-256 in env.
+          // Backward-compat / operator safety: if someone pastes the hash itself, accept it too.
+          if (staffKeyHash && (sha256(key) === staffKeyHash || key === staffKeyHash)) {
             // Presence is recorded on the dedicated roster page after staff signs in,
             // not at key validation time.
 

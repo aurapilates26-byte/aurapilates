@@ -9,10 +9,10 @@ function jsonError(message: string, status: number) {
 export async function requireMemberSession() {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
-    return { error: jsonError("Non autorise", 401) } as const;
+    return { error: jsonError("Non autorisé", 401) } as const;
   }
   if (session.user.role !== "MEMBRE") {
-    return { error: jsonError("Acces reserve aux membres", 403) } as const;
+    return { error: jsonError("Accès réservé aux membres", 403) } as const;
   }
 
   const member = await prisma.member.findUnique({

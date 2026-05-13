@@ -29,24 +29,24 @@ async function main() {
       },
     });
 
-    console.log(`Admin pret (ADMIN_LOGIN_EMAIL): ${adminEmail}`);
+    console.log(`Admin prêt (ADMIN_LOGIN_EMAIL) : ${adminEmail}`);
   } else {
     console.warn(
-      "Seed admin ignore: definissez ADMIN_LOGIN_EMAIL et SEED_ADMIN_PASSWORD dans .env.local pour creer ou mettre a jour l'admin du tableau de bord.",
+      "Seed admin ignoré : définissez ADMIN_LOGIN_EMAIL et SEED_ADMIN_PASSWORD dans .env.local pour créer ou mettre à jour l'admin du tableau de bord.",
     );
   }
 
   await prisma.pack.upsert({
     where: { name: "Pack Mensuel" },
     update: {
-      description: "Acces libre aux seances du studio pendant 30 jours.",
-      durationDays: 30,
+      description: "Accès libre aux séances du studio pendant 30 jours.",
+      durationDays: "30 jours",
       isActive: true,
     },
     create: {
       name: "Pack Mensuel",
-      description: "Acces libre aux seances du studio pendant 30 jours.",
-      durationDays: 30,
+      description: "Accès libre aux séances du studio pendant 30 jours.",
+      durationDays: "30 jours",
       isActive: true,
     },
   });
@@ -54,20 +54,20 @@ async function main() {
   await prisma.pack.upsert({
     where: { name: "Pack Trimestriel" },
     update: {
-      description: "Suivi progression et acces 3 mois.",
-      durationDays: 90,
+      description: "Suivi de la progression et accès 3 mois.",
+      durationDays: "90 jours",
       isActive: true,
     },
     create: {
       name: "Pack Trimestriel",
-      description: "Suivi progression et acces 3 mois.",
-      durationDays: 90,
+      description: "Suivi de la progression et accès 3 mois.",
+      durationDays: "90 jours",
       isActive: true,
     },
   });
 
-  console.log("Packs par defaut: Pack Mensuel, Pack Trimestriel");
-  console.log("Les adherents (comptes MEMBRE + fiche Member) sont crees uniquement depuis le dashboard admin.");
+  console.log("Packs par défaut : Pack Mensuel, Pack Trimestriel");
+  console.log("Les adhérents (comptes MEMBRE + fiche Member) sont créés uniquement depuis le tableau de bord admin.");
 }
 
 main()

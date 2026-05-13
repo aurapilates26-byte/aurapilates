@@ -1,18 +1,24 @@
 @import "tailwindcss";
 
 :root {
-  --background: #d2cfc3;
+  --background: #f4f4f1;
   --foreground: #70483c;
+  /* Fond réservé au menu latéral admin : ne pas réutiliser pour les sections publiques (évite la confusion avec brand-light). */
+  --sidebar-nav-active: #d4c4b8;
+  --sidebar-nav-hover: #ebe4de;
 }
 
 /* Badges (availability / waitlist) : classes Tailwind centralisées dans lib/badge-classes.ts */
 
 @theme inline {
+  --spacing-13: 3.25rem;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --color-brand-light: #d2cfc3;
+  --color-brand-light: #f4f4f1;
   --color-brand-dark: #70483c;
   --color-brand-medium: #b4a18d;
+  --color-sidebar-nav-active: var(--sidebar-nav-active);
+  --color-sidebar-nav-hover: var(--sidebar-nav-hover);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -21,4 +27,18 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+/* Jours du planning : scroll horizontal sans barre visible */
+.planning-days-scroll {
+  -ms-overflow-style: none;
+}
+.planning-days-scroll::-webkit-scrollbar {
+  display: none;
+}
+/* Firefox (et navigateurs qui implémentent la propriété) */
+@supports (scrollbar-width: none) {
+  .planning-days-scroll {
+    scrollbar-width: none;
+  }
 }

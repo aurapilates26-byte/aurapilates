@@ -14,7 +14,7 @@ export function AdminCoachesClient() {
       <DashboardHeader
         role="ADMIN"
         title="Coachs"
-        description="Gerez les coachs du studio avec leurs informations et leur statut."
+        description="Gérez les coachs du studio avec leurs informations et leur statut."
         showRoleLine={false}
         actions={
           <CoachesHeaderActions

@@ -3,7 +3,14 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from "react";
 import { useToast } from "@/components/ui/toast-provider";
 import { Button, Checkbox, ConfirmDialog, Input, Select, Textarea } from "@/components/ui";
-import { PACK_CATEGORIES } from "@/lib/pack-categories";
+import { PACK_CATEGORY_OPTIONS, normalizePackCategory, packCategoryMenuLabel } from "@/lib/pack-categories";
+import { formatPackDurationLabel, splitPackDurationForForm, type PackDurationUnit } from "@/lib/pack-duration";
+import { formatPackPriceDt } from "@/lib/public-pack-display";
+
+const PACK_DURATION_INPUT_CLASS =
+  "min-w-0 flex-1 rounded-xl border border-brand-medium/30 bg-white px-4 py-3 text-sm text-brand-dark outline-none transition placeholder:text-brand-dark/45 focus:border-brand-dark/60";
+const PACK_DURATION_SELECT_CLASS =
+  "w-[120px] shrink-0 rounded-xl border border-brand-medium/30 bg-white px-3 py-3 text-sm text-brand-dark outline-none focus:border-brand-dark/60";
 
 export type PacksManagerHandle = {
   refresh: () => void;
@@ -17,7 +24,7 @@ type PackItem = {
   sessionCount: number | null;
   courseQuotas?: { courseSlug: string; sessionCount: number }[];
   priceCents: number | null;
-  durationDays: number | null;
+  durationDays: string | null;
   isActive: boolean;
   features: string[];
   _count: { members: number };
@@ -53,18 +60,19 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
   const [sessionCount, setSessionCount] = useState("");
   const [reformerSessions, setReformerSessions] = useState("");
   const [matSessions, setMatSessions] = useState("");
-  const [priceCents, setPriceCents] = useState("");
-  const [durationDays, setDurationDays] = useState("");
+  const [priceDinars, setPriceDinars] = useState("");
+  const [durationAmount, setDurationAmount] = useState("");
+  const [durationUnit, setDurationUnit] = useState<PackDurationUnit>("jours");
   const [isActive, setIsActive] = useState(true);
 
   const isMixedPack = category.trim() === "Pilates reformer + Mat pilates";
-  const categoryLabel = (raw: string) => (raw === "Pilates reformer + Mat pilates" ? "Reformer + Mat" : raw);
 
   const visibleItems = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return items;
     return items.filter((item) => {
-      const haystack = `${item.category ?? ""} ${item.name} ${item.features.join(" ")}`.toLowerCase();
+      const haystack =
+        `${packCategoryMenuLabel(item.category)} ${item.category ?? ""} ${item.name} ${item.features.join(" ")}`.toLowerCase();
       return haystack.includes(q);
     });
   }, [items, search]);
@@ -95,8 +103,9 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
     setSessionCount("");
     setReformerSessions("");
     setMatSessions("");
-    setPriceCents("");
-    setDurationDays("");
+    setPriceDinars("");
+    setDurationAmount("");
+    setDurationUnit("jours");
     setIsActive(true);
     setFormError(null);
   };
@@ -106,10 +115,10 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
   }, []);
 
   useEffect(() => {
-    if (viewMode === "form") {
+    if (viewMode === "form" && !editingPackId) {
       resetForm();
     }
-  }, [viewMode]);
+  }, [viewMode, editingPackId]);
 
   const handleCreatePack = async () => {
     setFormError(null);
@@ -121,6 +130,29 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
     const isEditMode = Boolean(editingPackId);
     setIsSubmitting(true);
     try {
+      let pricePayload: number | undefined;
+      if (priceDinars.trim() === "") {
+        pricePayload = undefined;
+      } else {
+        const t = priceDinars.trim().replace(/\s/g, "").replace(",", ".");
+        const n = Number(t);
+        if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) {
+          setFormError("Prix invalide : nombre entier en dinars (ex. 100).");
+          return;
+        }
+        pricePayload = n;
+      }
+
+      let durationPayload: string | null = null;
+      if (durationAmount.trim() !== "") {
+        const n = Number(durationAmount.trim());
+        if (!Number.isFinite(n) || n < 1 || !Number.isInteger(n)) {
+          setFormError("Duree invalide : nombre entier positif.");
+          return;
+        }
+        durationPayload = formatPackDurationLabel(n, durationUnit);
+      }
+
       const response = await fetch(isEditMode ? `/api/admin/packs/${encodeURIComponent(editingPackId!)}` : "/api/admin/packs", {
         method: isEditMode ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
@@ -137,8 +169,8 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
                   "mat-pilates": matSessions ? Number(matSessions) : undefined,
                 }
               : undefined,
-          priceCents: priceCents ? Number(priceCents) : undefined,
-          durationDays: durationDays ? Number(durationDays) : undefined,
+          priceCents: pricePayload,
+          durationDays: durationPayload,
           isActive,
         }),
       });
@@ -152,10 +184,10 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
       resetForm();
       toast({
         variant: "success",
-        title: isEditMode ? "Pack modifie" : "Pack ajoute",
+        title: isEditMode ? "Pack modifié" : "Pack ajouté",
         description: isEditMode
-          ? "Les informations du pack ont ete mises a jour."
-          : "Le nouveau pack a ete enregistre avec succes.",
+          ? "Les informations du pack ont été mises à jour."
+          : "Le nouveau pack a été enregistré avec succès.",
       });
     } catch (e) {
       const message = e instanceof Error ? e.message : "Une erreur est survenue.";
@@ -172,7 +204,7 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
 
   const handleStartEditPack = (item: PackItem) => {
     setEditingPackId(item.id);
-    setCategory(item.category ?? "");
+    setCategory(item.category ? normalizePackCategory(item.category) : "");
     setName(item.name);
     setDescription(item.description ?? item.features.join("\n"));
     setSessionCount(item.sessionCount !== null ? String(item.sessionCount) : "");
@@ -180,8 +212,10 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
     const mat = item.courseQuotas?.find((q) => q.courseSlug === "mat-pilates")?.sessionCount ?? null;
     setReformerSessions(reformer !== null ? String(reformer) : "");
     setMatSessions(mat !== null ? String(mat) : "");
-    setPriceCents(item.priceCents !== null ? String(item.priceCents) : "");
-    setDurationDays(item.durationDays !== null ? String(item.durationDays) : "");
+    setPriceDinars(item.priceCents != null ? String(item.priceCents) : "");
+    const { amount, unit } = splitPackDurationForForm(item.durationDays);
+    setDurationAmount(amount);
+    setDurationUnit(unit);
     setIsActive(item.isActive);
     setFormError(null);
     onChangeViewMode("form");
@@ -202,8 +236,8 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
       await loadPacks();
       toast({
         variant: "success",
-        title: "Pack supprime",
-        description: "Le pack a ete supprime avec succes.",
+        title: "Pack supprimé",
+        description: "Le pack a été supprimé avec succès.",
       });
     } catch (e) {
       const message = e instanceof Error ? e.message : "Une erreur est survenue.";
@@ -236,14 +270,14 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
               <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
                 <div>
                   <p className="text-base font-semibold text-brand-dark">Liste des packs</p>
-                  <p className="mt-1 text-xs text-brand-dark/60">{visibleItems.length} resultat(s)</p>
+                  <p className="mt-1 text-xs text-brand-dark/60">{visibleItems.length} résultat(s)</p>
                 </div>
                 <div className="w-full md:max-w-md">
                   <Input
                     id="packs-search"
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
-                    placeholder="Nom, categorie, point..."
+                    placeholder="Nom, catégorie, point..."
                     className="mt-0 py-2.5"
                   />
                 </div>
@@ -269,15 +303,15 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
                           {item.isActive ? "Actif" : "Inactif"}
                         </span>
                       </div>
-                      <p className="text-xs text-brand-dark/75">Categorie: {item.category ?? "—"}</p>
+                      <p className="text-xs text-brand-dark/75">Categorie: {packCategoryMenuLabel(item.category)}</p>
                       <p className="text-xs text-brand-dark/75">
                         Seances: {item.sessionCount !== null ? item.sessionCount : "—"}
                       </p>
                       <p className="text-xs text-brand-dark/75">
-                        Duree: {item.durationDays !== null ? `${item.durationDays} jours` : "—"}
+                        Duree: {item.durationDays != null && item.durationDays !== "" ? item.durationDays : "—"}
                       </p>
                       <p className="text-xs text-brand-dark/75">
-                        Prix: {item.priceCents !== null ? `${(item.priceCents / 100).toFixed(2)} TND` : "—"}
+                        Prix: {item.priceCents != null ? formatPackPriceDt(item.priceCents) : "—"}
                       </p>
                       <p className="text-xs text-brand-dark/75">
                         Points: {item.features.length > 0 ? item.features.join(" - ") : "—"}
@@ -320,17 +354,17 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
                     <tbody className="divide-y divide-brand-medium/15">
                       {visibleItems.map((item) => (
                         <tr key={item.id} className="text-sm">
-                          <td className="px-5 py-4 text-brand-dark/80">{item.category ?? "—"}</td>
+                          <td className="px-5 py-4 text-brand-dark/80">{packCategoryMenuLabel(item.category)}</td>
                           <td className="px-4 py-4 font-semibold text-brand-dark">{item.name}</td>
                           <td className="px-4 py-4 text-brand-dark/80">
                             {item.features.length > 0 ? item.features.join(" - ") : "—"}
                           </td>
                           <td className="px-4 py-4 text-brand-dark/80">{item.sessionCount ?? "—"}</td>
                           <td className="px-4 py-4 text-brand-dark/80">
-                            {item.priceCents !== null ? `${(item.priceCents / 100).toFixed(2)} TND` : "—"}
+                            {item.priceCents != null ? formatPackPriceDt(item.priceCents) : "—"}
                           </td>
                           <td className="px-4 py-4 text-brand-dark/80">
-                            {item.durationDays !== null ? `${item.durationDays} jours` : "—"}
+                            {item.durationDays != null && item.durationDays !== "" ? item.durationDays : "—"}
                           </td>
                           <td className="px-4 py-4">
                             <span
@@ -387,9 +421,9 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
                 onChange={(event) => setCategory(event.target.value)}
               >
                 <option value="">— Selectionner —</option>
-                {PACK_CATEGORIES.map((c) => (
-                  <option key={c} value={c}>
-                    {categoryLabel(c)}
+                {PACK_CATEGORY_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
                   </option>
                 ))}
               </Select>
@@ -423,7 +457,7 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
                 />
                 <Input
                   id="pack-sessions-total"
-                  label="Total de seances (auto)"
+                  label="Total de séances (auto)"
                   type="number"
                   value={(Number(reformerSessions || 0) + Number(matSessions || 0)).toString()}
                   disabled
@@ -432,55 +466,93 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
             ) : (
               <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                 <Input
-                  id="pack-price"
-                  label="Prix (en centimes)"
+                  id="pack-price-single"
+                  label="Prix"
                   type="number"
                   min={0}
-                  value={priceCents}
-                  onChange={(event) => setPriceCents(event.target.value)}
-                  placeholder="Ex: 12000"
+                  step={1}
+                  value={priceDinars}
+                  onChange={(event) => setPriceDinars(event.target.value)}
+                  placeholder="Ex: 100"
                 />
                 <Input
                   id="pack-sessions"
-                  label="Nombre de seances"
+                  label="Nombre de séances"
                   type="number"
                   min={1}
                   value={sessionCount}
                   onChange={(event) => setSessionCount(event.target.value)}
                   placeholder="Ex: 3"
                 />
-                <Input
-                  id="pack-duration"
-                  label="Duree (jours)"
-                  type="number"
-                  min={1}
-                  value={durationDays}
-                  onChange={(event) => setDurationDays(event.target.value)}
-                  placeholder="Ex: 30"
-                />
+                <div className="min-w-0">
+                  <label htmlFor="pack-duration-amount" className="text-sm font-medium text-brand-dark">
+                    Duree
+                  </label>
+                  <div className="mt-2 flex gap-2">
+                    <input
+                      id="pack-duration-amount"
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={durationAmount}
+                      onChange={(event) => setDurationAmount(event.target.value)}
+                      placeholder="Ex: 30"
+                      className={PACK_DURATION_INPUT_CLASS}
+                    />
+                    <select
+                      id="pack-duration-unit"
+                      aria-label="Unité durée"
+                      value={durationUnit}
+                      onChange={(event) => setDurationUnit(event.target.value as PackDurationUnit)}
+                      className={PACK_DURATION_SELECT_CLASS}
+                    >
+                      <option value="jours">jours</option>
+                      <option value="mois">mois</option>
+                    </select>
+                  </div>
+                </div>
               </div>
             )}
 
             {isMixedPack ? (
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <Input
-                  id="pack-price"
-                  label="Prix (en centimes)"
+                  id="pack-price-mixed"
+                  label="Prix"
                   type="number"
                   min={0}
-                  value={priceCents}
-                  onChange={(event) => setPriceCents(event.target.value)}
-                  placeholder="Ex: 12000"
+                  step={1}
+                  value={priceDinars}
+                  onChange={(event) => setPriceDinars(event.target.value)}
+                  placeholder="Ex: 100"
                 />
-                <Input
-                  id="pack-duration"
-                  label="Duree (jours)"
-                  type="number"
-                  min={1}
-                  value={durationDays}
-                  onChange={(event) => setDurationDays(event.target.value)}
-                  placeholder="Ex: 30"
-                />
+                <div className="min-w-0">
+                  <label htmlFor="pack-duration-amount-mixed" className="text-sm font-medium text-brand-dark">
+                    Duree
+                  </label>
+                  <div className="mt-2 flex gap-2">
+                    <input
+                      id="pack-duration-amount-mixed"
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={durationAmount}
+                      onChange={(event) => setDurationAmount(event.target.value)}
+                      placeholder="Ex: 30"
+                      className={PACK_DURATION_INPUT_CLASS}
+                    />
+                    <select
+                      id="pack-duration-unit-mixed"
+                      aria-label="Unité durée"
+                      value={durationUnit}
+                      onChange={(event) => setDurationUnit(event.target.value as PackDurationUnit)}
+                      className={PACK_DURATION_SELECT_CLASS}
+                    >
+                      <option value="jours">jours</option>
+                      <option value="mois">mois</option>
+                    </select>
+                  </div>
+                </div>
               </div>
             ) : null}
 
@@ -490,7 +562,7 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
               value={description}
               onChange={(event) => setDescription(event.target.value)}
               rows={6}
-              placeholder={"3 seances\n30 jours\n2 seances gratuites"}
+              placeholder={"3 séances\n30 jours\n2 séances gratuites"}
             />
 
             <Checkbox
@@ -517,7 +589,7 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
               Annuler
             </button>
             <Button onClick={() => void handleCreatePack()} disabled={isSubmitting}>
-              {isSubmitting ? "Enregistrement..." : editingPackId ? "Mettre a jour" : "Enregistrer"}
+              {isSubmitting ? "Enregistrement..." : editingPackId ? "Mettre à jour" : "Enregistrer"}
             </Button>
           </div>
         </div>
@@ -527,7 +599,7 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
         title="Supprimer ce pack ?"
         description={
           packToDelete
-            ? `Cette action supprimera le pack "${packToDelete.name}" de maniere definitive.`
+            ? `Cette action supprimera le pack « ${packToDelete.name} » de manière définitive.`
             : undefined
         }
         confirmText="Supprimer"

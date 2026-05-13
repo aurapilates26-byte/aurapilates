@@ -107,7 +107,7 @@ export function QrCodeManager() {
       toast({
         variant: "success",
         title: "QR code supprime",
-        description: "Le QR code et son image ont ete supprimes.",
+        description: "Le QR code et son image ont été supprimés.",
       });
     } catch (deleteError) {
       toast({

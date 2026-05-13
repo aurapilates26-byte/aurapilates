@@ -25,7 +25,7 @@ export default async function CourseDetailPage({ params }: CourseDetailPageProps
   return (
     <div className="bg-zinc-50 px-4 py-14 text-brand-dark">
       <div className="mx-auto w-full max-w-6xl">
-        <Link href="/#cours" className="text-sm font-medium text-brand-dark/80 transition hover:opacity-70">
+        <Link href="/cours" className="text-sm font-medium text-brand-dark/80 transition hover:opacity-70">
           Retour aux cours
         </Link>
 
@@ -46,8 +46,8 @@ export default async function CourseDetailPage({ params }: CourseDetailPageProps
             <p className="mt-4 text-base leading-7 text-brand-dark/85">{course.paragraphOne}</p>
             <p className="mt-4 text-base leading-7 text-brand-dark/85">{course.paragraphTwo}</p>
             <div className="mt-6">
-              <Button href="/#inscription" size="sm">
-                Je reserve ma place
+              <Button href="/inscription" size="sm">
+                Je réserve ma place
               </Button>
             </div>
           </div>
@@ -56,8 +56,8 @@ export default async function CourseDetailPage({ params }: CourseDetailPageProps
         <section className="mt-10 rounded-2xl border border-brand-medium/40 bg-white p-6">
           <h2 className="text-2xl font-semibold">Pourquoi choisir ce cours ?</h2>
           <p className="mt-3 text-brand-dark/80">
-            Ce programme est concu pour vous faire progresser etape par etape avec un encadrement de qualite.
-            Vous profitez d&apos;une approche technique, d&apos;un suivi precis et d&apos;un environnement motivant pour
+            Ce programme est conçu pour vous faire progresser étape par étape avec un encadrement de qualité.
+            Vous profitez d&apos;une approche technique, d&apos;un suivi précis et d&apos;un environnement motivant pour
             atteindre vos objectifs.
           </p>
           <div className="relative mt-6 h-72 overflow-hidden rounded-xl">

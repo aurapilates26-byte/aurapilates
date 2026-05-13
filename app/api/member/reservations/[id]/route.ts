@@ -33,7 +33,7 @@ export async function DELETE(_request: Request, { params }: Params) {
   }
 
   if (reservation.status === "ATTENDED") {
-    return errorResponse("Impossible d'annuler une seance deja validee en presence", 409);
+    return errorResponse("Impossible d'annuler une séance déjà validée en présence", 409);
   }
 
   if (reservation.status !== "BOOKED" && reservation.status !== "WAITLIST") {

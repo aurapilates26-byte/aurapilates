@@ -102,7 +102,7 @@ export function QrCodeHeaderActions() {
                 disabled={isSubmitting}
                 className="rounded-full bg-brand-dark px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
               >
-                {isSubmitting ? "Generation..." : "Confirmer"}
+                {isSubmitting ? "Génération..." : "Confirmer"}
               </button>
             </div>
           </div>

@@ -54,7 +54,9 @@ export async function POST(_request: Request, { params }: Params) {
 
   // Auto-detect: si la clé correspond à la clé staff, on enregistre une présence.
   // Sinon, on tente la clé QR pour afficher les infos membre.
-  if (staffKeyHashEnv && sha256(key) === staffKeyHashEnv) {
+  // `key` is the staff secret (plain). We store only its SHA-256 in env.
+  // Backward-compat / operator safety: if someone pastes the hash itself, accept it too.
+  if (staffKeyHashEnv && (sha256(key) === staffKeyHashEnv || key === staffKeyHashEnv)) {
     const member = await db.member.findUnique({
       where: { id: qr.assignedMemberId },
       select: {

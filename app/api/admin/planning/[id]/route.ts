@@ -124,8 +124,8 @@ export async function DELETE(_request: Request, { params }: Params) {
     return Response.json({ ok: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected error";
-    if (message.includes("Record to delete does not exist")) return errorResponse("Planning item not found", 404);
-    return errorResponse("Unable to delete planning", 400);
+    if (message.includes("Record to delete does not exist")) return errorResponse("Créneau introuvable", 404);
+    return errorResponse("Impossible de supprimer ce créneau", 400);
   }
 }
 

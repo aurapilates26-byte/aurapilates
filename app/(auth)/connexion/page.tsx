@@ -20,7 +20,7 @@ export default function ConnexionPage() {
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white/85">Aura Pilates</p>
             <h1 className="mt-2 text-2xl font-semibold md:text-3xl">Bienvenue dans votre espace membre</h1>
             <p className="mt-2 text-sm text-white/85">
-              Connectez-vous pour gerer vos seances, votre abonnement et votre progression.
+              Connectez-vous pour gérer vos séances, votre abonnement et votre progression.
             </p>
           </div>
         </div>
@@ -34,19 +34,19 @@ export default function ConnexionPage() {
               <span aria-hidden="true" className="text-base">
                 ←
               </span>
-              Retour a l&apos;accueil
+              Retour à l&apos;accueil
             </Link>
 
             <h2 className="mt-4 text-3xl font-semibold">Se connecter</h2>
             <p className="mt-2 text-sm text-brand-dark/75">
-              Entrez vos informations pour acceder a votre compte.
+              Entrez vos informations pour accéder à votre compte.
             </p>
 
             <LoginForm />
 
             <p className="mt-6 text-sm text-brand-dark/80">
               Vous n&apos;avez pas encore de compte ?{" "}
-              <Link href="/#inscription" className="font-semibold text-brand-dark hover:opacity-75">
+              <Link href="/inscription" className="font-semibold text-brand-dark hover:opacity-75">
                 S&apos;inscrire
               </Link>
             </p>

@@ -10,10 +10,13 @@ const config: Config = {
     extend: {
       colors: {
         brand: {
-          light: "#d2cfc3",
+          light: "#f4f4f1",
           dark: "#70483c",
           medium: "#b4a18d",
         },
+        /** Réservé à la sélection du menu latéral dashboard (voir app/globals.css). */
+        "sidebar-nav-active": "#d4c4b8",
+        "sidebar-nav-hover": "#ebe4de",
       },
     },
   },
