@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useCreateQrCode } from "@/hooks/admin/use-create-qrcode";
-import { useQrCodeStore } from "@/store/admin/qrcode-store";
+import { useToast } from "@/components/ui/toast-provider";
 
 export function QrCodeHeaderActions() {
   const [isOpen, setIsOpen] = useState(false);
@@ -13,7 +13,7 @@ export function QrCodeHeaderActions() {
   const [name, setName] = useState("Nouveau QR");
   const [quantity, setQuantity] = useState(1);
   const { createQrCode } = useCreateQrCode();
-  const filters = useQrCodeStore((s) => s.filters);
+  const { toast } = useToast();
 
   const handleCreate = async () => {
     setModalError(null);
@@ -35,16 +35,13 @@ export function QrCodeHeaderActions() {
     setDownloadError(null);
     setIsDownloading(true);
     try {
-      const params = new URLSearchParams();
-      if (filters.search.trim()) {
-        params.set("search", filters.search.trim());
-      }
-      if (filters.assignment !== "ALL") {
-        params.set("assignment", filters.assignment);
-      }
-      const qs = params.toString();
-      const endpoint = qs ? `/api/admin/qrcode/download?${qs}` : "/api/admin/qrcode/download";
-      const response = await fetch(endpoint, { method: "GET", credentials: "same-origin", cache: "no-store" });
+      // Toujours tout exporter (tous les QR en base), sans reprendre les filtres de la liste
+      // (recherche / « Assigné »), sinon l’admin croit que le ZIP est incomplet.
+      const response = await fetch("/api/admin/qrcode/download", {
+        method: "GET",
+        credentials: "same-origin",
+        cache: "no-store",
+      });
       if (!response.ok) {
         let message = "Téléchargement impossible.";
         try {
@@ -55,6 +52,10 @@ export function QrCodeHeaderActions() {
         }
         throw new Error(message);
       }
+      const count = response.headers.get("X-Qr-Zip-Count");
+      const totalDb = response.headers.get("X-Qr-Zip-Total-Db");
+      const regenerated = response.headers.get("X-Qr-Zip-Regenerated");
+      const skipped = response.headers.get("X-Qr-Zip-Skipped");
       const blob = await response.blob();
       const disposition = response.headers.get("Content-Disposition");
       const match = disposition?.match(/filename="([^"]+)"/);
@@ -68,6 +69,22 @@ export function QrCodeHeaderActions() {
       anchor.click();
       anchor.remove();
       URL.revokeObjectURL(url);
+
+      const parts: string[] = [];
+      if (count != null && totalDb != null) {
+        parts.push(`${count} image(s) pour ${totalDb} code(s) en base (export complet).`);
+      }
+      if (regenerated && Number(regenerated) > 0) {
+        parts.push(`${regenerated} generee(s) a la volee (fichier absent sur le serveur).`);
+      }
+      if (skipped && Number(skipped) > 0) {
+        parts.push(`${skipped} code(s) non inclus (erreur de generation).`);
+      }
+      toast({
+        variant: "success",
+        title: "Archive ZIP telechargee",
+        description: parts.length > 0 ? parts.join(" ") : "Telechargement termine.",
+      });
     } catch (error) {
       setDownloadError(error instanceof Error ? error.message : "Téléchargement impossible.");
     } finally {
@@ -89,7 +106,7 @@ export function QrCodeHeaderActions() {
         disabled={isDownloading}
         className="rounded-full border border-brand-medium/35 bg-white px-4 py-2 text-sm font-medium text-brand-dark transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
       >
-        {isDownloading ? "Préparation du ZIP…" : "Télécharger les QR (ZIP)"}
+        {isDownloading ? "Préparation du ZIP…" : "Télécharger tous les QR (ZIP)"}
       </button>
 
       {downloadError ? (

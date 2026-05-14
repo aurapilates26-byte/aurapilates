@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# QR codes generes (donnees runtime — ne pas versionner les PNG)
+/public/qrcode/*.png

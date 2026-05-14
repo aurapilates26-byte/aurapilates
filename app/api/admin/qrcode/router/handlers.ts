@@ -429,15 +429,37 @@ export async function downloadAdminQrCodesZip(request: Request) {
   const zip = new JSZip();
   const folder = zip.folder("qrcode");
   let added = 0;
+  let regeneratedFromDb = 0;
+  let skipped = 0;
+
+  const qrPngOptions = {
+    width: 512,
+    color: {
+      dark: "#000000",
+      light: "#FFFFFF",
+    },
+    margin: 1,
+  } as const;
 
   for (const row of records) {
     const imagePath = join(process.cwd(), "public", "qrcode", `${row.publicId}.png`);
+    const targetUrl = buildPublicScanUrl(row.publicId, request);
+    let buf: Buffer | null = null;
     try {
-      const buf = await readFile(imagePath);
+      buf = await readFile(imagePath);
+    } catch {
+      try {
+        buf = await QRCode.toBuffer(targetUrl, qrPngOptions);
+        regeneratedFromDb += 1;
+      } catch {
+        buf = null;
+      }
+    }
+    if (buf) {
       folder?.file(`${row.publicId}.png`, buf);
       added += 1;
-    } catch {
-      // Missing file on disk — skip (DB row without PNG).
+    } else {
+      skipped += 1;
     }
   }
 
@@ -461,6 +483,8 @@ export async function downloadAdminQrCodesZip(request: Request) {
       "Content-Disposition": `attachment; filename="${filename}"`,
       "X-Qr-Zip-Count": String(added),
       "X-Qr-Zip-Total-Db": String(records.length),
+      "X-Qr-Zip-Regenerated": String(regeneratedFromDb),
+      "X-Qr-Zip-Skipped": String(skipped),
     },
   });
 }
