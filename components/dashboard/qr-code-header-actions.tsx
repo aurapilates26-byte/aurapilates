@@ -2,15 +2,18 @@
 
 import { useState } from "react";
 import { useCreateQrCode } from "@/hooks/admin/use-create-qrcode";
+import { useQrCodeStore } from "@/store/admin/qrcode-store";
 
 export function QrCodeHeaderActions() {
   const [isOpen, setIsOpen] = useState(false);
-  const [isExporting, setIsExporting] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
   const [name, setName] = useState("Nouveau QR");
   const [quantity, setQuantity] = useState(1);
   const { createQrCode } = useCreateQrCode();
+  const filters = useQrCodeStore((s) => s.filters);
 
   const handleCreate = async () => {
     setModalError(null);
@@ -28,9 +31,48 @@ export function QrCodeHeaderActions() {
     }
   };
 
-  const handleExport = () => {
-    setIsExporting(true);
-    window.setTimeout(() => setIsExporting(false), 600);
+  const handleDownloadZip = async () => {
+    setDownloadError(null);
+    setIsDownloading(true);
+    try {
+      const params = new URLSearchParams();
+      if (filters.search.trim()) {
+        params.set("search", filters.search.trim());
+      }
+      if (filters.assignment !== "ALL") {
+        params.set("assignment", filters.assignment);
+      }
+      const qs = params.toString();
+      const endpoint = qs ? `/api/admin/qrcode/download?${qs}` : "/api/admin/qrcode/download";
+      const response = await fetch(endpoint, { method: "GET", credentials: "same-origin", cache: "no-store" });
+      if (!response.ok) {
+        let message = "Téléchargement impossible.";
+        try {
+          const data = (await response.json()) as { error?: string };
+          if (data?.error) message = data.error;
+        } catch {
+          // ignore
+        }
+        throw new Error(message);
+      }
+      const blob = await response.blob();
+      const disposition = response.headers.get("Content-Disposition");
+      const match = disposition?.match(/filename="([^"]+)"/);
+      const filename = match?.[1] ?? `aurapilates-qrcodes-${new Date().toISOString().slice(0, 10)}.zip`;
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      anchor.rel = "noopener";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setDownloadError(error instanceof Error ? error.message : "Téléchargement impossible.");
+    } finally {
+      setIsDownloading(false);
+    }
   };
 
   return (
@@ -42,11 +84,19 @@ export function QrCodeHeaderActions() {
         Nouveau QR code
       </button>
       <button
-        onClick={handleExport}
-        className="rounded-full border border-brand-medium/35 bg-white px-4 py-2 text-sm font-medium text-brand-dark transition hover:bg-zinc-50"
+        type="button"
+        onClick={() => void handleDownloadZip()}
+        disabled={isDownloading}
+        className="rounded-full border border-brand-medium/35 bg-white px-4 py-2 text-sm font-medium text-brand-dark transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
       >
-        {isExporting ? "Export..." : "Exporter"}
+        {isDownloading ? "Préparation du ZIP…" : "Télécharger les QR (ZIP)"}
       </button>
+
+      {downloadError ? (
+        <p className="basis-full text-sm text-red-600" role="alert">
+          {downloadError}
+        </p>
+      ) : null}
 
       {isOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4">

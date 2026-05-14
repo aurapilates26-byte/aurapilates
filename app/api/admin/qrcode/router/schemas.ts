@@ -20,3 +20,10 @@ export const listQrCodeQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(50).default(10),
 });
+
+/** Export ZIP: same filters as the list, without pagination (capped server-side). */
+export const downloadQrCodeQuerySchema = z.object({
+  search: z.string().trim().optional(),
+  status: qrCodeStatusSchema.optional(),
+  assignment: z.enum(["ALL", "ASSIGNED", "UNASSIGNED"]).default("ALL"),
+});

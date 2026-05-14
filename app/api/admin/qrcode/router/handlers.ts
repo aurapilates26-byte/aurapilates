@@ -1,12 +1,18 @@
 import { createHash, randomBytes, randomInt } from "crypto";
-import { mkdir, unlink, writeFile } from "fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "fs/promises";
 import { join } from "path";
 import { Prisma, QrCodeStatus } from "@prisma/client";
+import JSZip from "jszip";
 import QRCode from "qrcode";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
-import { createQrCodeSchema, listQrCodeQuerySchema, updateQrCodeSchema } from "./schemas";
+import {
+  createQrCodeSchema,
+  downloadQrCodeQuerySchema,
+  listQrCodeQuerySchema,
+  updateQrCodeSchema,
+} from "./schemas";
 import { prisma as db } from "@/lib/prisma";
 
 function errorResponse(message: string, status: number) {
@@ -371,4 +377,90 @@ export async function deleteAdminQrCodeByPublicId(publicId: string) {
   });
 
   return Response.json({ success: true });
+}
+
+const DOWNLOAD_MAX_CODES = 2000;
+
+export async function downloadAdminQrCodesZip(request: Request) {
+  const sessionResult = await requireAdminSession();
+  if ("error" in sessionResult) return sessionResult.error;
+
+  const url = new URL(request.url);
+  const parsedQuery = downloadQrCodeQuerySchema.safeParse({
+    search: url.searchParams.get("search") ?? undefined,
+    status: url.searchParams.get("status") ?? undefined,
+    assignment: url.searchParams.get("assignment") ?? "ALL",
+  });
+
+  if (!parsedQuery.success) {
+    return errorResponse("Parametres d'export invalides.", 400);
+  }
+
+  const { search, status, assignment } = parsedQuery.data;
+
+  const where: Prisma.QrCodeWhereInput = {
+    ...(status ? { status } : {}),
+    ...(assignment === "ASSIGNED"
+      ? { assignedMemberId: { not: null } }
+      : assignment === "UNASSIGNED"
+        ? { assignedMemberId: null }
+        : {}),
+    ...(search
+      ? {
+          OR: [
+            { name: { contains: search, mode: "insensitive" } },
+            { publicId: { contains: search, mode: "insensitive" } },
+          ],
+        }
+      : {}),
+  };
+
+  const records = await db.qrCode.findMany({
+    where,
+    orderBy: { updatedAt: "desc" },
+    select: { publicId: true },
+    take: DOWNLOAD_MAX_CODES,
+  });
+
+  if (records.length === 0) {
+    return errorResponse("Aucun QR code a exporter pour ces filtres.", 404);
+  }
+
+  const zip = new JSZip();
+  const folder = zip.folder("qrcode");
+  let added = 0;
+
+  for (const row of records) {
+    const imagePath = join(process.cwd(), "public", "qrcode", `${row.publicId}.png`);
+    try {
+      const buf = await readFile(imagePath);
+      folder?.file(`${row.publicId}.png`, buf);
+      added += 1;
+    } catch {
+      // Missing file on disk — skip (DB row without PNG).
+    }
+  }
+
+  if (added === 0) {
+    return errorResponse("Aucune image PNG trouvee sur le serveur pour ces QR codes.", 404);
+  }
+
+  const buffer = await zip.generateAsync({
+    type: "nodebuffer",
+    compression: "DEFLATE",
+    compressionOptions: { level: 6 },
+  });
+
+  const day = new Date().toISOString().slice(0, 10);
+  const filename = `aurapilates-qrcodes-${day}.zip`;
+
+  return new Response(new Uint8Array(buffer), {
+    status: 200,
+    headers: {
+      "Content-Type": "application/zip",
+      "Content-Disposition": `attachment; filename="${filename}"`,
+      "X-Qr-Zip-Count": String(added),
+      "X-Qr-Zip-Total-Db": String(records.length),
+    },
+  });
 }
