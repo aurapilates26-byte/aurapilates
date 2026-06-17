@@ -18,6 +18,8 @@ services:
       args:
         # Loaded from project `.env` for `docker compose` variable substitution.
         NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-http://localhost:3000}
+        AUTH_SECRET: ${AUTH_SECRET}
+        NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
     restart: unless-stopped
     depends_on:
       - db

@@ -13,9 +13,13 @@ ENV NODE_ENV=production
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Inlined into the client bundle at build time (host .env is not copied — see .dockerignore).
+# Inlined at build time (host .env is not copied — see .dockerignore).
 ARG NEXT_PUBLIC_SITE_URL
+ARG AUTH_SECRET
+ARG NEXTAUTH_SECRET
 ENV NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL
+ENV AUTH_SECRET=$AUTH_SECRET
+ENV NEXTAUTH_SECRET=$NEXTAUTH_SECRET
 
 RUN npx prisma generate
 RUN npm run build
