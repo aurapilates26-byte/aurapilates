@@ -6,6 +6,8 @@ const fromCatalog = Object.fromEntries(catalogCourses.map((c) => [c.slug, c.titl
 const PLANNING_SLUG_ALIASES: Record<string, string> = {
   yoga: "Yoga",
   dance: "Danse",
+  "coaching-prive": "Coaching privé",
+  "sans-cours": "Sans cours",
 };
 
 export const courseLabelBySlug: Record<string, string> = { ...fromCatalog, ...PLANNING_SLUG_ALIASES };

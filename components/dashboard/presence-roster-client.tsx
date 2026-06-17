@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DashboardHeader } from "@/components/dashboard/header";
 import { useToast } from "@/components/ui/toast-provider";
 import { planningLevelLabelFr } from "@/lib/planning-public-labels";
-import { Input, Switch } from "@/components/ui";
+import { Input } from "@/components/ui";
 
 type RosterMember = {
   id: string;
@@ -12,6 +12,7 @@ type RosterMember = {
   lastName: string | null;
   email: string | null;
   phone?: string | null;
+  qrPublicId?: string | null;
 };
 
 type RosterRow = {
@@ -25,7 +26,7 @@ type RosterClass = {
   courseLabel: string;
   startTime: string;
   endTime: string;
-  level: string;
+  level: string | null;
   coachName: string | null;
   coachImageUrl?: string | null;
   capacity: number;
@@ -39,7 +40,7 @@ type CourseCardData = {
   courseLabel: string;
   startTime: string;
   endTime: string;
-  level: string;
+  level: string | null;
   coachName: string | null;
   coachImageUrl: string | null;
   capacity: number;
@@ -59,7 +60,7 @@ type RosterResponse = {
     courseLabel: string;
     startTime: string;
     endTime: string;
-    level: string;
+    level: string | null;
     coachName: string | null;
     coachImageUrl: string | null;
     capacity: number;
@@ -73,7 +74,7 @@ type RosterResponse = {
     courseLabel: string;
     startTime: string;
     endTime: string;
-    level: string;
+    level: string | null;
     coachName: string | null;
     coachImageUrl: string | null;
     capacity: number;
@@ -84,12 +85,24 @@ type RosterResponse = {
   } | null;
 };
 
+function formatYmdDisplay(ymd: string | null | undefined): string {
+  if (!ymd) return "—";
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd);
+  if (!m) return ymd;
+  const [, year, month, day] = m;
+  return `${day}-${month}-${year}`;
+}
+
 const statusLabels: Record<string, string> = {
-  BOOKED: "Confirmé",
+  BOOKED: "Confirmée",
   WAITLIST: "Liste d'attente",
-  ATTENDED: "Présent",
-  CANCELLED: "Annulé",
+  ATTENDED: "Présente",
+  CANCELLED: "Annulée",
 };
+
+/** Hauteur et typo alignées : Rechercher, Réinitialiser, Présence / Présent */
+const presenceBtnBase =
+  "inline-flex h-9 shrink-0 items-center justify-center rounded-full px-3.5 text-xs font-semibold leading-none transition";
 
 function minus15(clock: string) {
   const [hhRaw, mmRaw] = clock.split(":");
@@ -103,12 +116,116 @@ function minus15(clock: string) {
   return `${outH}:${outM}`;
 }
 
+function isBeforePresenceOpens(nowTime: string | undefined, opensAt: string | undefined) {
+  if (!nowTime || !opensAt) return false;
+  return nowTime < opensAt;
+}
+
+/** Correspondance stricte nom (+ téléphone optionnel) parmi les résultats API. */
+function findExactMemberInResults(
+  items: { id: string; name: string; phone: string | null }[],
+  nameFilter: string,
+  phoneFilter: string,
+): { id: string; name: string; phone: string | null } | null {
+  const nameQ = nameFilter.trim().toLowerCase();
+  const phoneQ = phoneFilter.trim();
+  if (!nameQ && !phoneQ) return null;
+
+  if (phoneQ) {
+    const byBoth = items.filter(
+      (i) => i.name.trim().toLowerCase() === nameQ && (i.phone ?? "").trim() === phoneQ,
+    );
+    if (byBoth.length === 1) return byBoth[0]!;
+  }
+
+  if (nameQ) {
+    const byName = items.filter((i) => i.name.trim().toLowerCase() === nameQ);
+    if (byName.length === 1) return byName[0]!;
+  }
+
+  return null;
+}
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 20 20" className={className ?? "h-4 w-4"} fill="currentColor" aria-hidden>
+      <path
+        fillRule="evenodd"
+        d="M16.704 5.29a1 1 0 0 1 .006 1.414l-7.25 7.5a1 1 0 0 1-1.444-.02L3.29 9.835a1 1 0 1 1 1.42-1.408l3.776 3.865 6.53-6.757a1 1 0 0 1 1.438.015Z"
+        clipRule="evenodd"
+      />
+    </svg>
+  );
+}
+
+function PresenceMarkButton({
+  isPresent,
+  canMark,
+  loading,
+  markingLocked,
+  opensAt,
+  onMark,
+}: {
+  isPresent: boolean;
+  canMark: boolean;
+  loading: boolean;
+  markingLocked: boolean;
+  opensAt?: string;
+  onMark: () => void;
+}) {
+  if (isPresent) {
+    return (
+      <span
+        className={`${presenceBtnBase} gap-1.5 border border-emerald-600 bg-emerald-50 text-emerald-800`}
+        role="status"
+        aria-label="Présente"
+      >
+        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-600 text-white">
+          <CheckIcon className="h-3 w-3" />
+        </span>
+        Présente
+      </span>
+    );
+  }
+
+  const disabled = !canMark || loading;
+  const title = markingLocked
+    ? `Présence à partir de ${opensAt ?? "—"}`
+    : canMark
+      ? "Marquer la présence"
+      : "Présence non disponible";
+
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      title={title}
+      onClick={() => {
+        if (!disabled) onMark();
+      }}
+      className={`${presenceBtnBase} ${
+        disabled
+          ? "cursor-not-allowed border border-zinc-200 bg-zinc-100 text-brand-dark/40"
+          : "border border-brand-dark bg-brand-dark text-white hover:bg-brand-dark/90 active:scale-[0.98]"
+      }`}
+    >
+      {loading ? "Enregistrement…" : "Présence"}
+    </button>
+  );
+}
+
 export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId: string }) {
   const { toast } = useToast();
   const [qrPublicId, setQrPublicId] = useState(initialQrPublicId);
   const [memberNameFilter, setMemberNameFilter] = useState("");
   const [memberPhoneFilter, setMemberPhoneFilter] = useState("");
   const [manualMemberId, setManualMemberId] = useState<string>("");
+  /** Membre choisi dans la liste (bloque les suggestions tant que les champs correspondent). */
+  const [selectedMember, setSelectedMember] = useState<{
+    id: string;
+    name: string;
+    phone: string | null;
+  } | null>(null);
   const [suggestions, setSuggestions] = useState<{ id: string; name: string; phone: string | null }[]>([]);
   const [roster, setRoster] = useState<RosterResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -149,9 +266,15 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
         throw new Error(data?.error ?? "Chargement impossible.");
       }
       setRoster(data);
-      const scannedName = `${data.scannedMember?.firstName ?? ""} ${data.scannedMember?.lastName ?? ""}`.trim();
-      if (scannedName) setMemberNameFilter(scannedName);
-      if (data.scannedMember?.phone?.trim()) setMemberPhoneFilter(data.scannedMember.phone.trim());
+      const scanned = data.scannedMember;
+      const scannedName = `${scanned?.firstName ?? ""} ${scanned?.lastName ?? ""}`.trim();
+      if (scanned && scannedName) {
+        setSelectedMember({ id: scanned.id, name: scannedName, phone: scanned.phone ?? null });
+        setManualMemberId(scanned.id);
+        setMemberNameFilter(scannedName);
+        setMemberPhoneFilter(scanned.phone?.trim() ?? "");
+        setSuggestions([]);
+      }
     } catch (e) {
       setRoster(null);
       setError(e instanceof Error ? e.message : "Erreur.");
@@ -180,13 +303,55 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
     }
   }, []);
 
+  const applyMemberSelection = useCallback(
+    async (member: { id: string; name: string; phone: string | null }) => {
+      setSelectedMember(member);
+      setManualMemberId(member.id);
+      setMemberNameFilter(member.name);
+      setMemberPhoneFilter(member.phone ?? "");
+      setSuggestions([]);
+      await fetchRosterByMember(member.id);
+    },
+    [fetchRosterByMember],
+  );
+
+  const clearMemberSelection = useCallback(() => {
+    setSelectedMember(null);
+    setManualMemberId("");
+    setSuggestions([]);
+  }, []);
+
+  const resetPresenceView = useCallback(async () => {
+    setMemberNameFilter("");
+    setMemberPhoneFilter("");
+    setQrPublicId("");
+    clearMemberSelection();
+    setError(null);
+    setRoster(null);
+    await fetchRosterCurrentSlot();
+  }, [clearMemberSelection, fetchRosterCurrentSlot]);
+
+  const inputsMatchSelectedMember = useCallback(() => {
+    if (!selectedMember) return false;
+    const nameOk = memberNameFilter.trim() === selectedMember.name.trim();
+    const phoneOk = memberPhoneFilter.trim() === (selectedMember.phone ?? "").trim();
+    return nameOk && phoneOk;
+  }, [memberNameFilter, memberPhoneFilter, selectedMember]);
+
   const runManualSearch = useCallback(async () => {
     if (qrPublicId.trim()) return;
+    if (manualMemberId && selectedMember && inputsMatchSelectedMember()) {
+      setSuggestions([]);
+      return;
+    }
     const q = `${memberNameFilter} ${memberPhoneFilter}`.trim();
     if (q.length < 2) {
       setSuggestions([]);
-      setManualMemberId("");
+      clearMemberSelection();
       return;
+    }
+    if (manualMemberId && selectedMember && !inputsMatchSelectedMember()) {
+      clearMemberSelection();
     }
     try {
       const res = await fetch(`/api/admin/presence/members?q=${encodeURIComponent(q)}`, {
@@ -203,22 +368,31 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
       }
       const items = Array.isArray(data?.items) ? data.items : [];
 
-      // Un seul résultat: sélection immédiate + remplissage automatique des deux inputs.
-      if (items.length === 1) {
-        const only = items[0]!;
-        setManualMemberId(only.id);
-        setMemberNameFilter(only.name);
-        setMemberPhoneFilter(only.phone ?? "");
-        setSuggestions([]);
-        await fetchRosterByMember(only.id);
+      const exact = findExactMemberInResults(items, memberNameFilter, memberPhoneFilter);
+      if (exact) {
+        await applyMemberSelection(exact);
         return;
       }
 
-      setSuggestions(items);
+      if (items.length === 1) {
+        await applyMemberSelection(items[0]!);
+        return;
+      }
+
+      setSuggestions(items.length > 1 ? items : []);
     } catch {
       setSuggestions([]);
     }
-  }, [fetchRosterByMember, memberNameFilter, memberPhoneFilter, qrPublicId]);
+  }, [
+    applyMemberSelection,
+    clearMemberSelection,
+    inputsMatchSelectedMember,
+    manualMemberId,
+    memberNameFilter,
+    memberPhoneFilter,
+    qrPublicId,
+    selectedMember,
+  ]);
 
   useEffect(() => {
     const id = initialQrPublicId.trim();
@@ -228,6 +402,7 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
       // on repart d'un état manuel propre (pas de membre "hérité" du scan précédent).
       setMemberNameFilter("");
       setMemberPhoneFilter("");
+      setSelectedMember(null);
       setManualMemberId("");
       setSuggestions([]);
     }
@@ -247,19 +422,16 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
     };
   }, [memberNameFilter, memberPhoneFilter, qrPublicId, runManualSearch]);
 
-  const filteredReservations = useMemo(() => {
-    const rows = roster?.class?.reservations ?? [];
-    const nameQ = memberNameFilter.trim().toLowerCase();
-    const phoneQ = memberPhoneFilter.trim().toLowerCase();
-    if (!nameQ && !phoneQ) return rows;
-    return rows.filter((row) => {
-      const fullName = `${row.member.firstName ?? ""} ${row.member.lastName ?? ""}`.trim().toLowerCase();
-      const phone = (row.member.phone ?? "").toLowerCase();
-      const byName = nameQ ? fullName.includes(nameQ) : true;
-      const byPhone = phoneQ ? phone.includes(phoneQ) : true;
-      return byName && byPhone;
-    });
-  }, [roster?.class?.reservations, memberNameFilter, memberPhoneFilter]);
+  const presenceSlotUi = useMemo(() => {
+    const upcoming = roster?.upcomingClass ?? roster?.nextUpcomingClass ?? null;
+    const mode: "active" | "upcoming" = roster?.class ? "active" : "upcoming";
+    const presenceOpensAt =
+      mode === "active" && roster?.class
+        ? minus15(roster.class.startTime)
+        : upcoming?.opensAt;
+    const markingLocked = isBeforePresenceOpens(roster?.nowTime, presenceOpensAt);
+    return { upcoming, mode, presenceOpensAt, markingLocked };
+  }, [roster]);
 
   const presenceOpensAt = useCallback((startTime: string) => {
     const [hhRaw, mmRaw] = startTime.split(":");
@@ -337,41 +509,64 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
             id="presence-filter-name"
             label="Recherche par nom"
             value={memberNameFilter}
-            onChange={(e) => setMemberNameFilter(e.target.value)}
+            onChange={(e) => {
+              setMemberNameFilter(e.target.value);
+              if (selectedMember && e.target.value.trim() !== selectedMember.name.trim()) {
+                clearMemberSelection();
+                setRoster(null);
+              }
+            }}
             placeholder="Ex: dupont"
           />
           <Input
             id="presence-filter-phone"
             label="Recherche par numéro"
             value={memberPhoneFilter}
-            onChange={(e) => setMemberPhoneFilter(e.target.value)}
+            onChange={(e) => {
+              setMemberPhoneFilter(e.target.value);
+              if (
+                selectedMember &&
+                e.target.value.trim() !== (selectedMember.phone ?? "").trim()
+              ) {
+                clearMemberSelection();
+                setRoster(null);
+              }
+            }}
             placeholder="Ex: 5522..."
           />
-          <div className="flex items-center gap-2">
+          <div className="flex h-9 items-center gap-2">
             <button
               type="button"
               onClick={() => void runManualSearch()}
-              className="rounded-full border border-brand-medium/35 bg-brand-dark px-5 py-2.5 text-sm font-medium text-white transition hover:opacity-90"
+              className={`${presenceBtnBase} border border-brand-medium/35 bg-brand-dark text-white hover:opacity-90`}
             >
               Rechercher
             </button>
             <button
               type="button"
-              onClick={() => {
-                setMemberNameFilter("");
-                setMemberPhoneFilter("");
-                setManualMemberId("");
-                setSuggestions([]);
-              }}
-              className="rounded-full border border-brand-medium/35 bg-white px-5 py-2.5 text-sm font-medium text-brand-dark transition hover:bg-zinc-50"
+              onClick={() => void resetPresenceView()}
+              className={`${presenceBtnBase} border border-brand-medium/35 bg-white text-brand-dark hover:bg-zinc-50`}
             >
               Réinitialiser
             </button>
           </div>
         </div>
-        <p className="mt-3 text-xs text-brand-dark/60">Le filtre s'applique automatiquement pendant la saisie.</p>
+        <p className="mt-3 text-xs text-brand-dark/60">
+          {selectedMember && inputsMatchSelectedMember()
+            ? "Membre sélectionné. Modifiez les champs ou cliquez sur Réinitialiser pour une nouvelle recherche."
+            : "Saisissez au moins 2 caractères : les suggestions apparaissent pendant la saisie."}
+        </p>
 
-        {!qrPublicId.trim() && suggestions.length > 1 ? (
+        {selectedMember && inputsMatchSelectedMember() ? (
+          <p className="mt-2 text-sm font-medium text-brand-dark">
+            Adhérent : <span className="font-semibold">{selectedMember.name}</span>
+            {selectedMember.phone ? (
+              <span className="text-brand-dark/70"> · {selectedMember.phone}</span>
+            ) : null}
+          </p>
+        ) : null}
+
+        {!qrPublicId.trim() && !manualMemberId && suggestions.length > 0 ? (
           <div className="mt-3 rounded-xl border border-brand-medium/20 bg-white">
             <div className="px-4 py-2 text-xs font-semibold text-brand-dark/70">Membres trouvés</div>
             <ul className="divide-y divide-brand-medium/15">
@@ -379,14 +574,7 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                 <li key={s.id}>
                   <button
                     type="button"
-                    onClick={() => {
-                      setManualMemberId(s.id);
-                      // Sélection manuelle explicite: on remplit nom + téléphone automatiquement.
-                      setMemberNameFilter(s.name);
-                      setMemberPhoneFilter(s.phone ?? "");
-                      setSuggestions([]);
-                      void fetchRosterByMember(s.id);
-                    }}
+                    onClick={() => void applyMemberSelection(s)}
                     className="flex w-full items-center justify-between px-4 py-2 text-left text-sm text-brand-dark transition hover:bg-zinc-50"
                   >
                     <span className="font-medium">{s.name}</span>
@@ -409,15 +597,34 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                 <path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 14a1.2 1.2 0 110 2.4A1.2 1.2 0 0112 16zm1-3.5a1 1 0 11-2 0V7a1 1 0 112 0v5.5z" />
               </svg>
             </span>
-            <p className="leading-5">{roster.message}</p>
+            <div className="space-y-1">
+              <p className="leading-5">{roster.message}</p>
+              {!roster.class && !roster.upcomingClass && !roster.nextUpcomingClass && roster.sessionDate ? (
+                <p className="text-xs font-medium text-amber-900/85">
+                  Date : <span className="font-semibold">{formatYmdDisplay(roster.sessionDate)}</span>
+                </p>
+              ) : null}
+            </div>
           </div>
         ) : null}
 
-        {(roster?.class || roster?.upcomingClass) ? (
+        {(roster?.class || roster?.upcomingClass || roster?.nextUpcomingClass) ? (
           <div className="mt-8 space-y-6">
+            {roster?.scannedMember && roster.message ? (
+              <p className="text-sm font-medium text-brand-dark">
+                Membre :{" "}
+                <span className="font-semibold">
+                  {`${roster.scannedMember.firstName ?? ""} ${roster.scannedMember.lastName ?? ""}`.trim() ||
+                    "—"}
+                </span>
+                {roster.scannedMember.phone ? (
+                  <span className="text-brand-dark/70"> · {roster.scannedMember.phone}</span>
+                ) : null}
+              </p>
+            ) : null}
             <section className="rounded-xl border border-brand-medium/20 bg-zinc-50/50 p-4">
               {(() => {
-                const mode: "active" | "upcoming" = roster?.class ? "active" : "upcoming";
+                const { upcoming, mode, presenceOpensAt, markingLocked } = presenceSlotUi;
                 const card: CourseCardData =
                   mode === "active"
                     ? {
@@ -432,19 +639,24 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                         dateLabel: roster!.sessionDate,
                       }
                     : {
-                        courseLabel: roster!.upcomingClass!.courseLabel,
-                        startTime: roster!.upcomingClass!.startTime,
-                        endTime: roster!.upcomingClass!.endTime,
-                        level: roster!.upcomingClass!.level,
-                        coachName: roster!.upcomingClass!.coachName,
-                        coachImageUrl: roster!.upcomingClass!.coachImageUrl,
-                        capacity: roster!.upcomingClass!.capacity,
-                        waitlistCapacity: roster!.upcomingClass!.waitlistCapacity,
-                        dateLabel: `${roster!.upcomingClass!.dayLabel} (${roster!.upcomingClass!.sessionDate})`,
-                        opensAt: roster!.upcomingClass!.opensAt,
+                        courseLabel: upcoming!.courseLabel,
+                        startTime: upcoming!.startTime,
+                        endTime: upcoming!.endTime,
+                        level: upcoming!.level,
+                        coachName: upcoming!.coachName,
+                        coachImageUrl: upcoming!.coachImageUrl,
+                        capacity: upcoming!.capacity,
+                        waitlistCapacity: upcoming!.waitlistCapacity,
+                        dateLabel: `${upcoming!.dayLabel} (${upcoming!.sessionDate})`,
+                        opensAt: upcoming!.opensAt,
                       };
                 return (
                   <div className="flex flex-col gap-2">
+                {mode === "upcoming" ? (
+                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-dark/60">
+                    Prochain cours réservé
+                  </p>
+                ) : null}
                 <h2 className="text-lg font-semibold text-brand-dark">
                   {card.courseLabel} — {card.startTime} - {card.endTime}
                 </h2>
@@ -453,14 +665,23 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                   <p className="text-xs text-brand-dark/70">
                     Fenêtre active :{" "}
                     <span className="font-semibold text-brand-dark">
-                      {minus15(card.startTime)} → {card.endTime}
+                      {presenceOpensAt} → {card.endTime}
                     </span>
                   </p>
                 ) : null}
+                {mode === "upcoming" && markingLocked && card.opensAt ? (
+                  <div className="rounded-lg border border-sky-200 bg-sky-50/80 px-3 py-2 text-xs leading-relaxed text-sky-950">
+                    Affichage informatif : la liste et le marquage de présence seront disponibles à partir de{" "}
+                    <span className="font-semibold">{card.opensAt}</span> (15 min avant le début du cours).
+                  </div>
+                ) : null}
                 <div className="flex flex-wrap items-center gap-3 text-xs text-brand-dark/70">
-                  <span>
-                    Niveau : <span className="font-semibold text-brand-dark">{planningLevelLabelFr(card.level)}</span>
-                  </span>
+                  {card.level && planningLevelLabelFr(card.level) ? (
+                    <span>
+                      Niveau :{" "}
+                      <span className="font-semibold text-brand-dark">{planningLevelLabelFr(card.level)}</span>
+                    </span>
+                  ) : null}
                   <span>
                     Places: <span className="font-semibold text-brand-dark">{card.capacity}</span>
                   </span>
@@ -480,7 +701,7 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                     Coach : <span className="font-semibold text-brand-dark">{card.coachName ?? "—"}</span>
                   </p>
                 </div>
-                {mode === "upcoming" && card.opensAt ? (
+                {mode === "upcoming" && card.opensAt && !markingLocked ? (
                   <p className="text-xs text-brand-dark/70">
                     Présence disponible à partir de <span className="font-semibold text-brand-dark">{card.opensAt}</span>.
                   </p>
@@ -490,13 +711,15 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
               })()}
 
               {roster?.class ? (
-                filteredReservations.length === 0 ? (
+                roster.class.reservations.length === 0 ? (
                   <p className="mt-3 text-sm text-brand-dark/60">Aucun inscrit sur ce créneau.</p>
                 ) : (
                   <ul className="mt-4 divide-y divide-brand-medium/15 rounded-xl border border-brand-medium/15 bg-white">
-                    {filteredReservations.map((row) => {
+                    {roster.class.reservations.map((row) => {
                       const isScannedMember = roster.scannedMember?.id === row.member.id;
-                      const canMark = row.status === "BOOKED" || row.status === "WAITLIST";
+                      const canMark =
+                        !presenceSlotUi.markingLocked &&
+                        (row.status === "BOOKED" || row.status === "WAITLIST");
                       const isPresent = row.status === "ATTENDED";
 
                       return (
@@ -514,17 +737,19 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                             <p className="mt-1 text-xs font-semibold text-brand-dark/70">
                               Statut : <span className="text-brand-dark">{statusLabels[row.status] ?? row.status}</span>
                             </p>
+                            {!row.member.qrPublicId && row.status !== "ATTENDED" ? (
+                              <p className="mt-0.5 text-xs text-amber-800">Aucun QR assigné — présence manuelle possible</p>
+                            ) : null}
                           </div>
 
                           <div className="flex items-center justify-end">
-                            <Switch
-                              checked={isPresent}
-                              disabled={!canMark || markingId === row.id || isPresent}
-                              ariaLabel="Marquer présent"
-                              onCheckedChange={(next) => {
-                                if (!next) return;
-                                void markPresent(row.id);
-                              }}
+                            <PresenceMarkButton
+                              isPresent={isPresent}
+                              canMark={canMark}
+                              loading={markingId === row.id}
+                              markingLocked={presenceSlotUi.markingLocked}
+                              opensAt={presenceSlotUi.presenceOpensAt}
+                              onMark={() => void markPresent(row.id)}
                             />
                           </div>
                         </li>
@@ -535,10 +760,10 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
               ) : null}
             </section>
 
-            {roster?.nextUpcomingClass ? (
+            {roster?.nextUpcomingClass && roster?.upcomingClass ? (
               <section className="rounded-xl border border-brand-medium/20 bg-white p-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-dark/60">
-                  Prochain cours du membre
+                  Autre cours à venir
                 </p>
                 <div className="mt-3 flex flex-col gap-2">
                   <h3 className="text-base font-semibold text-brand-dark">
@@ -548,12 +773,14 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                     Date : {roster.nextUpcomingClass.dayLabel} ({roster.nextUpcomingClass.sessionDate})
                   </p>
                   <div className="flex flex-wrap items-center gap-3 text-xs text-brand-dark/70">
-                    <span>
-                      Niveau :{" "}
-                      <span className="font-semibold text-brand-dark">
-                        {planningLevelLabelFr(roster.nextUpcomingClass.level)}
+                    {roster.nextUpcomingClass.level && planningLevelLabelFr(roster.nextUpcomingClass.level) ? (
+                      <span>
+                        Niveau :{" "}
+                        <span className="font-semibold text-brand-dark">
+                          {planningLevelLabelFr(roster.nextUpcomingClass.level)}
+                        </span>
                       </span>
-                    </span>
+                    ) : null}
                     <span>
                       Places: <span className="font-semibold text-brand-dark">{roster.nextUpcomingClass.capacity}</span>
                     </span>

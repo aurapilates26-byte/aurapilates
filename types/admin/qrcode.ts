@@ -18,11 +18,14 @@ export type QrCodeListMeta = {
   pageSize: number;
   total: number;
   totalPages: number;
+  assignedCount: number;
+  unassignedCount: number;
 };
 
 export type QrCodeFilters = {
   search: string;
   assignment: "ALL" | "ASSIGNED" | "UNASSIGNED";
+  page: number;
 };
 
 export type QrCodeListResponse = {

@@ -12,9 +12,9 @@ const cancelBtnClass =
   "inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200 disabled:cursor-not-allowed disabled:opacity-60";
 
 const historyStatusLabels: Record<string, string> = {
-  BOOKED: "Confirmé",
+  BOOKED: "Confirmée",
   WAITLIST: "En attente",
-  CANCELLED: "Annulé",
+  CANCELLED: "Annulée",
   ATTENDED: "Présence enregistrée",
 };
 
@@ -48,7 +48,7 @@ function cancelDetailLine(r: MemberReservationItem): string {
 }
 
 function upcomingStatusLabel(status: string): string {
-  return status === "WAITLIST" ? "En attente" : "Confirmé";
+  return status === "WAITLIST" ? "En attente" : "Confirmée";
 }
 
 type ReservationsTab = "upcoming" | "history";

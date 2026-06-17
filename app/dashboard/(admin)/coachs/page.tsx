@@ -1,8 +1,8 @@
 import { AdminCoachesClient } from "@/components/dashboard/admin-coaches-client";
-import { requireRole } from "@/lib/auth";
+import { requireSuperAdmin } from "@/lib/auth";
 
 export default async function AdminCoachsPage() {
-  await requireRole("ADMIN");
+  await requireSuperAdmin();
 
   return <AdminCoachesClient />;
 }

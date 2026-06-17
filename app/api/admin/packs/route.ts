@@ -2,8 +2,12 @@ import { PrismaClient } from "@prisma/client";
 import { getServerSession } from "next-auth";
 import { z } from "zod";
 import { authOptions } from "@/auth";
+import { isStaffRole } from "@/lib/admin/access";
 import { isValidPackCategory, normalizePackCategory } from "@/lib/pack-categories";
 import { normalizeDurationForApi } from "@/lib/pack-duration";
+import { promotionInclude, toPromotionRecord } from "@/lib/admin/pack-promotion-scope";
+import { resolvePackDisplayPrice } from "@/lib/pack-pricing";
+import { prisma } from "@/lib/prisma";
 
 const db = new PrismaClient();
 
@@ -40,7 +44,7 @@ function errorResponse(message: string, status: number) {
 async function requireAdmin() {
   const session = await getServerSession(authOptions);
   if (!session?.user) return { error: errorResponse("Unauthorized", 401) };
-  if (session.user.role !== "ADMIN") return { error: errorResponse("Forbidden", 403) };
+  if (!isStaffRole(session.user.role)) return { error: errorResponse("Forbidden", 403) };
   return { session };
 }
 
@@ -48,31 +52,53 @@ export async function GET() {
   const guard = await requireAdmin();
   if ("error" in guard) return guard.error;
 
-  const items = await db.pack.findMany({
-    orderBy: [{ isActive: "desc" }, { name: "asc" }],
-    select: {
-      id: true,
-      category: true,
-      name: true,
-      sessionCount: true,
-      priceCents: true,
-      durationDays: true,
-      isActive: true,
-      features: {
-        orderBy: { sortOrder: "asc" },
-        select: { label: true },
+  const [items, promotions] = await Promise.all([
+    db.pack.findMany({
+      orderBy: [{ isActive: "desc" }, { name: "asc" }],
+      select: {
+        id: true,
+        category: true,
+        name: true,
+        sessionCount: true,
+        priceCents: true,
+        durationDays: true,
+        isActive: true,
+        features: {
+          orderBy: { sortOrder: "asc" },
+          select: { label: true },
+        },
+        courseQuotas: { select: { courseSlug: true, sessionCount: true } },
+        _count: { select: { members: true } },
       },
-      courseQuotas: { select: { courseSlug: true, sessionCount: true } },
-      _count: { select: { members: true } },
-    },
-  });
+    }),
+    prisma.packPromotion.findMany({
+      where: { isActive: true },
+      include: promotionInclude,
+    }),
+  ]);
 
   return Response.json({
-    items: items.map((item) => ({
-      ...item,
-      features: item.features.map((feature) => feature.label),
-      courseQuotas: item.courseQuotas,
-    })),
+    items: items.map((item) => {
+      const promotionRecords = promotions.map(toPromotionRecord);
+      const pricing = resolvePackDisplayPrice({
+        basePriceDinars: item.priceCents,
+        promotions: promotionRecords,
+        packId: item.id,
+      });
+      const promotionPreview = resolvePackDisplayPrice({
+        basePriceDinars: item.priceCents,
+        promotions: promotionRecords,
+        packId: item.id,
+        includeUpcoming: true,
+      });
+      return {
+        ...item,
+        features: item.features.map((feature) => feature.label),
+        courseQuotas: item.courseQuotas,
+        pricing,
+        promotionPreview: promotionPreview.hasDiscount ? promotionPreview : null,
+      };
+    }),
   });
 }
 
@@ -88,7 +114,7 @@ export async function POST(request: Request) {
   const categoryRaw = data.category?.trim();
   const categoryForDb = categoryRaw ? normalizePackCategory(categoryRaw) : null;
   if (categoryRaw && !isValidPackCategory(categoryRaw)) {
-    return errorResponse("Categorie invalide", 400);
+    return errorResponse("Catégorie invalide", 400);
   }
   const features = parseDescriptionPoints(data.description);
   const dur = normalizeDurationForApi(data.durationDays ?? null);
@@ -154,9 +180,9 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     if (error instanceof Error && error.message.includes("Unique constraint")) {
-      return errorResponse("Un pack avec ce nom existe deja", 409);
+      return errorResponse("Un pack avec ce nom existe déjà", 409);
     }
-    return errorResponse("Creation du pack impossible", 400);
+    return errorResponse("Création du pack impossible", 400);
   }
 
   return Response.json(

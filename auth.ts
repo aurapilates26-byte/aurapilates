@@ -5,6 +5,12 @@ import { compare } from "bcryptjs";
 import { createHash, randomBytes } from "crypto";
 import { z } from "zod";
 import { credentialsPrismaAdapter } from "@/lib/auth-adapter";
+import {
+  authenticateMemberByPhoneAndQrKey,
+  authenticateMemberByQrPublicIdAndKey,
+  memberPhoneLoginErrorMessage,
+} from "@/lib/member-phone-login";
+import { resolveAuthSecret } from "@/lib/auth-secret";
 import { prisma } from "@/lib/prisma";
 
 const INACTIVITY_TIMEOUT_SECONDS = 2 * 60 * 60;
@@ -59,6 +65,37 @@ const signInSchema = z.object({
   password: z.string().min(6),
 });
 
+const unifiedSignInSchema = z.object({
+  identifier: z.string().trim().min(1),
+  secret: z.string().min(1),
+});
+
+function looksLikeEmail(identifier: string) {
+  return identifier.includes("@");
+}
+
+function readUnifiedCredentials(credentials: Record<string, unknown> | undefined) {
+  const identifier =
+    typeof credentials?.identifier === "string"
+      ? credentials.identifier
+      : typeof credentials?.email === "string"
+        ? credentials.email
+        : typeof credentials?.phone === "string"
+          ? credentials.phone
+          : "";
+
+  const secret =
+    typeof credentials?.secret === "string"
+      ? credentials.secret
+      : typeof credentials?.password === "string"
+        ? credentials.password
+        : typeof credentials?.key === "string"
+          ? credentials.key
+          : "";
+
+  return unifiedSignInSchema.safeParse({ identifier, secret });
+}
+
 const qrScanSignInSchema = z.object({
   loginType: z.literal("QR_SCAN"),
   publicId: z.string().trim().min(10),
@@ -70,6 +107,7 @@ function sha256(input: string) {
 }
 
 export const authOptions: NextAuthOptions = {
+  secret: resolveAuthSecret(),
   adapter: credentialsPrismaAdapter(),
   session: {
     strategy: "jwt",
@@ -83,8 +121,11 @@ export const authOptions: NextAuthOptions = {
     Credentials({
       name: "credentials",
       credentials: {
+        identifier: { label: "Identifier", type: "text" },
+        secret: { label: "Secret", type: "password" },
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
+        phone: { label: "Phone", type: "text" },
         loginType: { label: "Login Type", type: "text" },
         publicId: { label: "Public Id", type: "text" },
         key: { label: "Key", type: "password" },
@@ -93,24 +134,11 @@ export const authOptions: NextAuthOptions = {
         const parsedQrScanCredentials = qrScanSignInSchema.safeParse(credentials);
         if (parsedQrScanCredentials.success) {
           const { publicId, key } = parsedQrScanCredentials.data;
-          const qr = await prisma.qrCode.findUnique({
-            where: { publicId },
-            select: { id: true, assignedMemberId: true, qrKey: true },
-          });
-
-          if (!qr?.assignedMemberId) {
-            return null;
-          }
 
           const staffKeyHash = process.env.STAFF_QR_KEY_HASH;
           const adminEmail = process.env.ADMIN_LOGIN_EMAIL?.trim();
 
-          // `key` is the staff secret (plain). We store only its SHA-256 in env.
-          // Backward-compat / operator safety: if someone pastes the hash itself, accept it too.
           if (staffKeyHash && (sha256(key) === staffKeyHash || key === staffKeyHash)) {
-            // Presence is recorded on the dedicated roster page after staff signs in,
-            // not at key validation time.
-
             if (!adminEmail) {
               return null;
             }
@@ -132,49 +160,63 @@ export const authOptions: NextAuthOptions = {
             };
           }
 
-          if (key !== qr.qrKey) {
+          const memberResult = await authenticateMemberByQrPublicIdAndKey(publicId, key);
+          if (!memberResult.ok) {
             return null;
           }
 
-          const member = await prisma.member.findUnique({
-            where: { id: qr.assignedMemberId },
-            include: { user: true },
+          const { user } = memberResult.value;
+          return {
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            image: user.image,
+            role: user.role,
+          };
+        }
+
+        const parsedUnified = readUnifiedCredentials(credentials);
+        if (!parsedUnified.success) {
+          return null;
+        }
+
+        const { identifier, secret } = parsedUnified.data;
+
+        if (looksLikeEmail(identifier)) {
+          const parsedCredentials = signInSchema.safeParse({ email: identifier, password: secret });
+          if (!parsedCredentials.success) {
+            return null;
+          }
+
+          const { email, password } = parsedCredentials.data;
+          const user = await prisma.user.findUnique({
+            where: { email },
           });
 
-          if (!member?.user) {
+          if (!user?.password) {
+            return null;
+          }
+
+          const passwordMatches = await compare(password, user.password);
+          if (!passwordMatches) {
             return null;
           }
 
           return {
-            id: member.user.id,
-            email: member.user.email,
-            name: member.user.name,
-            image: member.user.image,
-            role: member.user.role,
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            image: user.image,
+            role: user.role,
           };
         }
 
-        const parsedCredentials = signInSchema.safeParse(credentials);
-
-        if (!parsedCredentials.success) {
-          return null;
+        const memberResult = await authenticateMemberByPhoneAndQrKey(identifier, secret);
+        if (!memberResult.ok) {
+          throw new Error(memberPhoneLoginErrorMessage(memberResult.reason));
         }
 
-        const { email, password } = parsedCredentials.data;
-        const user = await prisma.user.findUnique({
-          where: { email },
-        });
-
-        if (!user?.password) {
-          return null;
-        }
-
-        const passwordMatches = await compare(password, user.password);
-
-        if (!passwordMatches) {
-          return null;
-        }
-
+        const { user } = memberResult.value;
         return {
           id: user.id,
           email: user.email,

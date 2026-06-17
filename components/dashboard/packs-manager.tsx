@@ -147,7 +147,7 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
       if (durationAmount.trim() !== "") {
         const n = Number(durationAmount.trim());
         if (!Number.isFinite(n) || n < 1 || !Number.isInteger(n)) {
-          setFormError("Duree invalide : nombre entier positif.");
+          setFormError("Durée invalide : nombre entier positif.");
           return;
         }
         durationPayload = formatPackDurationLabel(n, durationUnit);
@@ -176,7 +176,7 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
       });
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(data?.error ?? "Creation du pack impossible.");
+        throw new Error(data?.error ?? "Création du pack impossible.");
       }
 
       await loadPacks();
@@ -293,19 +293,10 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
                     <article key={item.id} className="space-y-2 px-4 py-3 text-sm">
                       <div className="flex items-center justify-between gap-3">
                         <p className="font-semibold text-brand-dark">{item.name}</p>
-                        <span
-                          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
-                            item.isActive
-                              ? "border border-emerald-200 bg-emerald-50 text-emerald-900"
-                              : "border border-zinc-200 bg-zinc-50 text-zinc-800"
-                          }`}
-                        >
-                          {item.isActive ? "Actif" : "Inactif"}
-                        </span>
                       </div>
-                      <p className="text-xs text-brand-dark/75">Categorie: {packCategoryMenuLabel(item.category)}</p>
+                      <p className="text-xs text-brand-dark/75">Catégorie : {packCategoryMenuLabel(item.category)}</p>
                       <p className="text-xs text-brand-dark/75">
-                        Seances: {item.sessionCount !== null ? item.sessionCount : "—"}
+                        Séances : {item.sessionCount !== null ? item.sessionCount : "—"}
                       </p>
                       <p className="text-xs text-brand-dark/75">
                         Duree: {item.durationDays != null && item.durationDays !== "" ? item.durationDays : "—"}
@@ -337,62 +328,54 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
                 </div>
 
                 <div className="hidden overflow-x-auto lg:block">
-                  <table className="w-full min-w-[900px]">
+                  <table className="w-full min-w-[780px]">
                     <thead>
-                      <tr className="border-b border-brand-medium/15 bg-zinc-50/60 text-left text-xs font-semibold text-brand-dark/70">
-                        <th className="px-5 py-3">Categorie</th>
-                        <th className="px-4 py-3">Nom</th>
-                        <th className="px-4 py-3">Points du pack</th>
-                        <th className="px-4 py-3">Seances</th>
-                        <th className="px-4 py-3">Prix</th>
-                        <th className="px-4 py-3">Duree</th>
-                        <th className="px-4 py-3">Statut</th>
-                        <th className="px-4 py-3">Adherents</th>
-                        <th className="px-4 py-3 text-right">Action</th>
+                      <tr className="border-b border-brand-medium/15 bg-zinc-50/60 text-xs font-semibold text-brand-dark/70">
+                        <th className="px-5 py-3 text-left">Catégorie</th>
+                        <th className="px-4 py-3 text-center">Nom</th>
+                        <th className="px-4 py-3 text-center">Séances</th>
+                        <th className="px-4 py-3 text-center">Prix</th>
+                        <th className="px-4 py-3 text-center">Duree</th>
+                        <th className="px-4 py-3 text-center">Adherents</th>
+                        <th className="px-4 py-3 text-center">Action</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-brand-medium/15">
                       {visibleItems.map((item) => (
                         <tr key={item.id} className="text-sm">
-                          <td className="px-5 py-4 text-brand-dark/80">{packCategoryMenuLabel(item.category)}</td>
-                          <td className="px-4 py-4 font-semibold text-brand-dark">{item.name}</td>
-                          <td className="px-4 py-4 text-brand-dark/80">
-                            {item.features.length > 0 ? item.features.join(" - ") : "—"}
-                          </td>
-                          <td className="px-4 py-4 text-brand-dark/80">{item.sessionCount ?? "—"}</td>
-                          <td className="px-4 py-4 text-brand-dark/80">
+                          <td className="px-5 py-4 text-left text-brand-dark/80">{packCategoryMenuLabel(item.category)}</td>
+                          <td className="px-4 py-4 text-center font-semibold text-brand-dark">{item.name}</td>
+                          <td className="px-4 py-4 text-center text-brand-dark/80">{item.sessionCount ?? "—"}</td>
+                          <td className="px-4 py-4 text-center text-brand-dark/80">
                             {item.priceCents != null ? formatPackPriceDt(item.priceCents) : "—"}
                           </td>
-                          <td className="px-4 py-4 text-brand-dark/80">
+                          <td className="px-4 py-4 text-center text-brand-dark/80">
                             {item.durationDays != null && item.durationDays !== "" ? item.durationDays : "—"}
                           </td>
-                          <td className="px-4 py-4">
-                            <span
-                              className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
-                                item.isActive
-                                  ? "border border-emerald-200 bg-emerald-50 text-emerald-900"
-                                  : "border border-zinc-200 bg-zinc-50 text-zinc-800"
-                              }`}
-                            >
-                              {item.isActive ? "Actif" : "Inactif"}
-                            </span>
-                          </td>
-                          <td className="px-4 py-4 text-brand-dark/80">{item._count.members}</td>
-                          <td className="px-4 py-4 text-right">
-                            <div className="flex items-center justify-end gap-2">
+                          <td className="px-4 py-4 text-center text-brand-dark/80">{item._count?.members ?? 0}</td>
+                          <td className="px-4 py-4 text-center">
+                            <div className="flex items-center justify-center gap-2">
                               <button
                                 type="button"
                                 onClick={() => handleStartEditPack(item)}
-                                className="rounded-full border border-brand-medium/30 bg-white px-3 py-1.5 text-xs font-semibold text-brand-dark/80 transition hover:bg-zinc-50"
+                                aria-label="Modifier"
+                                title="Modifier"
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-brand-medium/30 bg-white text-brand-dark/80 transition hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-medium/30"
                               >
-                                Modifier
+                                <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current" aria-hidden="true">
+                                  <path d="M3 17.25V21h3.75L17.8 9.95l-3.75-3.75L3 17.25zm2.92 2.83H5v-.92l9.06-9.06.92.92L5.92 20.08zM20.7 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+                                </svg>
                               </button>
                               <button
                                 type="button"
                                 onClick={() => setPackToDelete(item)}
-                                className="rounded-full border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50"
+                                aria-label="Supprimer"
+                                title="Supprimer"
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 transition hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200"
                               >
-                                Supprimer
+                                <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current" aria-hidden="true">
+                                  <path d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z" />
+                                </svg>
                               </button>
                             </div>
                           </td>
@@ -416,11 +399,11 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <Select
                 id="pack-category"
-                label="Categorie"
+                label="Catégorie"
                 value={category}
                 onChange={(event) => setCategory(event.target.value)}
               >
-                <option value="">— Selectionner —</option>
+                <option value="">— Sélectionner —</option>
                 {PACK_CATEGORY_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>
                     {opt.label}
@@ -439,7 +422,7 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
               <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                 <Input
                   id="pack-sessions-reformer"
-                  label="Seances Reformer"
+                  label="Séances Reformer"
                   type="number"
                   min={1}
                   value={reformerSessions}
@@ -448,7 +431,7 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
                 />
                 <Input
                   id="pack-sessions-mat"
-                  label="Seances Mat"
+                  label="Séances Mat"
                   type="number"
                   min={1}
                   value={matSessions}

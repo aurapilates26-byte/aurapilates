@@ -1,6 +1,7 @@
 import { getServerSession } from "next-auth";
 import { z } from "zod";
 import { authOptions } from "@/auth";
+import { isStaffRole } from "@/lib/admin/access";
 import { courseLabel } from "@/lib/course-labels";
 import {
   formatYmdLocal,
@@ -9,6 +10,7 @@ import {
   prismaDayOfWeekFromLocalDate,
   startOfLocalToday,
 } from "@/lib/calendar-day";
+import { getAdminOperationalPlanningSlotsForDate } from "@/lib/admin/planning-operational-slots";
 import { prisma } from "@/lib/prisma";
 
 function errorResponse(message: string, status: number) {
@@ -21,7 +23,7 @@ const querySchema = z.object({
 
 export async function GET(request: Request) {
   const session = await getServerSession(authOptions);
-  if (!session?.user || session.user.role !== "ADMIN") {
+  if (!session?.user || !isStaffRole(session.user.role)) {
     return errorResponse("Forbidden", 403);
   }
 
@@ -39,11 +41,7 @@ export async function GET(request: Request) {
   const dayDb = parseYmdToPrismaDate(ymd);
   if (!dayDb) return errorResponse("Date invalide", 400);
 
-  const slots = await prisma.planning.findMany({
-    where: { dayOfWeek },
-    include: { coach: { select: { firstName: true, lastName: true, imageUrl: true } } },
-    orderBy: [{ startTime: "asc" }],
-  });
+  const slots = await getAdminOperationalPlanningSlotsForDate(ymd);
 
   const planningIds = slots.map((s) => s.id);
   const reservations = planningIds.length
@@ -102,4 +100,3 @@ export async function GET(request: Request) {
     }),
   });
 }
-

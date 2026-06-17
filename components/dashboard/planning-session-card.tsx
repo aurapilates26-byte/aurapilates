@@ -32,8 +32,8 @@ export function PlanningLevelPill({
 type PlanningSessionCardProps = {
   courseLabel: string;
   startTime: string;
-  levelLabel: string;
-  levelToneClass: string;
+  levelLabel?: string | null;
+  levelToneClass?: string | null;
   coachName: string | null;
   coachImageUrl?: string | null;
   topRightActions?: ReactNode;
@@ -56,6 +56,11 @@ export function PlanningSessionCard({
   statsBadges,
   variant = "public",
 }: PlanningSessionCardProps) {
+  const levelPill =
+    levelLabel && levelToneClass ? (
+      <PlanningLevelPill levelLabel={levelLabel} levelToneClass={levelToneClass} />
+    ) : null;
+
   const coachLine = (
     <div
       className={`inline-flex min-w-0 max-w-full flex-wrap items-center gap-1.5 text-xs text-brand-dark/70 sm:text-sm ${
@@ -71,7 +76,7 @@ export function PlanningSessionCard({
         {variant === "admin" ? (
           <>Coach : {coachName ?? "—"}</>
         ) : (
-          <>Coach: {coachName ?? "—"}</>
+          <>Coach : {coachName ?? "—"}</>
         )}
       </span>
     </div>
@@ -89,9 +94,7 @@ export function PlanningSessionCard({
                 {courseLabel}
                 <span className="font-semibold text-brand-dark/70">{` · ${startTime}`}</span>
               </p>
-              <div className="mt-1.5">
-                <PlanningLevelPill levelLabel={levelLabel} levelToneClass={levelToneClass} />
-              </div>
+              {levelPill ? <div className="mt-1.5">{levelPill}</div> : null}
             </div>
             <div className="flex shrink-0 items-center gap-2">{topRightActions}</div>
           </div>
@@ -118,7 +121,7 @@ export function PlanningSessionCard({
         </div>
         {coachLine}
         <div className="mt-2 flex flex-wrap items-center gap-2 md:flex-nowrap">
-          <PlanningLevelPill levelLabel={levelLabel} levelToneClass={levelToneClass} />
+          {levelPill}
           {statsBadges}
         </div>
       </div>

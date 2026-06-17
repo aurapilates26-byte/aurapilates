@@ -1,9 +1,9 @@
-import { PrismaClient } from "@prisma/client";
 import { getServerSession } from "next-auth";
 import { z } from "zod";
 import { authOptions } from "@/auth";
-
-const db = new PrismaClient();
+import { isStaffRole } from "@/lib/admin/access";
+import { getAdminPlanningPeriodWindow } from "@/lib/admin/planning-period-draft";
+import { savePlanningPeriodConfig } from "@/lib/admin/planning-period-config";
 
 const bookingWindowSchema = z.enum(["WEEKLY", "FIFTEEN_DAYS", "ONE_MONTH"]);
 
@@ -13,8 +13,8 @@ function errorResponse(message: string, status: number) {
 
 async function requireAdmin() {
   const session = await getServerSession(authOptions);
-  if (!session?.user) return { error: errorResponse("Unauthorized", 401) };
-  if (session.user.role !== "ADMIN") return { error: errorResponse("Forbidden", 403) };
+  if (!session?.user) return { error: errorResponse("Non autorisé", 401) };
+  if (!isStaffRole(session.user.role)) return { error: errorResponse("Accès refusé", 403) };
   return { session };
 }
 
@@ -22,14 +22,8 @@ export async function GET() {
   const guard = await requireAdmin();
   if ("error" in guard) return guard.error;
 
-  const firstPlanning = await db.planning.findFirst({
-    select: { bookingWindow: true },
-    orderBy: { createdAt: "asc" },
-  });
-
-  return Response.json({
-    bookingWindow: firstPlanning?.bookingWindow ?? "WEEKLY",
-  });
+  const window = await getAdminPlanningPeriodWindow();
+  return Response.json(window);
 }
 
 export async function PUT(request: Request) {
@@ -37,14 +31,24 @@ export async function PUT(request: Request) {
   if ("error" in guard) return guard.error;
 
   const raw = await request.json().catch(() => null);
-  const parsed = z.object({ bookingWindow: bookingWindowSchema }).safeParse(raw);
-  if (!parsed.success) return errorResponse("Invalid request payload", 400);
+  const parsed = z
+    .object({
+      bookingWindow: bookingWindowSchema,
+      periodStartYmd: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/),
+    })
+    .safeParse(raw);
 
-  const { bookingWindow } = parsed.data;
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return errorResponse(issue?.message ?? "Données invalides", 400);
+  }
 
-  await db.planning.updateMany({
-    data: { bookingWindow },
-  });
-
-  return Response.json({ ok: true, bookingWindow });
+  try {
+    await savePlanningPeriodConfig(parsed.data);
+    const window = await getAdminPlanningPeriodWindow();
+    return Response.json({ ok: true, ...window });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "Enregistrement impossible";
+    return errorResponse(message, 400);
+  }
 }

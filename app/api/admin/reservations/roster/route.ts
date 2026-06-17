@@ -1,8 +1,11 @@
 import { getServerSession } from "next-auth";
 import { z } from "zod";
 import { authOptions } from "@/auth";
+import { isStaffRole } from "@/lib/admin/access";
 import { courseLabel } from "@/lib/course-labels";
 import { formatYmdLocal, parseYmdLocal, parseYmdToPrismaDate, startOfLocalToday } from "@/lib/calendar-day";
+import { getAdminOperationalPlanningSlotsForDate } from "@/lib/admin/planning-operational-slots";
+import { repairAttendedReservationsWithoutAttendance } from "@/lib/ensure-reservation-attendance";
 import { prisma } from "@/lib/prisma";
 
 function errorResponse(message: string, status: number) {
@@ -16,7 +19,7 @@ const querySchema = z.object({
 
 export async function GET(request: Request) {
   const session = await getServerSession(authOptions);
-  if (!session?.user || session.user.role !== "ADMIN") {
+  if (!session?.user || !isStaffRole(session.user.role)) {
     return errorResponse("Forbidden", 403);
   }
 
@@ -33,29 +36,38 @@ export async function GET(request: Request) {
   const dayDb = parseYmdToPrismaDate(ymd);
   if (!dayDb) return errorResponse("Date invalide", 400);
 
-  const planning = await prisma.planning.findUnique({
-    where: { id: parsed.data.planningId },
-    include: { coach: { select: { firstName: true, lastName: true } } },
-  });
-  if (!planning) return errorResponse("Creneau introuvable", 404);
+  const planning = (
+    await getAdminOperationalPlanningSlotsForDate(ymd)
+  ).find((row) => row.id === parsed.data.planningId);
+  if (!planning) return errorResponse("Créneau introuvable pour cette période", 404);
 
-  const reservations = await prisma.reservation.findMany({
-    where: { planningId: planning.id, sessionDate: dayDb },
-    orderBy: [{ createdAt: "asc" }],
-    include: {
-      member: {
-        select: {
-          id: true,
-          firstName: true,
-          lastName: true,
-          phone: true,
-          user: { select: { email: true } },
-          assignedQrCodes: { take: 1, orderBy: { updatedAt: "desc" }, select: { publicId: true } },
+  const loadReservations = () =>
+    prisma.reservation.findMany({
+      where: { planningId: planning.id, sessionDate: dayDb },
+      orderBy: [{ createdAt: "asc" }],
+      include: {
+        member: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+            user: { select: { email: true } },
+            assignedQrCodes: { take: 1, orderBy: { updatedAt: "desc" }, select: { publicId: true } },
+          },
         },
+        attendance: { select: { markedAt: true, markedBy: true } },
       },
-      attendance: { select: { markedAt: true, markedBy: true } },
-    },
-  });
+    });
+
+  let reservations = await loadReservations();
+  const repairIds = reservations
+    .filter((r) => r.status === "ATTENDED" && !r.attendance)
+    .map((r) => r.id);
+  if (repairIds.length > 0) {
+    await repairAttendedReservationsWithoutAttendance(repairIds);
+    reservations = await loadReservations();
+  }
 
   return Response.json({
     date: ymd,

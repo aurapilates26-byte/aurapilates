@@ -31,12 +31,12 @@ export const homeText: HomeText = {
     cours: {
       kicker: "Cours",
       title: "Des cours pensés pour votre progression",
-      subtitle: "Pilates yoga et danse pour progresser chaque semaine en confiance",
+      subtitle: "Pilates, yoga et danse pour progresser chaque semaine en confiance",
     },
     tarif: {
       kicker: "Tarifs",
       title: "Des formules simples pour avancer sans stress",
-      subtitle: "Au mois ou à la séance choisissez votre pack sans mauvaise surprise",
+      subtitle: "Au mois ou à la séance, choisissez votre pack sans mauvaise surprise",
     },
     coach: {
       kicker: "Coach",
@@ -46,7 +46,7 @@ export const homeText: HomeText = {
     planning: {
       kicker: "Planning",
       title: "Tous vos créneaux en un coup d'œil",
-      subtitle: "Jour heure et niveau puis réservation depuis votre espace membre",
+      subtitle: "Parcourez les séances de la période : horaire, coach et niveau, puis réservez en ligne.",
     },
     inscription: {
       title: "Prête à commencer votre pratique ?",
@@ -137,7 +137,7 @@ export const courseContent = [
     paragraphOne:
       "La pratique alterne postures, respiration consciente et moments de recentrage. Cette combinaison aide à relâcher les tensions et à améliorer la qualité du mouvement.",
     paragraphTwo:
-      "En complément du Pilates, le yoga favorise la récupération, la concentration et une meilleure conscience corporelle. C'est un excellent choix pour retrouver énergie et sérénité.",
+      "En complément du Pilates, le yoga favorise la récupération, la concentration et une meilleure conscience corporelle. C'est un excellent choix pour retrouver de l'énergie et de la sérénité.",
   },
   {
     slug: "cours-de-dance",

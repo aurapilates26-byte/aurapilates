@@ -1,15 +1,30 @@
 "use client";
 
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useState } from "react";
 import { useToast } from "@/components/ui/toast-provider";
 import { Button, ConfirmDialog, Input, SelectMenu } from "@/components/ui";
 import { PlanningSessionCard } from "@/components/dashboard/planning-session-card";
+import { PlanningDaysScrollRow } from "@/components/dashboard/planning-days-scroll-row";
+import { PlanningHistoricalPresenceDialog } from "@/components/planning/planning-historical-presence-dialog";
+import { PlanningDayPill } from "@/components/planning/planning-day-pill";
+import { PlanningPeriodActiveBadge } from "@/components/planning/planning-period-active-badge";
+import { PlanningPeriodSettingsPanel } from "@/components/planning/planning-period-settings-panel";
 import { badgeClasses } from "@/lib/badge-classes";
 import { planningLevelBadgeClass } from "@/lib/planning-level-badge";
+import { buildPeriodDaySelectOptions, weekdayDateLineForPeriod, weekdaysPresentInPeriod } from "@/lib/planning-period-day-dates";
 import { PLANNING_LEVEL_FORM_OPTIONS, planningLevelLabelFr } from "@/lib/planning-public-labels";
 import { usePlanningStore } from "@/store";
+import { usePlanningPeriodStore } from "@/store/planning-period-store";
 import type { AdminCoach } from "@/types/admin/coach";
-import type { AdminPlanningItem, PlanningDayOfWeek, PlanningLevel } from "@/types/admin/planning";
+import type {
+  AdminPlanningItem,
+  PlanningAdminScope,
+  PlanningArchivedPeriodItem,
+  PlanningDayOfWeek,
+  PlanningLevel,
+  PlanningPeriodConfig,
+  PlanningViewMode,
+} from "@/types/admin/planning";
 
 type LevelFormValue = "NONE" | PlanningLevel;
 
@@ -22,8 +37,12 @@ type PlanningResponse = {
 };
 
 type PlanningManagerProps = {
-  viewMode: "list" | "form";
-  onChangeViewMode: (mode: "list" | "form") => void;
+  viewMode: PlanningViewMode;
+  onChangeViewMode: (mode: PlanningViewMode) => void;
+  periodSettingsTab?: PlanningAdminScope;
+  onPeriodSettingsTabChange?: (tab: PlanningAdminScope) => void;
+  sessionFormSource?: "list" | "archive";
+  onSessionFormSourceChange?: (source: "list" | "archive") => void;
 };
 
 const courseOptions = [
@@ -31,6 +50,8 @@ const courseOptions = [
   { value: "mat-pilates", label: "Mat pilates" },
   { value: "yoga", label: "Yoga" },
   { value: "dance", label: "Danse" },
+  { value: "coaching-prive", label: "Coaching privé" },
+  { value: "sans-cours", label: "Sans cours" },
 ] as const;
 
 const courseLabelBySlug = courseOptions.reduce<Record<string, string>>((acc, option) => {
@@ -50,6 +71,16 @@ const dayLabels: Record<PlanningDayOfWeek, string> = {
 
 const orderedDays: PlanningDayOfWeek[] = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
 
+function sessionYmdForHistoricalSlot(
+  item: AdminPlanningItem,
+  selectedDay: PlanningDayOfWeek,
+  periodConfig: PlanningPeriodConfig,
+): string | null {
+  if (item.anchorSessionYmd) return item.anchorSessionYmd;
+  const options = buildPeriodDaySelectOptions(periodConfig.periodStartYmd, periodConfig.periodEndYmd);
+  return options.find((o) => o.dayOfWeek === selectedDay)?.sessionYmd ?? null;
+}
+
 function todayPlanningDay(): PlanningDayOfWeek {
   const jsDay = new Date().getDay();
   if (jsDay === 1) return "MON";
@@ -62,10 +93,21 @@ function todayPlanningDay(): PlanningDayOfWeek {
 }
 
 export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManagerProps>(function PlanningManagerWithRef(
-  { viewMode, onChangeViewMode },
+  {
+    viewMode,
+    onChangeViewMode,
+    periodSettingsTab = "published",
+    onPeriodSettingsTabChange = () => {},
+    sessionFormSource = "list",
+    onSessionFormSourceChange = () => {},
+  },
   ref
 ) {
+  const showList = viewMode === "list";
+  const showSessionForm = viewMode === "session-form";
   const { toast } = useToast();
+  const fetchPeriodConfig = usePlanningPeriodStore((s) => s.fetchConfig);
+  const periodConfig = usePlanningPeriodStore((s) => s.config);
   const { items, filters, isLoading, error, setItems, setLoading, setError, setSearch, setDayOfWeek, resetFilters } =
     usePlanningStore();
 
@@ -87,6 +129,126 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   const [capacity, setCapacity] = useState("");
   const [waitlistCapacity, setWaitlistCapacity] = useState("");
 
+  const [archivedPeriods, setArchivedPeriods] = useState<PlanningArchivedPeriodItem[]>([]);
+  const [selectedArchiveStartYmd, setSelectedArchiveStartYmd] = useState("");
+  const [archivesLoading, setArchivesLoading] = useState(false);
+  const [seedingArchives, setSeedingArchives] = useState(false);
+  const [archiveItems, setArchiveItems] = useState<AdminPlanningItem[]>([]);
+  const [archiveLoading, setArchiveLoading] = useState(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [historicalSlot, setHistoricalSlot] = useState<AdminPlanningItem | null>(null);
+  const [historicalSessionYmd, setHistoricalSessionYmd] = useState<string | null>(null);
+
+  const selectedArchivePeriod = useMemo(
+    () => archivedPeriods.find((p) => p.periodStartYmd === selectedArchiveStartYmd) ?? null,
+    [archivedPeriods, selectedArchiveStartYmd],
+  );
+
+  const loadArchives = useCallback(async () => {
+    setArchivesLoading(true);
+    try {
+      const res = await fetch("/api/admin/planning/archive", { cache: "no-store" });
+      const data = (await res.json()) as { items?: PlanningArchivedPeriodItem[]; error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Impossible de charger l'historique.");
+      const list = data.items ?? [];
+      setArchivedPeriods(list);
+      setSelectedArchiveStartYmd((prev) => {
+        if (prev && list.some((p) => p.periodStartYmd === prev)) return prev;
+        return list[0]?.periodStartYmd ?? "";
+      });
+    } catch (e) {
+      toast({
+        variant: "error",
+        title: "Historique",
+        description: e instanceof Error ? e.message : "Chargement impossible.",
+      });
+    } finally {
+      setArchivesLoading(false);
+    }
+  }, [toast]);
+
+  const seedArchives = useCallback(async () => {
+    setSeedingArchives(true);
+    try {
+      const res = await fetch("/api/admin/planning/archive", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "seed" }),
+      });
+      const data = (await res.json()) as {
+        items?: PlanningArchivedPeriodItem[];
+        created?: number;
+        error?: string;
+      };
+      if (!res.ok) throw new Error(data.error ?? "Import impossible.");
+      const list = data.items ?? [];
+      setArchivedPeriods(list);
+      setSelectedArchiveStartYmd(list[0]?.periodStartYmd ?? "");
+      toast({
+        variant: "success",
+        title: "Périodes importées",
+        description: `${data.created ?? 0} période(s) ajoutée(s) à l'historique.`,
+      });
+    } catch (e) {
+      toast({
+        variant: "error",
+        title: "Import",
+        description: e instanceof Error ? e.message : "Import impossible.",
+      });
+    } finally {
+      setSeedingArchives(false);
+    }
+  }, [toast]);
+
+  const loadArchivePlanning = useCallback(async (periodStartYmd: string) => {
+    if (!periodStartYmd) {
+      setArchiveItems([]);
+      return;
+    }
+    setArchiveLoading(true);
+    setArchiveError(null);
+    try {
+      const res = await fetch(
+        `/api/admin/planning?scope=archive&periodStartYmd=${encodeURIComponent(periodStartYmd)}`,
+        { cache: "no-store" },
+      );
+      const data = (await res.json()) as PlanningResponse & { error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Impossible de charger le planning archivé.");
+      setArchiveItems(data.items);
+    } catch (e) {
+      setArchiveError(e instanceof Error ? e.message : "Une erreur est survenue.");
+    } finally {
+      setArchiveLoading(false);
+    }
+  }, []);
+
+  const openHistoricalPresence = (item: AdminPlanningItem) => {
+    if (!selectedArchivePeriod) return;
+    const ymd = sessionYmdForHistoricalSlot(item, selectedDay, selectedArchivePeriod);
+    if (!ymd) {
+      toast({
+        variant: "error",
+        title: "Date introuvable",
+        description: "Impossible de déterminer la date du cours.",
+      });
+      return;
+    }
+    setHistoricalSlot(item);
+    setHistoricalSessionYmd(ymd);
+  };
+
+  useEffect(() => {
+    if (viewMode === "period-form" && periodSettingsTab === "archive") {
+      void loadArchives();
+    }
+  }, [viewMode, periodSettingsTab, loadArchives]);
+
+  useEffect(() => {
+    if (viewMode === "period-form" && periodSettingsTab === "archive" && selectedArchiveStartYmd) {
+      void loadArchivePlanning(selectedArchiveStartYmd);
+    }
+  }, [viewMode, periodSettingsTab, selectedArchiveStartYmd, loadArchivePlanning]);
+
   const visibleItems = useMemo(() => {
     const q = filters.search.trim().toLowerCase();
     return items.filter((item) => {
@@ -97,19 +259,42 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     });
   }, [filters.search, items]);
 
+  const daysForTabs = useMemo(() => {
+    if (!periodConfig) return orderedDays;
+    return weekdaysPresentInPeriod(periodConfig.periodStartYmd, periodConfig.periodEndYmd);
+  }, [periodConfig]);
+
+  const sessionCountByDay = useMemo(
+    () =>
+      visibleItems.reduce<Record<PlanningDayOfWeek, number>>(
+        (counts, item) => {
+          counts[item.dayOfWeek] += 1;
+          return counts;
+        },
+        { MON: 0, TUE: 0, WED: 0, THU: 0, FRI: 0, SAT: 0, SUN: 0 },
+      ),
+    [visibleItems],
+  );
+
+  useEffect(() => {
+    if (daysForTabs.length > 0 && !daysForTabs.includes(selectedDay)) {
+      setSelectedDay(daysForTabs[0]!);
+    }
+  }, [daysForTabs, selectedDay]);
+
   const visibleItemsByDay = useMemo(
     () =>
       visibleItems
         .filter((item) => item.dayOfWeek === selectedDay)
         .sort((a, b) => a.startTime.localeCompare(b.startTime)),
-    [selectedDay, visibleItems]
+    [selectedDay, visibleItems],
   );
 
   const loadPlanning = async () => {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch("/api/admin/planning", { cache: "no-store" });
+      const response = await fetch("/api/admin/planning?scope=published", { cache: "no-store" });
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(data?.error ?? "Impossible de charger le planning.");
@@ -147,13 +332,20 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   useEffect(() => {
     void loadPlanning();
     void loadCoaches();
+    void fetchPeriodConfig({ source: "admin", force: true });
   }, []);
 
   useEffect(() => {
-    if (viewMode === "form" && !editingId) {
+    if (viewMode === "list") {
+      void loadPlanning();
+    }
+  }, [periodConfig?.periodStartYmd, periodConfig?.periodEndYmd, viewMode]);
+
+  useEffect(() => {
+    if (showSessionForm && !editingId) {
       resetForm();
     }
-  }, [editingId, viewMode]);
+  }, [editingId, showSessionForm]);
 
   const handleSubmit = async () => {
     setFormError(null);
@@ -222,7 +414,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
       }
       await loadPlanning();
       resetForm();
-      onChangeViewMode("list");
+      onChangeViewMode(sessionFormSource === "archive" ? "period-form" : "list");
       toast({
         variant: "success",
         title: isEditMode ? "Séance modifiée" : "Séance ajoutée",
@@ -236,19 +428,24 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     }
   };
 
-  const handleStartEdit = (item: AdminPlanningItem) => {
+  const handleStartEdit = (item: AdminPlanningItem, fromArchive = false) => {
+    if (fromArchive) {
+      onSessionFormSourceChange("archive");
+    } else {
+      onSessionFormSourceChange("list");
+    }
     setEditingId(item.id);
     setCourseSlug(item.courseSlug);
     setCoachId(item.coach?.id ?? "NONE");
     setDayOfWeekLocal(item.dayOfWeek);
-    setLevel(item.level);
+    setLevel(item.level ?? "NONE");
     setStartTime(item.startTime);
     setEndTime(item.endTime);
     setDurationMinutes(String(item.durationMinutes));
     setCapacity(String(item.capacity));
     setWaitlistCapacity(item.waitlistCapacity !== null ? String(item.waitlistCapacity) : "");
     setFormError(null);
-    onChangeViewMode("form");
+    onChangeViewMode("session-form");
   };
 
   const handleDelete = async () => {
@@ -273,14 +470,50 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
 
   useImperativeHandle(ref, () => ({
     refresh() {
-      void loadPlanning();
+      if (viewMode === "period-form" && periodSettingsTab === "archive" && selectedArchiveStartYmd) {
+        void loadArchives();
+        void loadArchivePlanning(selectedArchiveStartYmd);
+      } else {
+        void loadPlanning();
+      }
       void loadCoaches();
+      void fetchPeriodConfig({ source: "admin", force: true });
     },
   }));
 
+  const backFromSessionForm = () => {
+    onChangeViewMode(sessionFormSource === "archive" ? "period-form" : "list");
+  };
+
   return (
     <div className="space-y-6">
-      {viewMode === "list" ? (
+      {viewMode === "period-form" ? (
+        <PlanningPeriodSettingsPanel
+          settingsTab={periodSettingsTab}
+          onSettingsTabChange={onPeriodSettingsTabChange}
+          onSaved={() => void fetchPeriodConfig({ source: "admin", force: true })}
+          archiveProps={{
+            archivedPeriods,
+            selectedArchiveStartYmd,
+            onSelectedArchiveStartYmdChange: setSelectedArchiveStartYmd,
+            archivesLoading,
+            seedingArchives,
+            onSeedArchives: () => void seedArchives(),
+            selectedArchivePeriod,
+            selectedDay,
+            onSelectedDayChange: (day) => {
+              setSelectedDay(day);
+              setDayOfWeek(day);
+            },
+            items: archiveItems,
+            isLoading: archiveLoading,
+            error: archiveError,
+            onEditSession: (item) => handleStartEdit(item, true),
+            onDeleteSession: setItemToDelete,
+            onOpenPresence: openHistoricalPresence,
+          }}
+        />
+      ) : showList ? (
         isLoading ? (
           <div className="rounded-2xl border border-brand-medium/20 bg-white p-6 text-sm text-brand-dark/70">Chargement...</div>
         ) : error ? (
@@ -288,11 +521,13 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
         ) : (
           <div className="rounded-2xl border border-brand-medium/20 bg-white">
             <div className="border-b border-brand-medium/20 px-5 py-4">
+              <PlanningPeriodActiveBadge source="admin" align="start" className="mb-4" />
               <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
                 <div>
                   <p className="text-base font-semibold text-brand-dark">Planning</p>
                   <p className="mt-1 text-xs text-brand-dark/60">
                     {visibleItemsByDay.length} résultat(s) — {dayLabels[selectedDay]}
+                    {periodConfig ? ` · ${periodConfig.periodLabel}` : ""}
                   </p>
                 </div>
                 <div className="grid min-w-0 w-full gap-2 md:max-w-3xl md:grid-cols-[minmax(320px,1fr)_42px] md:items-end">
@@ -317,34 +552,44 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
                   </button>
                 </div>
               </div>
-              <div
-                className="planning-days-scroll -mx-5 mt-4 flex items-center justify-start overflow-x-auto overflow-y-hidden overscroll-x-contain px-5 pb-2 touch-pan-x lg:justify-center"
-                aria-label="Jours de la semaine, défilement horizontal"
+              <PlanningDaysScrollRow
+                className="-mx-5 mt-4"
+                scrollClassName="lg:justify-center"
+                scrollKey={`${periodConfig?.periodStartYmd ?? "none"}-${visibleItems.length}`}
               >
-                <div className="flex w-max flex-nowrap items-center gap-2 pr-1">
-                  {orderedDays.map((day) => (
-                    <button
+                <div className="flex w-max flex-nowrap items-center gap-2 px-5 pb-2 pr-1">
+                  {daysForTabs.map((day) => (
+                    <PlanningDayPill
                       key={day}
-                      type="button"
+                      dayLabel={dayLabels[day]}
+                      dateLabel={
+                        periodConfig
+                          ? weekdayDateLineForPeriod(
+                              periodConfig.periodStartYmd,
+                              periodConfig.periodEndYmd,
+                              day,
+                            )
+                          : null
+                      }
+                      active={selectedDay === day}
+                      count={sessionCountByDay[day]}
                       onClick={() => {
                         setSelectedDay(day);
                         setDayOfWeek(day);
                       }}
-                      className={`inline-flex shrink-0 items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition sm:px-3 sm:py-1 sm:text-xs lg:text-sm ${
-                        selectedDay === day
-                          ? "border-brand-dark/30 bg-brand-dark text-white"
-                          : "border-brand-medium/35 bg-white text-brand-dark/80 hover:bg-zinc-50"
-                      }`}
-                    >
-                      {dayLabels[day].toUpperCase()}
-                    </button>
+                    />
                   ))}
                 </div>
-              </div>
+              </PlanningDaysScrollRow>
             </div>
 
             {visibleItemsByDay.length === 0 ? (
-              <div className="px-5 py-10 text-center text-sm text-brand-dark/60">Aucune séance planifiée.</div>
+              <div className="px-5 py-10 text-center text-sm text-brand-dark/60">
+                Aucune séance pour cette période.
+                <span className="mt-2 block">
+                  Utilisez « Ajouter une séance » pour créer les créneaux du {periodConfig?.periodLabel ?? "calendrier"}.
+                </span>
+              </div>
             ) : (
               <div className="grid grid-cols-1 gap-3 p-4 md:grid-cols-2 sm:p-5 lg:grid-cols-3">
                 {visibleItemsByDay.map((item) => (
@@ -385,7 +630,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
                     }
                     statsBadges={
                       <>
-                        <span className={badgeClasses.availability}>Durée: {item.durationMinutes} min</span>
+                        <span className={badgeClasses.availability}>Durée : {item.durationMinutes} min</span>
                         <span className={badgeClasses.availability}>Places: {item.capacity}</span>
                         <span className={badgeClasses.waitlist}>Attente: {item.waitlistCapacity ?? "—"}</span>
                       </>
@@ -511,7 +756,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
               type="button"
               onClick={() => {
                 resetForm();
-                onChangeViewMode("list");
+                backFromSessionForm();
               }}
               className="rounded-full border border-brand-medium/35 bg-white px-4 py-2 text-sm font-medium text-brand-dark transition hover:bg-zinc-50"
             >
@@ -534,6 +779,18 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
           if (!isDeleting) setItemToDelete(null);
         }}
         onConfirm={() => void handleDelete()}
+      />
+
+      <PlanningHistoricalPresenceDialog
+        open={Boolean(historicalSlot)}
+        onClose={() => {
+          setHistoricalSlot(null);
+          setHistoricalSessionYmd(null);
+        }}
+        slot={historicalSlot}
+        sessionDateYmd={historicalSessionYmd}
+        periodConfig={selectedArchivePeriod}
+        courseLabel={historicalSlot ? courseLabelBySlug[historicalSlot.courseSlug] ?? historicalSlot.courseSlug : ""}
       />
     </div>
   );

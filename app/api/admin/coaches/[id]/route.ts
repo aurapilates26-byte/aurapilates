@@ -2,6 +2,9 @@ import { PrismaClient } from "@prisma/client";
 import { getServerSession } from "next-auth";
 import { z } from "zod";
 import { authOptions } from "@/auth";
+import { coachPayrollModeSchema, dinarsAmountSchema } from "@/lib/admin/coach-api-schema";
+import { isSuperAdminRole } from "@/lib/admin/access";
+import { validateActiveCoachPayroll } from "@/lib/coach-payroll-mode";
 
 const db = new PrismaClient();
 
@@ -32,7 +35,7 @@ const optionalImageSchema = z.preprocess(
   z
     .string()
     .trim()
-    .refine((value) => isValidImageUrl(value), "Image invalide: utilisez une image depuis l'appareil ou une URL valide.")
+    .refine((value) => isValidImageUrl(value), "Image invalide : utilisez une image depuis l'appareil ou une URL valide.")
     .optional()
 );
 
@@ -43,6 +46,9 @@ const updateCoachSchema = z.object({
   description: z.string().trim().max(3000).optional(),
   email: optionalEmailSchema,
   phone: z.string().trim().min(6).max(40).optional(),
+  payrollMode: coachPayrollModeSchema.optional(),
+  sessionCostDinars: dinarsAmountSchema,
+  monthlySalaryDinars: dinarsAmountSchema,
   isActive: z.boolean().optional(),
 });
 
@@ -54,15 +60,36 @@ function errorResponse(message: string, status: number) {
   return Response.json({ error: message }, { status });
 }
 
-async function requireAdmin() {
+async function requireSuperAdminCoach() {
   const session = await getServerSession(authOptions);
   if (!session?.user) return { error: errorResponse("Non autorisé", 401) };
-  if (session.user.role !== "ADMIN") return { error: errorResponse("Accès refusé", 403) };
+  if (!isSuperAdminRole(session.user.role)) {
+    return { error: errorResponse("Accès réservé à la direction", 403) };
+  }
   return { session };
 }
 
+export async function GET(_request: Request, { params }: Params) {
+  const guard = await requireSuperAdminCoach();
+  if ("error" in guard) return guard.error;
+
+  const { id } = await params;
+  const coach = await db.coach.findUnique({ where: { id } });
+  if (!coach) {
+    return errorResponse("Coach introuvable", 404);
+  }
+
+  return Response.json({
+    item: {
+      ...coach,
+      createdAt: coach.createdAt.toISOString(),
+      updatedAt: coach.updatedAt.toISOString(),
+    },
+  });
+}
+
 export async function PUT(request: Request, { params }: Params) {
-  const guard = await requireAdmin();
+  const guard = await requireSuperAdminCoach();
   if ("error" in guard) return guard.error;
 
   const { id } = await params;
@@ -76,6 +103,15 @@ export async function PUT(request: Request, { params }: Params) {
   }
 
   const data = parsed.data;
+  const payrollMode = data.payrollMode ?? "PER_SESSION";
+  const isActive = data.isActive ?? true;
+  const payrollError = validateActiveCoachPayroll({
+    isActive,
+    payrollMode,
+    sessionCostDinars: data.sessionCostDinars ?? null,
+    monthlySalaryDinars: data.monthlySalaryDinars ?? null,
+  });
+  if (payrollError) return errorResponse(payrollError, 400);
 
   try {
     const item = await db.coach.update({
@@ -87,7 +123,10 @@ export async function PUT(request: Request, { params }: Params) {
         description: data.description ?? null,
         email: data.email ?? null,
         phone: data.phone ?? null,
-        isActive: data.isActive ?? true,
+        payrollMode,
+        sessionCostDinars: data.sessionCostDinars ?? null,
+        monthlySalaryDinars: data.monthlySalaryDinars ?? null,
+        isActive,
       },
     });
     return Response.json({ item });
@@ -104,7 +143,7 @@ export async function PUT(request: Request, { params }: Params) {
 }
 
 export async function DELETE(_request: Request, { params }: Params) {
-  const guard = await requireAdmin();
+  const guard = await requireSuperAdminCoach();
   if ("error" in guard) return guard.error;
 
   const { id } = await params;

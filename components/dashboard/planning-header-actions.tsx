@@ -1,81 +1,102 @@
 "use client";
 
-import { useEffect, useState, type RefObject } from "react";
-import { SelectMenu } from "@/components/ui";
-import type { PlanningBookingWindow } from "@/types/admin/planning";
-import type { PlanningManagerHandle } from "./planning-manager";
+import { useEffect } from "react";
+import { usePlanningPeriodStore } from "@/store/planning-period-store";
+import type { PlanningViewMode } from "@/types/admin/planning";
 
 type PlanningHeaderActionsProps = {
-  managerRef: RefObject<PlanningManagerHandle | null>;
-  viewMode: "list" | "form";
-  onToggleViewMode: () => void;
+  viewMode: PlanningViewMode;
+  showAddSession?: boolean;
+  onChangeViewMode: (mode: PlanningViewMode) => void;
+  onOpenSessionForm: () => void;
+  onBackFromSessionForm: () => void;
 };
 
-export function PlanningHeaderActions({ managerRef, viewMode, onToggleViewMode }: PlanningHeaderActionsProps) {
-  const [bookingWindow, setBookingWindow] = useState<PlanningBookingWindow>("WEEKLY");
-  const [isSavingWindow, setIsSavingWindow] = useState(false);
+const btnBase =
+  "inline-flex min-h-[42px] min-w-0 flex-1 items-center justify-center rounded-full px-4 py-2 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-medium/40 sm:flex-initial sm:min-w-[140px]";
+
+const btnSelected =
+  "border border-brand-dark/30 bg-brand-dark text-white shadow-sm hover:opacity-90";
+const btnIdle = "border border-brand-medium/35 bg-white text-brand-dark hover:bg-zinc-50";
+
+export function PlanningHeaderActions({
+  viewMode,
+  showAddSession = true,
+  onChangeViewMode,
+  onOpenSessionForm,
+  onBackFromSessionForm,
+}: PlanningHeaderActionsProps) {
+  const fetchConfig = usePlanningPeriodStore((s) => s.fetchConfig);
 
   useEffect(() => {
-    let isMounted = true;
-    void (async () => {
-      const response = await fetch("/api/admin/planning/window", { cache: "no-store" });
-      if (!response.ok) return;
-      const data = (await response.json()) as { bookingWindow: PlanningBookingWindow };
-      if (isMounted) setBookingWindow(data.bookingWindow);
-    })();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
+    void fetchConfig({ source: "admin" });
+  }, [fetchConfig]);
 
-  const updateBookingWindow = async (nextValue: PlanningBookingWindow) => {
-    setBookingWindow(nextValue);
-    setIsSavingWindow(true);
-    try {
-      const response = await fetch("/api/admin/planning/window", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bookingWindow: nextValue }),
-      });
-      if (!response.ok) throw new Error("Unable to save booking window");
-      managerRef.current?.refresh();
-    } catch {
-      // Keep optimistic value in UI; next refresh will re-sync from server.
-    } finally {
-      setIsSavingWindow(false);
-    }
-  };
+  const isList = viewMode === "list";
+  const isPeriod = viewMode === "period-form";
+  const isSession = viewMode === "session-form";
+
+  const openPeriod = () => onChangeViewMode("period-form");
+  const backToList = () => onChangeViewMode("list");
+
+  const periodLabel = isPeriod ? "Planning" : "Période";
+  const sessionLabel = isList ? "Ajouter une séance" : isSession ? "Revenir au planning" : "Ajouter une séance";
+  const sessionShort = isList ? "Ajouter" : "Planning";
+
+  const periodBtnClass = `${btnBase} ${isPeriod ? btnSelected : btnIdle}`;
+  const sessionBtnClass = `${btnBase} ${isSession ? btnSelected : btnIdle}`;
 
   return (
-    <>
-      <div className="w-[180px]">
-        <SelectMenu
-          id="planning-global-window"
-          value={bookingWindow}
-          onChange={(value) => void updateBookingWindow(value as PlanningBookingWindow)}
-          options={[
-            { value: "WEEKLY", label: "Hebdomadaire" },
-            { value: "FIFTEEN_DAYS", label: "15 jours" },
-            { value: "ONE_MONTH", label: "1 mois" },
-          ]}
-          className={isSavingWindow ? "opacity-70" : ""}
-        />
-      </div>
-      <button
-        type="button"
-        onClick={() => managerRef.current?.refresh()}
-        className="rounded-full border border-brand-medium/35 bg-white px-4 py-2 text-sm font-medium text-brand-dark transition hover:bg-zinc-50"
-      >
-        Rafraichir
-      </button>
-      <button
-        type="button"
-        onClick={onToggleViewMode}
-        className="rounded-full bg-brand-dark px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
-      >
-        {viewMode === "form" ? "Revenir au planning" : "Ajouter une séance"}
-      </button>
-    </>
+    <div
+      className="flex w-full min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end"
+      role="group"
+      aria-label="Actions planning"
+    >
+      {isPeriod ? (
+        <button
+          type="button"
+          onClick={backToList}
+          className={periodBtnClass}
+          aria-pressed="true"
+          title="Revenir au planning"
+        >
+          {periodLabel}
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={openPeriod}
+          className={periodBtnClass}
+          aria-pressed="false"
+          title="Configurer la période"
+        >
+          {periodLabel}
+        </button>
+      )}
+
+      {showAddSession ? (
+        isSession ? (
+          <button
+            type="button"
+            onClick={onBackFromSessionForm}
+            className={sessionBtnClass}
+            aria-pressed="true"
+          >
+            <span className="sm:hidden">{sessionShort}</span>
+            <span className="hidden sm:inline">{sessionLabel}</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={onOpenSessionForm}
+            className={sessionBtnClass}
+            aria-pressed="false"
+          >
+            <span className="sm:hidden">{sessionShort}</span>
+            <span className="hidden sm:inline">{sessionLabel}</span>
+          </button>
+        )
+      ) : null}
+    </div>
   );
 }
-

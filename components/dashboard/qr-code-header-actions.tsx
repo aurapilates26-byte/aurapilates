@@ -75,15 +75,15 @@ export function QrCodeHeaderActions() {
         parts.push(`${count} image(s) pour ${totalDb} code(s) en base (export complet).`);
       }
       if (regenerated && Number(regenerated) > 0) {
-        parts.push(`${regenerated} generee(s) a la volee (fichier absent sur le serveur).`);
+        parts.push(`${regenerated} générée(s) à la volée (fichier absent sur le serveur).`);
       }
       if (skipped && Number(skipped) > 0) {
-        parts.push(`${skipped} code(s) non inclus (erreur de generation).`);
+        parts.push(`${skipped} code(s) non inclus (erreur de génération).`);
       }
       toast({
         variant: "success",
-        title: "Archive ZIP telechargee",
-        description: parts.length > 0 ? parts.join(" ") : "Telechargement termine.",
+        title: "Archive ZIP téléchargée",
+        description: parts.length > 0 ? parts.join(" ") : "Téléchargement terminé.",
       });
     } catch (error) {
       setDownloadError(error instanceof Error ? error.message : "Téléchargement impossible.");
@@ -105,8 +105,9 @@ export function QrCodeHeaderActions() {
         onClick={() => void handleDownloadZip()}
         disabled={isDownloading}
         className="rounded-full border border-brand-medium/35 bg-white px-4 py-2 text-sm font-medium text-brand-dark transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+        title="Télécharger tous les QR codes (ZIP)"
       >
-        {isDownloading ? "Préparation du ZIP…" : "Télécharger tous les QR (ZIP)"}
+        {isDownloading ? "Préparation du ZIP…" : "Télécharger ZIP"}
       </button>
 
       {downloadError ? (
@@ -118,9 +119,9 @@ export function QrCodeHeaderActions() {
       {isOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4">
           <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
-            <h3 className="text-xl font-semibold text-brand-dark">Generer des QR codes</h3>
+            <h3 className="text-xl font-semibold text-brand-dark">Générer des QR codes</h3>
             <p className="mt-2 text-sm text-brand-dark/70">
-              Definissez la quantite et confirmez. Les images seront stockees dans `public/qrcode`.
+              Définissez la quantité et confirmez. Les images seront stockées dans `public/qrcode`.
             </p>
 
             <div className="mt-5 space-y-4">
@@ -137,7 +138,7 @@ export function QrCodeHeaderActions() {
               </div>
               <div>
                 <label htmlFor="qr-quantity" className="text-sm font-medium text-brand-dark">
-                  Quantite
+                  Quantité
                 </label>
                 <input
                   id="qr-quantity"

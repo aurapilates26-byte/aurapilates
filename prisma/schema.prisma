@@ -9,6 +9,8 @@ datasource db {
 
 enum UserRole {
   ADMIN
+  /** Direction / gérant : toutes les pages admin dont caisse et vue d'ensemble. */
+  SUPER_ADMIN
   MEMBRE
 }
 
@@ -41,11 +43,58 @@ enum BookingWindow {
   ONE_MONTH
 }
 
+/// Rémunération coach en caisse : à la séance (planning) ou forfait mensuel fixe.
+enum CoachPayrollMode {
+  PER_SESSION
+  PER_MONTH
+}
+
 enum ReservationStatus {
   BOOKED
   WAITLIST
   CANCELLED
   ATTENDED
+}
+
+enum ReservationSource {
+  MEMBER
+  ADMIN
+}
+
+/// Encaissement pack : source de vérité pour les entrées caisse (ventes pack adhérents).
+enum PackPaymentSource {
+  AUTO
+  MANUAL
+}
+
+/// Statut d'inscription pack : acompte en cours ou adhérent actif (liste principale).
+enum MemberEnrollmentStatus {
+  ACTIVE
+  DEPOSIT_PENDING
+}
+
+/// Nature de l'encaissement pack (historique caisse).
+enum PackPaymentKind {
+  FULL
+  DEPOSIT
+  BALANCE
+}
+
+/// Moyen d'encaissement (espèce, chèque, TPE).
+enum PackPaymentMethod {
+  CASH
+  CHECK
+  TPE
+}
+
+enum PersonalDiscountType {
+  PERCENT
+  AMOUNT
+}
+
+enum CashExpenseKind {
+  FIXED
+  VARIABLE
 }
 
 model User {
@@ -57,9 +106,12 @@ model User {
   role           UserRole  @default(MEMBRE)
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
-  sessions       Session[]
-  memberProfile  Member?
-  createdQrCodes QrCode[]  @relation("QrCodeCreatedBy")
+  sessions          Session[]
+  memberProfile     Member?
+  createdQrCodes    QrCode[]       @relation("QrCodeCreatedBy")
+  createdReservations Reservation[] @relation("ReservationCreatedBy")
+  recordedPackPayments PackPayment[] @relation("PackPaymentRecordedBy")
+  recordedCashExpenses CashExpense[]  @relation("CashExpenseRecordedBy")
 
   @@map("users")
 }
@@ -85,6 +137,12 @@ model Member {
   birthDate       DateTime?
   packId          String?
   packStartedAt   DateTime?
+  personalDiscountType  PersonalDiscountType?
+  personalDiscountValue Int?
+  personalDiscountReason String?
+  enrollmentStatus       MemberEnrollmentStatus @default(ACTIVE)
+  /// Montant total attendu pour le pack en cours (acompte + solde).
+  expectedPackAmountDinars Int?
   isActive        Boolean  @default(true)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -95,9 +153,26 @@ model Member {
   reservations    Reservation[]
   attendance      Attendance[]
   packBalances    MemberPackBalance[]
+  packPayments    PackPayment[]
+  pendingPacks    MemberPendingPack[]
 
   @@index([packId])
   @@map("members")
+}
+
+/// Pack acheté en avance : activé automatiquement quand le pack en cours est terminé (séances épuisées ou expiré).
+model MemberPendingPack {
+  id        String   @id @default(cuid())
+  memberId  String
+  packId    String
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  pack   Pack   @relation(fields: [packId], references: [id], onDelete: Cascade)
+
+  @@index([memberId, position])
+  @@map("member_pending_packs")
 }
 
 model MemberPackBalance {
@@ -118,6 +193,10 @@ model MemberPackBalance {
   @@map("member_pack_balances")
 }
 
+enum PackDiscountType {
+  PERCENT
+}
+
 model Pack {
   id           String   @id @default(cuid())
   category     String?
@@ -135,8 +214,99 @@ model Pack {
   features     PackFeature[]
   courseQuotas PackCourseQuota[]
   memberBalances MemberPackBalance[]
+  promotionTargets PackPromotionPack[]
+  packPayments     PackPayment[]
+  pendingForMembers MemberPendingPack[]
 
   @@map("packs")
+}
+
+/// Vente / encaissement d'un pack adhérent (entrée caisse). Montants en dinars entiers.
+model PackPayment {
+  id               String            @id @default(cuid())
+  memberId         String
+  packId           String
+  /// Montant réellement encaissé (après promo éventuelle).
+  amountDinars     Int
+  /// Prix catalogue au moment du paiement (sans promo), pour audit.
+  listPriceDinars  Int?
+  /// Total attendu pour la vente (acompte + solde), renseigné pour DEPOSIT/BALANCE.
+  packSaleTotalDinars Int?
+  /// Remise personnalisée appliquée au membre (optionnelle).
+  personalDiscountType  PersonalDiscountType?
+  /// Valeur brute saisie (%, ou montant en DT selon le type).
+  personalDiscountValue Int?
+  /// Montant réellement déduit par la remise personnalisée.
+  personalDiscountDinars Int @default(0)
+  paidAt           DateTime          @db.Date
+  source           PackPaymentSource
+  paymentKind      PackPaymentKind   @default(FULL)
+  paymentMethod    PackPaymentMethod?
+  promotionId      String?
+  note             String?
+  recordedByUserId String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  member      Member         @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  pack        Pack           @relation(fields: [packId], references: [id], onDelete: Restrict)
+  promotion   PackPromotion? @relation(fields: [promotionId], references: [id], onDelete: SetNull)
+  recordedBy  User?          @relation("PackPaymentRecordedBy", fields: [recordedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([paidAt])
+  @@index([memberId, paidAt])
+  @@index([packId, paidAt])
+  @@map("pack_payments")
+}
+
+/// Charge studio (saisie manuelle — loyer, fournitures, etc.).
+model CashExpense {
+  id               String           @id @default(cuid())
+  kind             CashExpenseKind
+  label            String
+  amountDinars     Int
+  expenseDate      DateTime         @db.Date
+  note             String?
+  recordedByUserId String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  recordedBy User? @relation("CashExpenseRecordedBy", fields: [recordedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([expenseDate])
+  @@map("cash_expenses")
+}
+
+model PackPromotion {
+  id            String           @id @default(cuid())
+  label         String?
+  appliesToAll  Boolean          @default(false)
+  discountType  PackDiscountType @default(PERCENT)
+  discountValue Int
+  startsAt      DateTime         @db.Date
+  endsAt        DateTime         @db.Date
+  isActive      Boolean          @default(true)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  targetPacks   PackPromotionPack[]
+  packPayments  PackPayment[]
+
+  @@index([startsAt, endsAt])
+  @@index([isActive])
+  @@map("pack_promotions")
+}
+
+model PackPromotionPack {
+  promotionId String
+  packId      String
+  createdAt   DateTime @default(now())
+
+  promotion PackPromotion @relation(fields: [promotionId], references: [id], onDelete: Cascade)
+  pack      Pack          @relation(fields: [packId], references: [id], onDelete: Cascade)
+
+  @@id([promotionId, packId])
+  @@index([packId])
+  @@map("pack_promotion_packs")
 }
 
 model PackCourseQuota {
@@ -170,20 +340,63 @@ model PackFeature {
 }
 
 model Coach {
-  id          String   @id @default(cuid())
-  imageUrl    String?
-  firstName   String
-  lastName    String
-  description String?
-  email       String?  @unique
-  phone       String?
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  planning    Planning[]
+  id                String   @id @default(cuid())
+  imageUrl          String?
+  firstName         String
+  lastName          String
+  description       String?
+  email             String?  @unique
+  phone             String?
+  /// Coût studio par séance (DT) — si payrollMode = PER_SESSION.
+  sessionCostDinars   Int?
+  /// Forfait mensuel (DT) — si payrollMode = PER_MONTH (charge fixe, indépendant du planning).
+  monthlySalaryDinars Int?
+  payrollMode         CoachPayrollMode @default(PER_SESSION)
+  isActive            Boolean          @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  planning          Planning[]
 
   @@index([lastName, firstName])
   @@map("coaches")
+}
+
+enum DraftPublicationPhase {
+  SCHEDULED
+  PARTIAL
+}
+
+/// Période planning studio (singleton) — date de début + durée (7 / 15 / 30 j).
+model StudioPlanningPeriod {
+  id              String        @id @default("singleton")
+  bookingWindow   BookingWindow @default(WEEKLY)
+  periodStartDate DateTime      @db.Date
+  /// Période suivante en préparation (invisible adhérents jusqu'à draftPublishAt).
+  draftPeriodStartDate DateTime? @db.Date
+  draftBookingWindow   BookingWindow?
+  /// Samedi 13h : ouverture lun–sam du brouillon.
+  draftPublishAt       DateTime?
+  /// Dimanche 13h : ouverture du dimanche brouillon + bascule complète.
+  draftSundayPublishAt DateTime?
+  draftPublicationPhase DraftPublicationPhase?
+  /// Règle membre : annulation tardive (< 6 h) = séance non rendue. Si false, toute annulation rend la séance.
+  lateCancellationRuleEnabled Boolean @default(true)
+  updatedAt       DateTime      @updatedAt
+
+  @@map("studio_planning_period")
+}
+
+/// Historique des périodes planning publiées (pour caisse / paie coach sur mois passés).
+model StudioPlanningPeriodArchive {
+  id              String        @id @default(cuid())
+  bookingWindow   BookingWindow
+  periodStartDate DateTime      @db.Date
+  periodEndDate   DateTime      @db.Date
+  archivedAt      DateTime      @default(now())
+
+  @@unique([periodStartDate])
+  @@index([periodStartDate, periodEndDate])
+  @@map("studio_planning_period_archive")
 }
 
 model Planning {
@@ -191,13 +404,17 @@ model Planning {
   courseSlug       String
   coachId          String?
   dayOfWeek        DayOfWeek
-  level            PlanningLevel @default(ALL_LEVELS)
+  /// Jour calendaire de la période à la création (une seule séance ce jour-là). Null = récurrent sur tous les jours correspondants dans la période.
+  anchorSessionYmd DateTime? @db.Date
+  level            PlanningLevel?
   bookingWindow    BookingWindow @default(WEEKLY)
   startTime        String    @default("00:00")
   endTime          String    @default("00:00")
   durationMinutes  Int
   capacity         Int
   waitlistCapacity Int?
+  /// Créneau brouillon (période suivante) — masqué adhérents / site jusqu'à publication.
+  isDraft          Boolean   @default(false)
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
   coach            Coach?    @relation(fields: [coachId], references: [id], onDelete: SetNull)
@@ -208,6 +425,7 @@ model Planning {
   @@index([coachId])
   @@index([courseSlug])
   @@index([dayOfWeek, startTime])
+  @@index([isDraft])
   @@map("planning")
 }
 
@@ -217,17 +435,21 @@ model Reservation {
   planningId  String
   sessionDate DateTime          @db.Date
   status      ReservationStatus @default(BOOKED)
+  source      ReservationSource?
+  createdByUserId String?
   packRefundedAt DateTime?
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
   member      Member            @relation(fields: [memberId], references: [id], onDelete: Cascade)
   planning    Planning          @relation(fields: [planningId], references: [id], onDelete: Cascade)
+  createdByUser User?           @relation("ReservationCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   attendance  Attendance?
   checkIn     CheckIn?
 
   @@unique([memberId, planningId, sessionDate])
   @@index([planningId, sessionDate])
   @@index([memberId, sessionDate])
+  @@index([createdByUserId])
   @@map("reservations")
 }
 

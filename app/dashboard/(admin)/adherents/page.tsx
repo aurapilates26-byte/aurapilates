@@ -1,8 +1,8 @@
 import { AdminMembersClient } from "@/components/dashboard/admin-members-client";
-import { requireRole } from "@/lib/auth";
+import { requireStaff } from "@/lib/auth";
 
 export default async function AdminMembersPage() {
-  await requireRole("ADMIN");
+  await requireStaff();
 
   return <AdminMembersClient />;
 }

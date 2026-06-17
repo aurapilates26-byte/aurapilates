@@ -1,8 +1,17 @@
 import Image from "next/image";
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/auth";
 import { LoginForm } from "@/components/auth/login-form";
+import { postLoginPath } from "@/lib/admin/access";
 
-export default function ConnexionPage() {
+export default async function ConnexionPage() {
+  const session = await getServerSession(authOptions);
+  if (session?.user) {
+    redirect(postLoginPath(session.user.role));
+  }
+
   return (
     <section className="flex min-h-dvh items-center bg-zinc-50 px-4 py-4 text-brand-dark md:px-8 md:py-6">
       <div className="mx-auto grid w-full max-w-6xl grid-cols-1 overflow-hidden rounded-2xl border border-brand-medium/30 bg-white shadow-sm lg:grid-cols-2">
@@ -39,16 +48,13 @@ export default function ConnexionPage() {
 
             <h2 className="mt-4 text-3xl font-semibold">Se connecter</h2>
             <p className="mt-2 text-sm text-brand-dark/75">
-              Entrez vos informations pour accéder à votre compte.
+              Un seul formulaire : téléphone ou email, puis mot de passe ou clé QR.
             </p>
 
             <LoginForm />
 
             <p className="mt-6 text-sm text-brand-dark/80">
-              Vous n&apos;avez pas encore de compte ?{" "}
-              <Link href="/inscription" className="font-semibold text-brand-dark hover:opacity-75">
-                S&apos;inscrire
-              </Link>
+              Pas encore adhérent ? Contactez le studio pour créer votre dossier et recevoir votre code QR.
             </p>
           </div>
         </div>

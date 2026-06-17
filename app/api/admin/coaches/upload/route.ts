@@ -3,6 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/auth";
+import { isSuperAdminRole } from "@/lib/admin/access";
 
 export const runtime = "nodejs";
 
@@ -10,10 +11,12 @@ function errorResponse(message: string, status: number) {
   return Response.json({ error: message }, { status });
 }
 
-async function requireAdmin() {
+async function requireSuperAdminUpload() {
   const session = await getServerSession(authOptions);
   if (!session?.user) return { error: errorResponse("Unauthorized", 401) };
-  if (session.user.role !== "ADMIN") return { error: errorResponse("Forbidden", 403) };
+  if (!isSuperAdminRole(session.user.role)) {
+    return { error: errorResponse("Accès réservé à la direction", 403) };
+  }
   return { session };
 }
 
@@ -26,7 +29,7 @@ function extensionFromMimeType(type: string) {
 }
 
 export async function POST(request: Request) {
-  const guard = await requireAdmin();
+  const guard = await requireSuperAdminUpload();
   if ("error" in guard) return guard.error;
 
   const formData = await request.formData();
@@ -36,10 +39,10 @@ export async function POST(request: Request) {
     return errorResponse("Aucun fichier image fourni.", 400);
   }
   if (!file.type.startsWith("image/")) {
-    return errorResponse("Le fichier doit etre une image.", 400);
+    return errorResponse("Le fichier doit être une image.", 400);
   }
   if (file.size > 2 * 1024 * 1024) {
-    return errorResponse("L'image depasse 2MB.", 400);
+    return errorResponse("L'image dépasse 2 Mo.", 400);
   }
 
   const ext = extensionFromMimeType(file.type) || path.extname(file.name) || ".jpg";

@@ -1,6 +1,11 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import QRCode from "qrcode";
+import {
+  SITE_QR_FILE_ID,
+  ensureSiteWebQrCodeFile,
+  siteQrPngPath,
+} from "@/lib/admin/site-qr-code";
 
 type Params = {
   params: Promise<{ publicId: string }>;
@@ -17,6 +22,18 @@ function buildScanUrl(publicId: string) {
 
 export async function GET(_request: Request, { params }: Params) {
   const { publicId } = await params;
+
+  // QR site web : lien direct https://aurapilates.tn (pas /id/… comme les QR adhérents).
+  if (publicId === SITE_QR_FILE_ID) {
+    await ensureSiteWebQrCodeFile({ force: true });
+    const buffer = await readFile(siteQrPngPath());
+    return new Response(new Uint8Array(buffer), {
+      headers: {
+        "Content-Type": "image/png",
+        "Cache-Control": "no-store",
+      },
+    });
+  }
 
   // Serve from disk if already generated.
   const outputDir = join(process.cwd(), "public", "qrcode");

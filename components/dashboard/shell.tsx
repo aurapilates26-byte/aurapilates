@@ -1,17 +1,24 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { MemberBookingRealtime } from "@/components/dashboard/member-booking-realtime";
+import { DashboardRoleProvider } from "@/components/dashboard/dashboard-role-context";
 import { DashboardSidebar } from "@/components/dashboard/sidebar";
+import {
+  canAccessDashboardPath,
+  staffLandingPath,
+  type DashboardRole,
+} from "@/lib/admin/access";
 
 type DashboardShellProps = {
-  role: "ADMIN" | "MEMBRE";
+  role: DashboardRole;
   children: React.ReactNode;
 };
 
 export function DashboardShell({ role, children }: DashboardShellProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   useEffect(() => {
@@ -25,7 +32,15 @@ export function DashboardShell({ role, children }: DashboardShellProps) {
     return () => window.removeEventListener("dashboard:open-sidebar", onOpen as EventListener);
   }, []);
 
+  useEffect(() => {
+    if (!canAccessDashboardPath(pathname, role)) {
+      const target = role === "MEMBRE" ? "/dashboard" : staffLandingPath(role);
+      router.replace(target);
+    }
+  }, [pathname, role, router]);
+
   return (
+    <DashboardRoleProvider role={role}>
     <div className="min-h-screen bg-zinc-50 text-brand-dark">
       {role === "MEMBRE" ? <MemberBookingRealtime /> : null}
       <div className="flex min-h-screen w-full">
@@ -47,10 +62,11 @@ export function DashboardShell({ role, children }: DashboardShellProps) {
           </div>
         ) : null}
 
-        <div className="flex min-h-screen flex-1 flex-col">
-          <main className="flex-1 px-4 pb-6 pt-0 sm:px-6 lg:px-8 xl:px-10">{children}</main>
+        <div className="flex min-h-screen min-w-0 flex-1 flex-col">
+          <main className="min-w-0 flex-1 overflow-x-hidden px-4 pb-6 pt-0 sm:px-6 lg:px-8 xl:px-10">{children}</main>
         </div>
       </div>
     </div>
+    </DashboardRoleProvider>
   );
 }

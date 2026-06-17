@@ -70,7 +70,7 @@ export function SelectMenu<TValue extends string>({
           }`}
         >
           <span className="truncate text-left">
-            {selected?.label ?? placeholder ?? "Selectionner"}
+            {selected?.label ?? placeholder ?? "Sélectionner"}
           </span>
           <span className="ml-3 text-brand-dark/50">▾</span>
         </button>

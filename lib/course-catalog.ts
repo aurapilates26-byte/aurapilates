@@ -1,4 +1,4 @@
-export const COURSE_CATEGORIES = ["Pilates", "Yoga", "Danse"] as const;
+export const COURSE_CATEGORIES = ["Pilates", "Yoga", "Danse", "Coaching"] as const;
 
 export type CourseCategory = (typeof COURSE_CATEGORIES)[number];
 
@@ -13,6 +13,7 @@ export const catalogCourses: CatalogCourse[] = [
   { slug: "mat-pilates", title: "Mat pilates", category: "Pilates" },
   { slug: "cours-de-yoga", title: "Yoga", category: "Yoga" },
   { slug: "cours-de-dance", title: "Danse", category: "Danse" },
+  { slug: "coaching-prive", title: "Coaching privé", category: "Coaching" },
 ];
 
 const slugToCourse = new Map(catalogCourses.map((c) => [c.slug, c]));

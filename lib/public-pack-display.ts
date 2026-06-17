@@ -1,3 +1,5 @@
+import type { PackDisplayPricing } from "@/lib/pack-pricing";
+
 /**
  * Packs page publique : prix affiché tel qu’en base (entier en dinars, colonne `priceCents`).
  */
@@ -5,6 +7,22 @@
 export function formatPackPriceDt(priceCents: number | null): string | null {
   if (priceCents == null) return null;
   return `${priceCents} DT`;
+}
+
+export function formatPackPricingDisplay(pricing: PackDisplayPricing): {
+  priceDisplay: string | null;
+  originalPriceDisplay: string | null;
+  hasDiscount: boolean;
+  discountPercent: number | null;
+} {
+  const final = pricing.finalPriceDinars;
+  const original = pricing.originalPriceDinars;
+  return {
+    priceDisplay: final != null ? formatPackPriceDt(final) : null,
+    originalPriceDisplay: original != null ? formatPackPriceDt(original) : null,
+    hasDiscount: pricing.hasDiscount,
+    discountPercent: pricing.discountPercent,
+  };
 }
 
 /** Affiche la durée telle qu’en base (ex. « 50 jours », « 12 mois »). */

@@ -1,6 +1,7 @@
 import { getServerSession } from "next-auth";
 import { z } from "zod";
 import { authOptions } from "@/auth";
+import { isStaffRole } from "@/lib/admin/access";
 import { prisma } from "@/lib/prisma";
 
 function errorResponse(message: string, status: number) {
@@ -9,42 +10,48 @@ function errorResponse(message: string, status: number) {
 
 const querySchema = z.object({
   q: z.string().trim().min(2),
+  /** Inclure les adhérents inactifs (saisie historique). */
+  historical: z.enum(["1", "true"]).optional(),
 });
 
 export async function GET(request: Request) {
   const session = await getServerSession(authOptions);
-  if (!session?.user || session.user.role !== "ADMIN") {
+  if (!session?.user || !isStaffRole(session.user.role)) {
     return errorResponse("Forbidden", 403);
   }
 
   const url = new URL(request.url);
-  const parsed = querySchema.safeParse({ q: url.searchParams.get("q") ?? "" });
+  const parsed = querySchema.safeParse({
+    q: url.searchParams.get("q") ?? "",
+    historical: url.searchParams.get("historical") ?? undefined,
+  });
   if (!parsed.success) return errorResponse("Invalid query parameters", 400);
 
   const q = parsed.data.q;
+  const includeInactive = parsed.data.historical === "1" || parsed.data.historical === "true";
   const tokens = q
     .split(/\s+/)
     .map((t) => t.trim())
     .filter(Boolean)
     .slice(0, 4);
 
-  const orParts =
-    tokens.length > 0
-      ? tokens.flatMap((t) => [
-          { firstName: { contains: t, mode: "insensitive" as const } },
-          { lastName: { contains: t, mode: "insensitive" as const } },
-          { phone: { contains: t, mode: "insensitive" as const } },
-        ])
-      : [
-          { firstName: { contains: q, mode: "insensitive" as const } },
-          { lastName: { contains: q, mode: "insensitive" as const } },
-          { phone: { contains: q, mode: "insensitive" as const } },
-        ];
+  const tokenClause = (token: string) => ({
+    OR: [
+      { firstName: { contains: token, mode: "insensitive" as const } },
+      { lastName: { contains: token, mode: "insensitive" as const } },
+      { phone: { contains: token, mode: "insensitive" as const } },
+    ],
+  });
+
+  const nameFilter =
+    tokens.length > 1
+      ? { AND: tokens.map((t) => tokenClause(t)) }
+      : tokenClause(tokens[0] ?? q);
 
   const items = await prisma.member.findMany({
     where: {
-      isActive: true,
-      OR: orParts,
+      ...(includeInactive ? {} : { isActive: true }),
+      ...nameFilter,
     },
     select: {
       id: true,

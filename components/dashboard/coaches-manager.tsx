@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import { useToast } from "@/components/ui/toast-provider";
@@ -10,6 +11,24 @@ import type { AdminCoach } from "@/types/admin/coach";
 export type CoachesManagerHandle = {
   refresh: () => void;
 };
+
+const coachDetailLinkClass =
+  "inline-flex h-8 w-8 items-center justify-center rounded-lg border border-brand-medium/30 bg-white text-brand-dark/80 transition hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-medium/30";
+
+function CoachDetailLink({ coachId }: { coachId: string }) {
+  return (
+    <Link
+      href={`/dashboard/coachs/${coachId}`}
+      aria-label="Voir la fiche coach"
+      title="Voir la fiche"
+      className={coachDetailLinkClass}
+    >
+      <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current" aria-hidden="true">
+        <path d="M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z" />
+      </svg>
+    </Link>
+  );
+}
 
 type CoachesResponse = {
   items: AdminCoach[];
@@ -113,7 +132,7 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
   const handleSubmit = async () => {
     setFormError(null);
     if (!firstName.trim() || !lastName.trim()) {
-      setFormError("Nom et prenom sont obligatoires.");
+      setFormError("Le nom et le prénom sont obligatoires.");
       return;
     }
     if (email.trim() && !isValidEmail(email.trim())) {
@@ -222,7 +241,7 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
       return;
     }
     if (file.size > 2 * 1024 * 1024) {
-      setFormError("L'image depasse 2MB.");
+      setFormError("L'image dépasse 2 Mo.");
       return;
     }
     const reader = new FileReader();
@@ -312,9 +331,13 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
                               </div>
                             )}
                           </div>
-                          <p className="truncate font-semibold text-brand-dark">
+                          <Link
+                            href={`/dashboard/coachs/${coach.id}`}
+                            className="truncate font-semibold text-brand-dark hover:underline"
+                            title="Voir la fiche"
+                          >
                             {coach.firstName} {coach.lastName}
-                          </p>
+                          </Link>
                         </div>
                         <span
                           className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
@@ -326,46 +349,51 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
                           {coach.isActive ? "Actif" : "Inactif"}
                         </span>
                       </div>
-                      <p className="text-xs text-brand-dark/75">Email: {coach.email ?? "—"}</p>
                       <p className="text-xs text-brand-dark/75">Tel: {coach.phone ?? "—"}</p>
-                      <p className="text-xs text-brand-dark/75">Description: {coach.description ?? "—"}</p>
                       <div className="flex items-center justify-end gap-2 pt-1">
                         <button
                           type="button"
                           onClick={() => handleStartEdit(coach)}
-                          className="rounded-full border border-brand-medium/30 bg-white px-3 py-1.5 text-xs font-semibold text-brand-dark/80 transition hover:bg-zinc-50"
+                          aria-label="Modifier"
+                          title="Modifier"
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-brand-medium/30 bg-white text-brand-dark/80 transition hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-medium/30"
                         >
-                          Modifier
+                          <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current" aria-hidden="true">
+                            <path d="M3 17.25V21h3.75L17.8 9.95l-3.75-3.75L3 17.25zm2.92 2.83H5v-.92l9.06-9.06.92.92L5.92 20.08zM20.7 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+                          </svg>
                         </button>
                         <button
                           type="button"
                           onClick={() => setCoachToDelete(coach)}
-                          className="rounded-full border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50"
+                          aria-label="Supprimer"
+                          title="Supprimer"
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 transition hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200"
                         >
-                          Supprimer
+                          <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current" aria-hidden="true">
+                            <path d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z" />
+                          </svg>
                         </button>
+                        <CoachDetailLink coachId={coach.id} />
                       </div>
                     </article>
                   ))}
                 </div>
 
                 <div className="hidden overflow-x-auto lg:block">
-                  <table className="w-full min-w-[980px]">
+                  <table className="w-full min-w-[780px]">
                     <thead>
-                      <tr className="border-b border-brand-medium/15 bg-zinc-50/60 text-left text-xs font-semibold text-brand-dark/70">
-                        <th className="px-5 py-3">Coach</th>
-                        <th className="px-4 py-3">Email</th>
-                        <th className="px-4 py-3">Téléphone</th>
-                        <th className="px-4 py-3">Description</th>
-                        <th className="px-4 py-3">Statut</th>
-                        <th className="px-4 py-3 text-right">Action</th>
+                      <tr className="border-b border-brand-medium/15 bg-zinc-50/60 text-xs font-semibold text-brand-dark/70">
+                        <th className="px-5 py-3 text-center">Coach</th>
+                        <th className="px-4 py-3 text-center">Téléphone</th>
+                        <th className="px-4 py-3 text-center">Statut</th>
+                        <th className="px-4 py-3 text-center">Action</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-brand-medium/15">
                       {visibleItems.map((coach) => (
                         <tr key={coach.id} className="text-sm">
-                          <td className="px-5 py-4">
-                            <div className="flex items-center gap-3">
+                          <td className="px-5 py-4 text-center">
+                            <div className="flex items-center justify-center gap-3">
                               <div className="h-10 w-10 shrink-0 overflow-hidden rounded-full border border-brand-medium/20 bg-zinc-50">
                                 {coach.imageUrl ? (
                                   <img
@@ -380,15 +408,17 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
                                   </div>
                                 )}
                               </div>
-                              <p className="font-semibold text-brand-dark">
+                              <Link
+                                href={`/dashboard/coachs/${coach.id}`}
+                                className="font-semibold text-brand-dark hover:underline"
+                                title="Voir la fiche"
+                              >
                                 {coach.firstName} {coach.lastName}
-                              </p>
+                              </Link>
                             </div>
                           </td>
-                          <td className="px-4 py-4 text-brand-dark/80">{coach.email ?? "—"}</td>
-                          <td className="px-4 py-4 text-brand-dark/80">{coach.phone ?? "—"}</td>
-                          <td className="px-4 py-4 text-brand-dark/80">{coach.description ?? "—"}</td>
-                          <td className="px-4 py-4">
+                          <td className="px-4 py-4 text-center text-brand-dark/80">{coach.phone ?? "—"}</td>
+                          <td className="px-4 py-4 text-center">
                             <span
                               className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
                                 coach.isActive
@@ -399,22 +429,31 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
                               {coach.isActive ? "Actif" : "Inactif"}
                             </span>
                           </td>
-                          <td className="px-4 py-4 text-right">
-                            <div className="flex items-center justify-end gap-2">
+                          <td className="px-4 py-4 text-center">
+                            <div className="flex items-center justify-center gap-2">
                               <button
                                 type="button"
                                 onClick={() => handleStartEdit(coach)}
-                                className="rounded-full border border-brand-medium/30 bg-white px-3 py-1.5 text-xs font-semibold text-brand-dark/80 transition hover:bg-zinc-50"
+                                aria-label="Modifier"
+                                title="Modifier"
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-brand-medium/30 bg-white text-brand-dark/80 transition hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-medium/30"
                               >
-                                Modifier
+                                <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current" aria-hidden="true">
+                                  <path d="M3 17.25V21h3.75L17.8 9.95l-3.75-3.75L3 17.25zm2.92 2.83H5v-.92l9.06-9.06.92.92L5.92 20.08zM20.7 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+                                </svg>
                               </button>
                               <button
                                 type="button"
                                 onClick={() => setCoachToDelete(coach)}
-                                className="rounded-full border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50"
+                                aria-label="Supprimer"
+                                title="Supprimer"
+                                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 transition hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200"
                               >
-                                Supprimer
+                                <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current" aria-hidden="true">
+                                  <path d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z" />
+                                </svg>
                               </button>
+                              <CoachDetailLink coachId={coach.id} />
                             </div>
                           </td>
                         </tr>
@@ -430,7 +469,7 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
         <div className="rounded-2xl border border-brand-medium/20 bg-white p-6 shadow-sm">
           <h3 className="text-xl font-semibold text-brand-dark">{editingCoachId ? "Modifier un coach" : "Ajouter un coach"}</h3>
           <p className="mt-2 text-sm text-brand-dark/70">
-            Ajoutez les informations du coach avec un formulaire harmonise au dashboard.
+            Ajoutez les informations du coach avec un formulaire harmonisé au tableau de bord.
           </p>
 
           <div className="mt-5 space-y-4">
@@ -444,7 +483,7 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
                   title="Choisir une image"
                 >
                   {imageUrl ? (
-                    <img src={imageUrl} alt="Apercu avatar coach" className="h-full w-full object-cover" />
+                    <img src={imageUrl} alt="Aperçu avatar coach" className="h-full w-full object-cover" />
                   ) : (
                     <span className="text-xs font-semibold text-brand-dark/60">+</span>
                   )}
@@ -485,7 +524,7 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <Input
                 id="coach-first-name"
-                label="Prenom"
+                label="Prénom"
                 value={firstName}
                 onChange={(event) => setFirstName(event.target.value)}
                 placeholder="Ex: Sara"

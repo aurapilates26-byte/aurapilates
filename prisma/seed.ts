@@ -36,6 +36,35 @@ async function main() {
     );
   }
 
+  const superAdminEmail = process.env.SUPER_ADMIN_LOGIN_EMAIL?.trim();
+  const seedSuperAdminPassword = process.env.SEED_SUPER_ADMIN_PASSWORD;
+
+  if (superAdminEmail && seedSuperAdminPassword) {
+    const superAdminPasswordHash = await hash(seedSuperAdminPassword, 10);
+    const superAdminName = process.env.SEED_SUPER_ADMIN_NAME?.trim() || "Direction";
+
+    await prisma.user.upsert({
+      where: { email: superAdminEmail },
+      update: {
+        password: superAdminPasswordHash,
+        role: "SUPER_ADMIN",
+        name: superAdminName,
+      },
+      create: {
+        email: superAdminEmail,
+        password: superAdminPasswordHash,
+        role: "SUPER_ADMIN",
+        name: superAdminName,
+      },
+    });
+
+    console.log(`Direction prête (SUPER_ADMIN_LOGIN_EMAIL) : ${superAdminEmail}`);
+  } else {
+    console.warn(
+      "Seed direction ignoré : définissez SUPER_ADMIN_LOGIN_EMAIL et SEED_SUPER_ADMIN_PASSWORD dans .env.local.",
+    );
+  }
+
   await prisma.pack.upsert({
     where: { name: "Pack Mensuel" },
     update: {

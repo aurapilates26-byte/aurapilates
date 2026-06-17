@@ -2,7 +2,7 @@ export { Button } from "./button";
 export { Input } from "./input";
 export { Select } from "./select";
 export { SelectMenu } from "./select-menu";
-export { DatePicker } from "./date-picker";
+export { DatePicker, MonthPicker } from "./date-picker";
 export { Textarea } from "./textarea";
 export { Checkbox } from "./checkbox";
 export { Switch } from "./switch";

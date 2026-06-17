@@ -49,7 +49,7 @@ export async function POST(_request: Request, { params }: Params) {
   }
 
   if (!qr.assignedMemberId) {
-    return errorResponse("QR non affecte", 409);
+    return errorResponse("QR non affecté", 409);
   }
 
   // Auto-detect: si la clé correspond à la clé staff, on enregistre une présence.
@@ -76,7 +76,7 @@ export async function POST(_request: Request, { params }: Params) {
     return Response.json({
       kind: "STAFF_CHALLENGE_OK",
       message:
-        "Cle staff reconnue — utilisez la page Presence du dashboard pour marquer les participants sur la liste.",
+        "Clé personnelle reconnue — utilisez la page Présence du tableau de bord pour marquer les participantes sur la liste.",
       member: {
         firstName: member.firstName,
         lastName: member.lastName,

@@ -17,7 +17,7 @@ export function CoachesHeaderActions({ managerRef, viewMode, onToggleViewMode }:
         onClick={() => managerRef.current?.refresh()}
         className="rounded-full border border-brand-medium/35 bg-white px-4 py-2 text-sm font-medium text-brand-dark transition hover:bg-zinc-50"
       >
-        Rafraichir
+        Rafraîchir
       </button>
       <button
         type="button"

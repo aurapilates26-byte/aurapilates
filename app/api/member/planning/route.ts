@@ -1,34 +1,27 @@
 import { courseLabel } from "@/lib/course-labels";
 import {
-  addLocalDays,
-  eachOccurrenceInRange,
   formatYmdLocal,
   formatYmdPrismaDate,
+  isSessionSlotEndedLocal,
   isYmdInInclusiveWindow,
+  parseYmdLocal,
   prismaDateInclusiveUtcRange,
   startOfLocalToday,
 } from "@/lib/calendar-day";
+import { getPlanningPeriodConfigEnriched } from "@/lib/admin/planning-period-config";
+import {
+  isPlanningOccurrenceVisibleToPublic,
+  memberBookingWindowFromContext,
+  readStaggeredPublicationContext,
+} from "@/lib/admin/planning-staggered-publish";
+import { planningSlotOccurrenceDates } from "@/lib/planning-slot-occurrences";
+import { getEligibilityForPack } from "@/lib/pack-eligibility";
 import { prisma } from "@/lib/prisma";
 import { requireMemberSession } from "@/lib/require-member";
-import { getEligibilityForPack } from "@/lib/pack-eligibility";
-
-const bookingWindowDays = {
-  WEEKLY: 7,
-  FIFTEEN_DAYS: 15,
-  ONE_MONTH: 30,
-} as const;
+import { getStudioBookingRules } from "@/lib/studio-booking-rules-server";
 
 function compareTime(a: string, b: string) {
   return a.localeCompare(b);
-}
-
-function pad2(n: number) {
-  return String(n).padStart(2, "0");
-}
-
-function localNowTimeString() {
-  const n = new Date();
-  return `${pad2(n.getHours())}:${pad2(n.getMinutes())}`;
 }
 
 export async function GET(request: Request) {
@@ -36,12 +29,20 @@ export async function GET(request: Request) {
   if ("error" in guard) return guard.error;
   const { member } = guard;
 
-  const fromDay = startOfLocalToday();
-  const windowFromYmd = formatYmdLocal(fromDay);
-  const todayYmd = formatYmdLocal(fromDay);
-  const nowTime = localNowTimeString();
+  const periodConfig = await getPlanningPeriodConfigEnriched();
+  const staggeredCtx = await readStaggeredPublicationContext();
+  if (!staggeredCtx) {
+    return Response.json({ occurrences: [] as const });
+  }
+
+  const bookingRange = memberBookingWindowFromContext(staggeredCtx);
+  const fromDay = parseYmdLocal(bookingRange.fromYmd) ?? startOfLocalToday();
+  const maxToDay = parseYmdLocal(bookingRange.toYmd) ?? fromDay;
+  const windowFromYmd = bookingRange.fromYmd;
+  const windowToYmd = bookingRange.toYmd;
 
   const plannings = await prisma.planning.findMany({
+    where: staggeredCtx.mode === "partial" ? undefined : { isDraft: false },
     include: {
       coach: { select: { firstName: true, lastName: true, imageUrl: true } },
     },
@@ -67,10 +68,7 @@ export async function GET(request: Request) {
     ? getEligibilityForPack({ category: memberPack.pack.category ?? null, courseQuotas: memberPack.pack.courseQuotas })
     : { mode: "unknown" as const, allowedCourseSlugs: [] as string[] };
 
-  const globalBookingWindow = plannings[0]?.bookingWindow ?? "WEEKLY";
-  const windowDays = bookingWindowDays[globalBookingWindow];
-  const maxToDay = addLocalDays(fromDay, windowDays - 1);
-  const windowToYmd = formatYmdLocal(maxToDay);
+  const globalBookingWindow = periodConfig.bookingWindow;
   const sessionBounds = prismaDateInclusiveUtcRange(fromDay, maxToDay);
 
   const planningIds = plannings.map((p) => p.id);
@@ -103,7 +101,7 @@ export async function GET(request: Request) {
     courseLabel: string;
     startTime: string;
     endTime: string;
-    level: string;
+    level: string | null;
     coachName: string | null;
     coachImageUrl: string | null;
     capacity: number;
@@ -123,11 +121,19 @@ export async function GET(request: Request) {
   }
 
   for (const p of plannings) {
-    const dates = eachOccurrenceInRange(fromDay, maxToDay, p.dayOfWeek);
+    if (staggeredCtx.mode === "normal" && p.isDraft) continue;
+
+    const dates = planningSlotOccurrenceDates(
+      { dayOfWeek: p.dayOfWeek, anchorSessionYmd: p.anchorSessionYmd },
+      fromDay,
+      maxToDay,
+    );
     for (const d of dates) {
       const sessionKey = formatYmdLocal(d);
-      // Si le créneau du jour est déjà terminé, on saute pour afficher la prochaine occurrence future.
-      if (sessionKey === todayYmd && compareTime(p.endTime, nowTime) <= 0) {
+      if (!isPlanningOccurrenceVisibleToPublic(staggeredCtx, p, sessionKey)) {
+        continue;
+      }
+      if (isSessionSlotEndedLocal(sessionKey, p.endTime)) {
         continue;
       }
       const rows = reservations.filter(
@@ -168,6 +174,8 @@ export async function GET(request: Request) {
     return compareTime(a.startTime, b.startTime);
   });
 
+  const bookingRules = await getStudioBookingRules();
+
   return Response.json({
     occurrences,
     range: {
@@ -176,5 +184,17 @@ export async function GET(request: Request) {
     },
     bookingWindow: globalBookingWindow,
     eligibility,
+    periodStatus: periodConfig.status,
+    periodMeta: {
+      status: periodConfig.status,
+      daysUntilEnd: periodConfig.daysUntilEnd,
+      daysSinceExpiry: periodConfig.daysSinceExpiry,
+      daysUntilStart: periodConfig.daysUntilStart,
+      periodLabel: periodConfig.periodLabel,
+      periodEndYmd: periodConfig.periodEndYmd,
+      periodStartYmd: bookingRange.fromYmd,
+    },
+    staggeredPublication: staggeredCtx.mode === "partial",
+    bookingRules,
   });
 }

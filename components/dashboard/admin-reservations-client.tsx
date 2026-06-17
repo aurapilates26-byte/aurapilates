@@ -86,10 +86,10 @@ type SearchResponse = {
 };
 
 const statusLabels: Record<string, string> = {
-  BOOKED: "Confirmé",
+  BOOKED: "Confirmée",
   WAITLIST: "Liste d'attente",
-  ATTENDED: "Présent",
-  CANCELLED: "Annulé",
+  ATTENDED: "Présente",
+  CANCELLED: "Annulée",
 };
 
 function statusBadgeClass(status: RosterRow["status"]) {
@@ -128,6 +128,15 @@ function labelForDay(ymd: string, offsetFromToday: number) {
   if (offsetFromToday === 1) return `Demain · ${dateFr}`;
   const weekday = d.toLocaleDateString("fr-FR", { weekday: "long" }).replace(/^\p{L}/u, (c) => c.toUpperCase());
   return `${weekday} · ${dateFr}`;
+}
+
+function formatYmdDisplay(ymd: string) {
+  const d = fromYmd(ymd);
+  if (!d) return ymd;
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  return `${dd}-${mm}-${yyyy}`;
 }
 
 export function AdminReservationsClient() {
@@ -572,7 +581,7 @@ export function AdminReservationsClient() {
             <p className="mt-3 text-xs text-brand-dark/60">
               Résultats : <span className="font-semibold">{searchData.items.length}</span> créneau(x) — période{" "}
               <span className="font-semibold">
-                {searchData.from} → {searchData.to}
+                {formatYmdDisplay(searchData.from)} → {formatYmdDisplay(searchData.to)}
               </span>
             </p>
           ) : null}
@@ -581,7 +590,9 @@ export function AdminReservationsClient() {
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-lg font-semibold text-brand-dark">
                 {date
-                  ? (date < todayYmd ? `Historique des réservations · ${slots?.date ?? date}` : `Réservations du ${slots?.date ?? date}`)
+                  ? (date < todayYmd
+                    ? `Historique des réservations · ${formatYmdDisplay(slots?.date ?? date)}`
+                    : `Réservations du ${formatYmdDisplay(slots?.date ?? date)}`)
                   : searchData && memberQuery.trim().length >= 2
                     ? "Résultats de recherche (7 jours)"
                     : "Réservations des 7 prochains jours"}
@@ -600,9 +611,18 @@ export function AdminReservationsClient() {
               loadingSlots ? (
                 <p className="mt-3 text-sm text-brand-dark/65">Chargement...</p>
               ) : slots ? (
-                <div className="mt-4 space-y-6">{renderDaySection(`Date · ${slots.date}`, slots.date, orderedSlots)}</div>
+                <div className="mt-4 space-y-6">
+                  {orderedSlots.length === 0 ? (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                      <p className="leading-5">Aucun cours disponible pour le moment.</p>
+                    </div>
+                  ) : null}
+                  {renderDaySection(`Date · ${formatYmdDisplay(slots.date)}`, slots.date, orderedSlots)}
+                </div>
               ) : (
-                <p className="mt-3 text-sm text-brand-dark/65">Aucun créneau pour cette date.</p>
+                <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  <p className="leading-5">Aucun cours disponible pour le moment.</p>
+                </div>
               )
             ) : loadingWeek ? (
               <p className="mt-3 text-sm text-brand-dark/65">Chargement...</p>

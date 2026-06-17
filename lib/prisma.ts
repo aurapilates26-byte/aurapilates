@@ -4,12 +4,26 @@ declare global {
   var prisma: PrismaClient | undefined;
 }
 
-export const prisma =
-  global.prisma ??
-  new PrismaClient({
+function createPrismaClient() {
+  return new PrismaClient({
     log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
   });
-
-if (process.env.NODE_ENV !== "production") {
-  global.prisma = prisma;
 }
+
+/** En dev, recrée le client si le schéma a évolué (ex. après `prisma generate`). */
+function getPrismaClient(): PrismaClient {
+  if (process.env.NODE_ENV === "production") {
+    return global.prisma ?? createPrismaClient();
+  }
+
+  const cached = global.prisma;
+  if (cached && "memberPendingPack" in cached) {
+    return cached;
+  }
+
+  const client = createPrismaClient();
+  global.prisma = client;
+  return client;
+}
+
+export const prisma = getPrismaClient();

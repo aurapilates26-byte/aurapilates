@@ -112,15 +112,31 @@ export function eachOccurrenceInRange(from: Date, to: Date, dayOfWeek: DayOfWeek
   return out;
 }
 
+/** Normalise un horaire "HH:MM", "H:M" ou "HH:MM:SS" vers "HH:MM". */
+export function normalizeClockHHMM(clock: string): string {
+  const parts = clock.trim().split(":");
+  const h = pad2(Number(parts[0] ?? 0));
+  const m = pad2(Number(parts[1] ?? 0));
+  return `${h}:${m}`;
+}
+
+/** Fin d'un créneau (date locale Y-M-D + heure de fin HH:MM). */
+export function sessionEndLocalFromYmd(ymd: string, endTime: string): Date | null {
+  const day = parseYmdLocal(ymd);
+  if (!day) return null;
+  const clock = normalizeClockHHMM(endTime);
+  const [h, m] = clock.split(":").map(Number);
+  return new Date(day.getFullYear(), day.getMonth(), day.getDate(), h ?? 0, m ?? 0, 0, 0);
+}
+
 /** Compare deux horaires "HH:MM" ou "H:M" / "HH:MM:SS" (heure locale). */
 function compareClockHHMM(a: string, b: string): number {
-  const toHHMM = (t: string) => {
-    const parts = t.trim().split(":");
-    const h = pad2(Number(parts[0] ?? 0));
-    const m = pad2(Number(parts[1] ?? 0));
-    return `${h}:${m}`;
-  };
-  return toHHMM(a).localeCompare(toHHMM(b));
+  return normalizeClockHHMM(a).localeCompare(normalizeClockHHMM(b));
+}
+
+/** True si l'heure de début du créneau correspond au filtre (ex. 14:00). */
+export function planningSlotMatchesStartTime(startTime: string, filterTime: string): boolean {
+  return normalizeClockHHMM(startTime) === normalizeClockHHMM(filterTime);
 }
 
 /**
@@ -139,4 +155,24 @@ export function isSessionSlotEndedLocal(
   if (sessionYmdPrisma > todayLocalYmd) return false;
   const nowClock = `${pad2(referenceNow.getHours())}:${pad2(referenceNow.getMinutes())}`;
   return compareClockHHMM(planningEndTime, nowClock) <= 0;
+}
+
+/** Inverse de {@link isSessionSlotEndedLocal} — créneau encore réservable. */
+export function isSessionSlotBookableLocal(
+  sessionYmdLocal: string,
+  planningEndTime: string,
+  referenceNow: Date = new Date(),
+): boolean {
+  return !isSessionSlotEndedLocal(sessionYmdLocal, planningEndTime, referenceNow);
+}
+
+/** Filtre les créneaux d'un jour : exclut ceux dont l'heure de fin est déjà passée. */
+export function filterBookablePlanningSlots<T extends { endTime: string }>(
+  sessionYmdLocal: string,
+  slots: T[],
+  referenceNow?: Date
+): T[] {
+  return slots.filter((slot) =>
+    isSessionSlotBookableLocal(sessionYmdLocal, slot.endTime, referenceNow)
+  );
 }

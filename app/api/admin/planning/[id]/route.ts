@@ -1,25 +1,12 @@
 import { PrismaClient } from "@prisma/client";
 import { getServerSession } from "next-auth";
-import { z } from "zod";
 import { authOptions } from "@/auth";
+import { isStaffRole } from "@/lib/admin/access";
+import { validatePlanningAnchorForActivePeriod } from "@/lib/admin/planning-anchor-validation";
+import { mapAdminPlanningItem } from "@/lib/admin/planning-map";
+import { adminPlanningPayloadSchema, planningLevelFromPayload } from "@/lib/admin/planning-payload-schema";
 
 const db = new PrismaClient();
-
-const dayOfWeekSchema = z.enum(["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]);
-const levelSchema = z.enum(["ALL_LEVELS", "BEGINNER", "INTERMEDIATE", "ADVANCED"]);
-const courseSlugSchema = z.enum(["pilates-reformer", "mat-pilates", "yoga", "dance"]);
-
-const updatePlanningSchema = z.object({
-  courseSlug: courseSlugSchema,
-  coachId: z.string().trim().cuid().optional(),
-  dayOfWeek: dayOfWeekSchema,
-  level: levelSchema,
-  startTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/),
-  endTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/),
-  durationMinutes: z.number().int().min(10).max(24 * 60),
-  capacity: z.number().int().min(1).max(999),
-  waitlistCapacity: z.number().int().min(0).max(999).optional(),
-});
 
 type Params = {
   params: Promise<{ id: string }>;
@@ -32,38 +19,8 @@ function errorResponse(message: string, status: number) {
 async function requireAdmin() {
   const session = await getServerSession(authOptions);
   if (!session?.user) return { error: errorResponse("Unauthorized", 401) };
-  if (session.user.role !== "ADMIN") return { error: errorResponse("Forbidden", 403) };
+  if (!isStaffRole(session.user.role)) return { error: errorResponse("Forbidden", 403) };
   return { session };
-}
-
-function mapPlanning(record: {
-  id: string;
-  courseSlug: string;
-  dayOfWeek: string;
-  level: string;
-  startTime: string;
-  endTime: string;
-  durationMinutes: number;
-  capacity: number;
-  waitlistCapacity: number | null;
-  createdAt: Date;
-  updatedAt: Date;
-  coach: { id: string; firstName: string; lastName: string; imageUrl: string | null } | null;
-}) {
-  return {
-    id: record.id,
-    courseSlug: record.courseSlug,
-    dayOfWeek: record.dayOfWeek,
-    level: record.level,
-    startTime: record.startTime,
-    endTime: record.endTime,
-    durationMinutes: record.durationMinutes,
-    capacity: record.capacity,
-    waitlistCapacity: record.waitlistCapacity,
-    coach: record.coach,
-    createdAt: record.createdAt,
-    updatedAt: record.updatedAt,
-  };
 }
 
 export async function PUT(request: Request, { params }: Params) {
@@ -71,11 +28,40 @@ export async function PUT(request: Request, { params }: Params) {
   if ("error" in guard) return guard.error;
 
   const { id } = await params;
+  const existing = await db.planning.findUnique({
+    where: { id },
+    select: { isDraft: true },
+  });
+  if (!existing) return errorResponse("Planning item not found", 404);
+
   const raw = await request.json().catch(() => null);
-  const parsed = updatePlanningSchema.safeParse(raw);
+  const parsed = adminPlanningPayloadSchema.safeParse(raw);
   if (!parsed.success) return errorResponse("Invalid request payload", 400);
 
   const data = parsed.data;
+  const url = new URL(request.url);
+  const scopeParam = url.searchParams.get("scope");
+  const periodStartYmd = url.searchParams.get("periodStartYmd") ?? undefined;
+  const scope =
+    scopeParam === "archive"
+      ? "archive"
+      : existing.isDraft
+        ? "draft"
+        : "published";
+
+  if (scope === "archive" && !periodStartYmd) {
+    return errorResponse("Période historique requise", 400);
+  }
+
+  const anchorCheck = await validatePlanningAnchorForActivePeriod(
+    data.anchorSessionYmd,
+    data.dayOfWeek,
+    scope,
+    periodStartYmd,
+  );
+  if (anchorCheck.error || !anchorCheck.anchorDate) {
+    return errorResponse(anchorCheck.error ?? "Date du créneau requise.", 400);
+  }
 
   if (data.coachId) {
     const coach = await db.coach.findUnique({
@@ -93,7 +79,8 @@ export async function PUT(request: Request, { params }: Params) {
         courseSlug: data.courseSlug,
         coachId: data.coachId ?? null,
         dayOfWeek: data.dayOfWeek,
-        level: data.level,
+        anchorSessionYmd: anchorCheck.anchorDate,
+        level: planningLevelFromPayload(data),
         startTime: data.startTime,
         endTime: data.endTime,
         durationMinutes: data.durationMinutes,
@@ -105,7 +92,7 @@ export async function PUT(request: Request, { params }: Params) {
       },
     });
 
-    return Response.json({ item: mapPlanning(updated) });
+    return Response.json({ item: mapAdminPlanningItem(updated) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected error";
     if (message.includes("Record to update not found")) return errorResponse("Planning item not found", 404);

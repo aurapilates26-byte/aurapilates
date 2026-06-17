@@ -2,6 +2,10 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import { getServerSession } from "next-auth";
 import { z } from "zod";
 import { authOptions } from "@/auth";
+import { isStaffRole } from "@/lib/admin/access";
+import { requireSuperAdmin } from "@/lib/admin/pack-promotion-auth";
+import { coachPayrollModeSchema, dinarsAmountSchema } from "@/lib/admin/coach-api-schema";
+import { validateActiveCoachPayroll } from "@/lib/coach-payroll-mode";
 
 const db = new PrismaClient();
 
@@ -32,7 +36,7 @@ const optionalImageSchema = z.preprocess(
   z
     .string()
     .trim()
-    .refine((value) => isValidImageUrl(value), "Image invalide: utilisez une image depuis l'appareil ou une URL valide.")
+    .refine((value) => isValidImageUrl(value), "Image invalide : utilisez une image depuis l'appareil ou une URL valide.")
     .optional()
 );
 
@@ -43,6 +47,9 @@ const createCoachSchema = z.object({
   description: z.string().trim().max(3000).optional(),
   email: optionalEmailSchema,
   phone: z.string().trim().min(6).max(40).optional(),
+  payrollMode: coachPayrollModeSchema.optional(),
+  sessionCostDinars: dinarsAmountSchema,
+  monthlySalaryDinars: dinarsAmountSchema,
   isActive: z.boolean().optional(),
 });
 
@@ -58,7 +65,7 @@ function errorResponse(message: string, status: number) {
 async function requireAdmin() {
   const session = await getServerSession(authOptions);
   if (!session?.user) return { error: errorResponse("Unauthorized", 401) };
-  if (session.user.role !== "ADMIN") return { error: errorResponse("Forbidden", 403) };
+  if (!isStaffRole(session.user.role)) return { error: errorResponse("Forbidden", 403) };
   return { session };
 }
 
@@ -100,7 +107,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const guard = await requireAdmin();
+  const guard = await requireSuperAdmin();
   if ("error" in guard) return guard.error;
 
   const raw = await request.json().catch(() => null);
@@ -113,6 +120,16 @@ export async function POST(request: Request) {
   }
 
   const data = parsed.data;
+  const payrollMode = data.payrollMode ?? "PER_SESSION";
+  const isActive = data.isActive ?? true;
+  const payrollError = validateActiveCoachPayroll({
+    isActive,
+    payrollMode,
+    sessionCostDinars: data.sessionCostDinars ?? null,
+    monthlySalaryDinars: data.monthlySalaryDinars ?? null,
+  });
+  if (payrollError) return errorResponse(payrollError, 400);
+
   try {
     const item = await db.coach.create({
       data: {
@@ -122,7 +139,10 @@ export async function POST(request: Request) {
         description: data.description ?? null,
         email: data.email ?? null,
         phone: data.phone ?? null,
-        isActive: data.isActive ?? true,
+        payrollMode,
+        sessionCostDinars: data.sessionCostDinars ?? null,
+        monthlySalaryDinars: data.monthlySalaryDinars ?? null,
+        isActive,
       },
     });
     return Response.json({ item }, { status: 201 });

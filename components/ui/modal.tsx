@@ -8,10 +8,11 @@ type ModalProps = {
   description?: string;
   children?: React.ReactNode;
   footer?: React.ReactNode;
+  panelClassName?: string;
   onClose: () => void;
 };
 
-export function Modal({ isOpen, title, description, children, footer, onClose }: ModalProps) {
+export function Modal({ isOpen, title, description, children, footer, panelClassName, onClose }: ModalProps) {
   useEffect(() => {
     if (!isOpen) return;
 
@@ -33,7 +34,9 @@ export function Modal({ isOpen, title, description, children, footer, onClose }:
         onClick={onClose}
         className="absolute inset-0 cursor-default"
       />
-      <div className="relative w-full max-w-lg rounded-2xl border border-brand-medium/20 bg-white p-6 shadow-2xl">
+      <div
+        className={`relative w-full max-w-lg rounded-2xl border border-brand-medium/20 bg-white p-6 shadow-2xl ${panelClassName ?? ""}`}
+      >
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <h3 className="text-xl font-semibold text-brand-dark">{title}</h3>

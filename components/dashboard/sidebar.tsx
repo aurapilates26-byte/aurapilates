@@ -3,30 +3,28 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LogoutButton } from "@/components/dashboard/logout-button";
+import {
+  getMemberNavigation,
+  getStaffNavigation,
+  staffRoleLabelFr,
+  type DashboardRole,
+} from "@/lib/admin/access";
 
 type DashboardSidebarProps = {
-  role: "ADMIN" | "MEMBRE";
+  role: DashboardRole;
   variant?: "desktop" | "drawer";
   onRequestClose?: () => void;
 };
 
 type NavItem = { label: string; href: string };
 
-const navigationByRole = {
-  ADMIN: [
-    { label: "Vue d'ensemble", href: "/dashboard" },
-    { label: "Planning", href: "/dashboard/planning" },
-    { label: "Réservations", href: "/dashboard/reservations-admin" },
-    { label: "Adhérents", href: "/dashboard/adherents" },
-    { label: "Packs", href: "/dashboard/packs" },
-    { label: "Coachs", href: "/dashboard/coachs" },
-    { label: "Présence", href: "/dashboard/presence" },
-    { label: "QR code", href: "/dashboard/qr-code" },
-  ],
-  MEMBRE: [
-    { label: "Vue d'ensemble", href: "/dashboard" },
-  ],
-} as const;
+function isNavItemActive(pathname: string, href: string): boolean {
+  const normalized = pathname.endsWith("/") && pathname.length > 1 ? pathname.slice(0, -1) : pathname;
+  if (href === "/dashboard") {
+    return normalized === "/dashboard";
+  }
+  return normalized === href || normalized.startsWith(`${href}/`);
+}
 
 function NavIcon({ href, active }: { href: string; active: boolean }) {
   const cls = `h-4 w-4 shrink-0 ${active ? "text-brand-dark" : "text-brand-dark/60"}`;
@@ -69,6 +67,16 @@ function NavIcon({ href, active }: { href: string; active: boolean }) {
         <path d="M14 14h2v2h-2z" />
         <path d="M18 14h2v6h-6v-2h4z" />
         <path d="M14 18h2v2h-2z" />
+      </svg>
+    );
+  }
+  if (href === "/dashboard/caisse") {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={cls} aria-hidden="true">
+        <rect x="2" y="6" width="20" height="12" rx="2" />
+        <path d="M2 10h20" />
+        <path d="M6 14h.01" />
+        <path d="M10 14h4" />
       </svg>
     );
   }
@@ -121,8 +129,13 @@ function NavIcon({ href, active }: { href: string; active: boolean }) {
   );
 }
 
+function navigationForRole(role: DashboardRole): NavItem[] {
+  if (role === "MEMBRE") return [...getMemberNavigation()];
+  return [...getStaffNavigation(role)];
+}
+
 export function DashboardSidebar({ role, variant = "desktop", onRequestClose }: DashboardSidebarProps) {
-  const navigation = navigationByRole[role];
+  const navigation = navigationForRole(role);
   const pathname = usePathname();
 
   const asideClasses =
@@ -130,15 +143,16 @@ export function DashboardSidebar({ role, variant = "desktop", onRequestClose }: 
       ? "flex h-full w-full flex-col border-r border-brand-medium/20 bg-white shadow-xl"
       : "sticky top-0 flex h-dvh w-[196px] shrink-0 flex-col border-r border-brand-medium/20 bg-white";
 
+  const dashboardTitle =
+    role === "MEMBRE" ? "Membre" : role === "SUPER_ADMIN" ? "Direction" : "Admin";
+
   return (
     <aside className={asideClasses}>
       <div className="border-b border-brand-medium/20 px-5 py-5">
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-dark/65">Aura Pilates</p>
-            <h2 className="mt-2 text-lg font-semibold text-brand-dark">
-              Dashboard {role === "ADMIN" ? "Admin" : "Membre"}
-            </h2>
+            <h2 className="mt-2 text-lg font-semibold text-brand-dark">Dashboard {dashboardTitle}</h2>
           </div>
           {variant === "drawer" ? (
             <button
@@ -154,8 +168,8 @@ export function DashboardSidebar({ role, variant = "desktop", onRequestClose }: 
       </div>
 
       <nav className="flex flex-1 flex-col gap-2 overflow-y-auto px-3 py-4">
-        {navigation.map((item: NavItem) => {
-          const active = pathname === item.href;
+        {navigation.map((item) => {
+          const active = isNavItemActive(pathname, item.href);
           return (
             <Link
               key={`${item.label}-${item.href}`}

@@ -24,7 +24,7 @@ export function Footer() {
           <p className="text-sm font-semibold uppercase tracking-wide text-white/90">Contact</p>
           <div className="mt-3 space-y-2 text-sm text-white/85">
             <p>
-              Email:{" "}
+              Email :{" "}
               <a
                 href="mailto:aurapilates26@gmail.com"
                 className="transition hover:text-white hover:underline"
@@ -32,8 +32,15 @@ export function Footer() {
                 aurapilates26@gmail.com
               </a>
             </p>
-            <p>Téléphone : ajoutez votre numéro</p>
-            <p>Adresse : ajoutez l&apos;adresse du studio</p>
+            <p>
+              Téléphone :{" "}
+              <a href="tel:+21628057047" className="transition hover:text-white hover:underline">
+                28057047
+              </a>
+            </p>
+            <p>
+              Adresse : Avenue de l&apos;Environnement, Ezzahra — près du rond-point Kamanja
+            </p>
           </div>
         </div>
 

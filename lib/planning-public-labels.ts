@@ -12,13 +12,14 @@ export const DAY_LABEL_FR: Record<DayOfWeek, string> = {
 
 /** Libellés affichés (les clés restent celles de la base : pas de migration). */
 export const LEVEL_LABEL_FR: Record<PlanningLevel, string> = {
-  ALL_LEVELS: "initiations",
+  ALL_LEVELS: "Initiations",
   BEGINNER: "débutant",
   INTERMEDIATE: "débutant +",
   ADVANCED: "intermédiaire",
 };
 
-export function planningLevelLabelFr(level: string): string {
+export function planningLevelLabelFr(level: string | null | undefined): string | null {
+  if (level == null) return null;
   return (LEVEL_LABEL_FR as Record<string, string | undefined>)[level] ?? level;
 }
 

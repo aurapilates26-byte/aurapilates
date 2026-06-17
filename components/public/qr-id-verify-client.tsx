@@ -4,6 +4,7 @@ import { useState } from "react";
 import { getSession, signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
+import { isStaffRole } from "@/lib/admin/access";
 
 type AssignmentStatus = "ASSIGNED" | "UNASSIGNED";
 
@@ -43,7 +44,7 @@ export function QrIdVerifyClient({
       }
 
       const session = await getSession();
-      if (session?.user?.role === "ADMIN") {
+      if (isStaffRole(session?.user?.role)) {
         router.push(`/dashboard/presence?qr=${encodeURIComponent(publicId)}`);
         router.refresh();
         return;
@@ -68,7 +69,7 @@ export function QrIdVerifyClient({
           <div className="text-center">
             {assignmentStatus === "ASSIGNED" && memberName ? (
               <p className="mt-2 text-sm text-brand-dark/80">
-                Membre: <span className="font-semibold text-brand-dark">{memberName}</span>
+                Membre : <span className="font-semibold text-brand-dark">{memberName}</span>
               </p>
             ) : null}
           </div>
@@ -76,7 +77,7 @@ export function QrIdVerifyClient({
           {assignmentStatus === "UNASSIGNED" ? (
             <div className="mt-6 space-y-3">
               <div className="rounded-2xl border border-brand-medium/20 bg-zinc-50 px-4 py-3 text-center text-sm text-brand-dark/75">
-                QR disponible. Utilisez le Public ID ci-dessous pour l&apos;affecter lors de la creation d&apos;un membre.
+                QR disponible. Utilisez le Public ID ci-dessous pour l&apos;affecter lors de la création d&apos;un membre.
               </div>
               <div className="rounded-2xl border border-brand-medium/25 bg-white px-4 py-3 text-center">
                 <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-brand-dark/55">Public ID</p>
@@ -96,7 +97,7 @@ export function QrIdVerifyClient({
                       void onSubmit();
                     }
                   }}
-                  placeholder="Saisir la clé qr code ou la clé staff"
+                  placeholder="Saisir la clé QR ou la clé personnelle"
                   className="mt-2 w-full rounded-xl border border-brand-medium/35 bg-white px-4 py-3 text-sm outline-none transition focus:border-brand-dark/60 focus:ring-2 focus:ring-brand-medium/20"
                 />
               </div>
@@ -110,7 +111,7 @@ export function QrIdVerifyClient({
                 disabled={isSubmitting}
                 className="rounded-full bg-brand-dark px-5 py-3 text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-60"
               >
-                {isSubmitting ? "Ouverture de session..." : "Valider"}
+                {isSubmitting ? "Ouverture de session…" : "Valider"}
               </button>
             </div>
           )}

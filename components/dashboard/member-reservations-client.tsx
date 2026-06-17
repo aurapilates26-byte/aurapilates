@@ -335,7 +335,7 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
                               )}
                             </div>
                             <p className="text-xs text-brand-dark/80 break-words sm:text-sm lg:text-base">
-                              Coach: <span className="font-semibold">{o.coachName ?? "—"}</span>
+                              Coach : <span className="font-semibold">{o.coachName ?? "—"}</span>
                             </p>
                           </div>
                           <p className="mt-1 text-xs text-brand-dark/75 sm:text-sm lg:text-base">
@@ -411,10 +411,12 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
                       </div>
 
                       <div className="mt-3 flex flex-wrap items-center gap-2">
-                        <PlanningLevelPill
-                          levelLabel={planningLevelLabelFr(o.level)}
-                          levelToneClass={planningLevelBadgeClass(o.level)}
-                        />
+                        {o.level && planningLevelLabelFr(o.level) ? (
+                          <PlanningLevelPill
+                            levelLabel={planningLevelLabelFr(o.level)!}
+                            levelToneClass={planningLevelBadgeClass(o.level)}
+                          />
+                        ) : null}
                         {!categoryBlocked || enrolled ? (
                           <>
                             <span className={badgeClasses.availability}>

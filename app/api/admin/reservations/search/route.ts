@@ -1,6 +1,7 @@
 import { getServerSession } from "next-auth";
 import { z } from "zod";
 import { authOptions } from "@/auth";
+import { isStaffRole } from "@/lib/admin/access";
 import { courseLabel } from "@/lib/course-labels";
 import {
   addLocalDays,
@@ -10,6 +11,7 @@ import {
   prismaDateInclusiveUtcRange,
   startOfLocalToday,
 } from "@/lib/calendar-day";
+import { getAdminOperationalPlanningSlotsForDate } from "@/lib/admin/planning-operational-slots";
 import { prisma } from "@/lib/prisma";
 
 function errorResponse(message: string, status: number) {
@@ -23,7 +25,7 @@ const querySchema = z.object({
 
 export async function GET(request: Request) {
   const session = await getServerSession(authOptions);
-  if (!session?.user || session.user.role !== "ADMIN") {
+  if (!session?.user || !isStaffRole(session.user.role)) {
     return errorResponse("Forbidden", 403);
   }
 
@@ -42,10 +44,31 @@ export async function GET(request: Request) {
   const from = day;
   const to = parsed.data.date ? day : addLocalDays(day, 6);
   const range = prismaDateInclusiveUtcRange(from, to);
+  const operationalKeys = new Set<string>();
+  const allowedPlanningIds = new Set<string>();
+
+  for (let cursor = new Date(from); cursor <= to; cursor = addLocalDays(cursor, 1)) {
+    const ymd = formatYmdLocal(cursor);
+    const slots = await getAdminOperationalPlanningSlotsForDate(ymd);
+    for (const slot of slots) {
+      operationalKeys.add(`${ymd}:${slot.id}`);
+      allowedPlanningIds.add(slot.id);
+    }
+  }
+
+  if (allowedPlanningIds.size === 0) {
+    return Response.json({
+      q,
+      from: formatYmdLocal(from),
+      to: formatYmdLocal(to),
+      items: [] as const,
+    });
+  }
 
   const rows = await prisma.reservation.findMany({
     where: {
       sessionDate: range,
+      planningId: { in: [...allowedPlanningIds] },
       member: {
         OR: [
           { firstName: { contains: q, mode: "insensitive" } },
@@ -85,7 +108,7 @@ export async function GET(request: Request) {
       courseLabel: string;
       startTime: string;
       endTime: string;
-      level: string;
+      level: string | null;
       coachName: string | null;
       capacity: number;
       waitlistCapacity: number | null;
@@ -98,6 +121,7 @@ export async function GET(request: Request) {
     // sessionDate est un @db.Date => sérialisé à minuit UTC; utiliser le format Prisma pour éviter les décalages.
     const ymd = formatYmdPrismaDate(new Date(r.sessionDate));
     const key = `${ymd}:${r.planningId}`;
+    if (!operationalKeys.has(key)) continue;
     const coachName = r.planning.coach ? `${r.planning.coach.firstName} ${r.planning.coach.lastName}`.trim() : null;
     const memberName = `${r.member.firstName ?? ""} ${r.member.lastName ?? ""}`.trim() || "—";
 

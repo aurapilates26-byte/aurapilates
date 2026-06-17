@@ -4,8 +4,12 @@ import { useCallback, useEffect } from "react";
 import { useQrCodeStore } from "@/store/admin/qrcode-store";
 import type { QrCodeListResponse } from "@/types/admin/qrcode";
 
-function buildQueryString(filters: { search: string; assignment: string }) {
+const PAGE_SIZE = 10;
+
+function buildQueryString(filters: { search: string; assignment: string; page: number }) {
   const query = new URLSearchParams();
+  query.set("page", String(filters.page));
+  query.set("pageSize", String(PAGE_SIZE));
 
   if (filters.search.trim()) {
     query.set("search", filters.search.trim());
@@ -30,6 +34,8 @@ export function useAdminQrCodes() {
     setError,
     setSearch,
     setAssignment,
+    setPage,
+    listVersion,
   } = useQrCodeStore();
 
   const loadQrCodes = useCallback(async () => {
@@ -38,8 +44,7 @@ export function useAdminQrCodes() {
 
     try {
       const queryString = buildQueryString(filters);
-      const endpoint = queryString ? `/api/admin/qrcode?${queryString}` : "/api/admin/qrcode";
-      const response = await fetch(endpoint, {
+      const response = await fetch(`/api/admin/qrcode?${queryString}`, {
         method: "GET",
         headers: { "Content-Type": "application/json" },
         cache: "no-store",
@@ -60,7 +65,7 @@ export function useAdminQrCodes() {
 
   useEffect(() => {
     void loadQrCodes();
-  }, [loadQrCodes]);
+  }, [loadQrCodes, listVersion]);
 
   return {
     items,
@@ -70,6 +75,7 @@ export function useAdminQrCodes() {
     error,
     setSearch,
     setAssignment,
+    setPage,
     reload: loadQrCodes,
   };
 }

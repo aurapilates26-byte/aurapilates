@@ -57,7 +57,7 @@ export function normalizeDurationForApi(
   const t = String(raw).trim();
   if (t === "") return { ok: true, value: null };
   if (!isValidPackDurationLabel(t)) {
-    return { ok: false, error: "Duree invalide : exemples 50 jours, 12 mois." };
+    return { ok: false, error: "Durée invalide : exemples 50 jours, 12 mois." };
   }
   const p = parsePackDurationLabel(t)!;
   return { ok: true, value: formatPackDurationLabel(p.amount, p.unit) };

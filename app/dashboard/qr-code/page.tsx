@@ -1,10 +1,10 @@
 import { DashboardHeader } from "@/components/dashboard/header";
 import { QrCodeHeaderActions } from "@/components/dashboard/qr-code-header-actions";
 import { QrCodeManager } from "@/components/dashboard/qr-code-manager";
-import { requireRole } from "@/lib/auth";
+import { requireStaff } from "@/lib/auth";
 
 export default async function AdminQrCodePage() {
-  await requireRole("ADMIN");
+  await requireStaff();
 
   return (
     <div className="space-y-6">
@@ -12,7 +12,7 @@ export default async function AdminQrCodePage() {
         role="ADMIN"
         showRoleLine={false}
         title="QR codes"
-        description="Préparez ici les QR codes pour l'accès, le pointage et le suivi des séances. Cette étape reste volontairement concentrée sur l'interface avant l'intégration backend."
+        description="Préparez ici les QR codes pour l'accès, le pointage et le suivi des séances."
         actions={<QrCodeHeaderActions />}
       />
 

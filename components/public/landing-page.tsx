@@ -129,7 +129,7 @@ export function LandingPage() {
             title={homeText.sections.planning.title}
             subtitle={homeText.sections.planning.subtitle}
           />
-          <div className="mt-10 md:mt-12">
+          <div className="mt-3 md:mt-4">
             <PublicPlanningDisplay />
           </div>
         </div>
@@ -148,7 +148,7 @@ export function LandingPage() {
                 <div
                   className={`rounded-2xl border border-brand-medium/20 p-6 text-sm text-brand-dark/70 shadow-sm ${publicPanelSurfaceClass}`}
                 >
-                  Chargement des packs...
+                  Chargement des packs…
                 </div>
               }
             >

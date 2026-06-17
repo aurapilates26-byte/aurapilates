@@ -2,6 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import { getServerSession } from "next-auth";
 import { z } from "zod";
 import { authOptions } from "@/auth";
+import { isStaffRole } from "@/lib/admin/access";
 import { isValidPackCategory, normalizePackCategory } from "@/lib/pack-categories";
 import { normalizeDurationForApi } from "@/lib/pack-duration";
 
@@ -44,7 +45,7 @@ function parseDescriptionPoints(description?: string): string[] {
 async function requireAdmin() {
   const session = await getServerSession(authOptions);
   if (!session?.user) return { error: errorResponse("Unauthorized", 401) };
-  if (session.user.role !== "ADMIN") return { error: errorResponse("Forbidden", 403) };
+  if (!isStaffRole(session.user.role)) return { error: errorResponse("Forbidden", 403) };
   return { session };
 }
 
@@ -61,7 +62,7 @@ export async function PUT(request: Request, { params }: Params) {
   const categoryRaw = data.category?.trim();
   const categoryForDb = categoryRaw ? normalizePackCategory(categoryRaw) : null;
   if (categoryRaw && !isValidPackCategory(categoryRaw)) {
-    return errorResponse("Categorie invalide", 400);
+    return errorResponse("Catégorie invalide", 400);
   }
   const features = parseDescriptionPoints(data.description);
   const dur = normalizeDurationForApi(data.durationDays ?? null);
@@ -169,7 +170,7 @@ export async function DELETE(_request: Request, { params }: Params) {
 
   if (!pack) return errorResponse("Pack not found", 404);
   if (pack._count.members > 0) {
-    return errorResponse("Impossible de supprimer un pack deja assigne a des adherents", 409);
+    return errorResponse("Impossible de supprimer un pack déjà assigné à des adhérents", 409);
   }
 
   await db.pack.delete({

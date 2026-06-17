@@ -17,14 +17,11 @@ export async function requireMemberSession() {
 
   const member = await prisma.member.findUnique({
     where: { userId: session.user.id },
-    select: { id: true, isActive: true },
+    select: { id: true },
   });
 
   if (!member) {
     return { error: jsonError("Profil membre introuvable", 404) } as const;
-  }
-  if (!member.isActive) {
-    return { error: jsonError("Compte inactif", 403) } as const;
   }
 
   return { session, member } as const;

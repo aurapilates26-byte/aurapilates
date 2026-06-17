@@ -63,7 +63,7 @@ export default async function CourseDetailPage({ params }: CourseDetailPageProps
           <div className="relative mt-6 h-72 overflow-hidden rounded-xl">
             <Image
               src={course.galleryImage}
-              alt={`${course.title} ambiance de cours`}
+              alt={`${course.title} — ambiance du cours`}
               fill
               sizes="100vw"
               className="object-cover"

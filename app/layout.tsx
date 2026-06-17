@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { ToastProvider } from "@/components/ui/toast-provider";
+import { SITE_BRAND } from "@/lib/site-brand";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -13,9 +14,20 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+
 export const metadata: Metadata = {
-  title: "Aura Pilates",
-  description: "Plateforme du studio Aura Pilates",
+  metadataBase: new URL(siteUrl),
+  title: {
+    default: SITE_BRAND.name,
+    template: `%s | ${SITE_BRAND.name}`,
+  },
+  description: SITE_BRAND.description,
+  icons: {
+    icon: [{ url: SITE_BRAND.faviconSrc, type: "image/png" }],
+    apple: [{ url: SITE_BRAND.faviconSrc, type: "image/png" }],
+    shortcut: SITE_BRAND.faviconSrc,
+  },
 };
 
 export default function RootLayout({
@@ -25,7 +37,7 @@ export default function RootLayout({
 }>) {
   return (
     <html
-      lang="en"
+      lang="fr"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col overflow-x-hidden">

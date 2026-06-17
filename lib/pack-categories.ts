@@ -8,6 +8,7 @@ export const PACK_CATEGORY_OPTIONS = [
   { value: "Yoga", label: "Yoga" },
   { value: "Danse", label: "Danse" },
   { value: PACK_CATEGORY_MIXED_REFORMER_MAT, label: "Reformer + Mat" },
+  { value: "Coaching privé", label: "Coaching privé" },
 ] as const;
 
 /** Valeurs autorisées en base (API + validation). */

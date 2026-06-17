@@ -45,7 +45,7 @@ export function ConfirmDialog({
             disabled={isConfirming}
             className="border-brand-dark/30 bg-brand-dark text-white hover:bg-brand-dark/90"
           >
-            {isConfirming ? "Suppression..." : confirmText}
+            {isConfirming ? "Suppression…" : confirmText}
           </Button>
         </>
       }

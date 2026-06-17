@@ -1,8 +1,13 @@
-import { DashboardOverviewCards } from "@/components/dashboard/overview-cards";
+import { AdminOverview } from "@/components/dashboard/admin-overview/admin-overview";
+import { DashboardOverviewCardsMember } from "@/components/dashboard/overview-cards-member";
 import { DashboardHeader } from "@/components/dashboard/header";
 import { MemberMyReservations } from "@/components/dashboard/member-my-reservations";
 import { MemberReservationsClient } from "@/components/dashboard/member-reservations-client";
+import { fetchAdminOverviewSnapshot } from "@/lib/admin/overview-metrics";
+import { redirect } from "next/navigation";
+import { parseDashboardRole } from "@/lib/admin/access";
 import { requireUser } from "@/lib/auth";
+import { getMemberPackSummary } from "@/lib/member/member-pack-summary";
 import { prisma } from "@/lib/prisma";
 import { addPackDurationToStartDate } from "@/lib/pack-duration";
 import {
@@ -15,15 +20,6 @@ import {
 } from "@/lib/calendar-day";
 
 const contentByRole = {
-  ADMIN: {
-    title: "Pilotage global du studio",
-    highlightsTitle: "Priorités administrateur",
-    highlights: [
-      "Vérifier les nouvelles inscriptions et leur attribution de rôle.",
-      "Superviser les réservations des cours et l'occupation des places.",
-      "Mettre à jour les contenus visibles par les membres depuis un espace unique.",
-    ],
-  },
   MEMBRE: {
     title: "Votre espace personnel",
     highlightsTitle: "Mes réservations",
@@ -37,8 +33,17 @@ const contentByRole = {
 
 export default async function DashboardPage() {
   const session = await requireUser();
-  const role = session.user.role === "ADMIN" ? "ADMIN" : "MEMBRE";
-  const content = contentByRole[role];
+  const role = parseDashboardRole(session.user.role);
+  const memberContent = contentByRole.MEMBRE;
+
+  if (role === "ADMIN") {
+    redirect("/dashboard/planning");
+  }
+
+  const adminOverview =
+    role === "SUPER_ADMIN"
+      ? await fetchAdminOverviewSnapshot(session.user.name?.trim() || null)
+      : null;
 
   const memberStats =
     role === "MEMBRE"
@@ -56,6 +61,7 @@ export default async function DashboardPage() {
             return {
               displayName: null as string | null,
               reservedThisWeek: 0,
+              reservedWaitlist: 0,
               nextSessionDateYmd: "—",
               nextSessionDayAndTime: "—",
               subscriptionPackLine: "—",
@@ -66,8 +72,8 @@ export default async function DashboardPage() {
           }
           const displayName = `${member.firstName ?? ""} ${member.lastName ?? ""}`.trim() || null;
 
+          const packSummary = await getMemberPackSummary(member.id);
           const today = startOfLocalToday();
-          const upcomingFrom = prismaDateGteFromLocal(today);
 
           const fromYmd = formatYmdLocal(today);
           const upcomingCandidates = await prisma.reservation.findMany({
@@ -86,13 +92,8 @@ export default async function DashboardPage() {
               return ymd >= fromYmd && !isSessionSlotEndedLocal(ymd, r.planning.endTime);
             }) ?? null;
 
-          const reservedThisWeek = await prisma.reservation.count({
-            where: {
-              memberId: member.id,
-              sessionDate: { gte: upcomingFrom },
-              status: { in: ["BOOKED", "WAITLIST"] },
-            },
-          });
+          const reservedThisWeek = packSummary.reservedConfirmed;
+          const reservedWaitlist = packSummary.reservedWaitlist;
 
           const sessionCount = member.pack?.sessionCount ?? null;
           const courseQuotas = member.pack?.courseQuotas?.length ? member.pack.courseQuotas : null;
@@ -190,10 +191,14 @@ export default async function DashboardPage() {
             return parts.join(" · ");
           })();
 
-          const isActive =
-            Boolean(member.isActive) &&
+          const packPeriodActive =
             Boolean(member.packId) &&
-            (expiresAt ? expiresAt.getTime() >= today.getTime() : true);
+            (member.packStartedAt
+              ? expiresAt
+                ? expiresAt.getTime() >= today.getTime()
+                : true
+              : true);
+          const isActive = Boolean(member.isActive) && packPeriodActive;
 
           const nextSessionDateYmd = !upcoming ? "—" : formatYmdPrismaDate(new Date(upcoming.sessionDate));
           const nextSessionDayAndTime = !upcoming
@@ -227,7 +232,7 @@ export default async function DashboardPage() {
                   })
                   .replace(/^\p{L}/u, (c) => c.toUpperCase())
               : member.packId && member.pack?.durationDays && !member.packStartedAt
-                ? "Apres la date d'achat du pack"
+                ? "Après la première réservation"
                 : "—";
           const packExpiresLabel = packExpiresLabelRaw === "—" ? "Au —" : `Au ${packExpiresLabelRaw}`;
           const packCreatedLabel = member.packStartedAt
@@ -242,7 +247,9 @@ export default async function DashboardPage() {
                 const year = d.getFullYear();
                 return `Du ${day} ${month} ${year}`;
               })()
-            : "Du —";
+            : member.packId
+              ? "À la première réservation"
+              : "Du —";
 
           const subscriptionPackLine =
             member.pack != null
@@ -260,6 +267,7 @@ export default async function DashboardPage() {
           return {
             displayName,
             reservedThisWeek,
+            reservedWaitlist,
             nextSessionDateYmd: nextSessionDateLabel,
             nextSessionDayAndTime,
             subscriptionPackLine,
@@ -272,26 +280,35 @@ export default async function DashboardPage() {
 
   return (
     <>
-      <DashboardHeader role={role} title={role === "MEMBRE" ? memberStats?.displayName ?? content.title : content.title} />
-      <DashboardOverviewCards role={role} memberStats={memberStats} />
-
-      {role === "MEMBRE" ? (
+      <DashboardHeader
+        role={role}
+        showRoleLine={role === "MEMBRE"}
+        title={
+          role === "SUPER_ADMIN" && adminOverview ? (
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-dark/50">
+                {adminOverview.dayLabel}
+              </p>
+              <h1 className="min-w-0 text-2xl font-semibold leading-tight tracking-tight text-brand-dark sm:text-3xl">
+                {adminOverview.greetingName ? `Bonjour, ${adminOverview.greetingName}` : "Bonjour"}
+              </h1>
+            </div>
+          ) : role === "MEMBRE" ? (
+            memberStats?.displayName ?? memberContent.title
+          ) : (
+            "Vue d'ensemble"
+          )
+        }
+      />
+      {role === "MEMBRE" && memberStats ? (
         <>
+          <DashboardOverviewCardsMember initialStats={memberStats} />
           <MemberMyReservations />
           <MemberReservationsClient embedded />
         </>
-      ) : (
-        <section className="mt-6 rounded-2xl border border-brand-medium/20 bg-white p-6 shadow-sm">
-          <h2 className="text-2xl font-semibold">{content.highlightsTitle}</h2>
-          <ul className="mt-4 space-y-3 text-sm text-brand-dark/80">
-            {content.highlights.map((item) => (
-              <li key={item} className="rounded-lg bg-brand-light/30 px-4 py-3">
-                {item}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      ) : adminOverview ? (
+        <AdminOverview data={adminOverview} />
+      ) : null}
     </>
   );
 }

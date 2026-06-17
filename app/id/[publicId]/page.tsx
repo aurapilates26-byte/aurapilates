@@ -33,7 +33,7 @@ export default async function PublicQrIdPage({ params }: Params) {
       <main className="min-h-dvh bg-zinc-50 px-4 py-12">
         <div className="mx-auto max-w-xl rounded-2xl bg-white p-6 shadow-sm">
           <h1 className="text-2xl font-semibold text-brand-dark">QR introuvable</h1>
-          <p className="mt-2 text-sm text-brand-dark/70">L’identifiant du QR ne correspond a aucun QR en base.</p>
+          <p className="mt-2 text-sm text-brand-dark/70">L’identifiant du QR ne correspond à aucun QR en base.</p>
         </div>
       </main>
     );

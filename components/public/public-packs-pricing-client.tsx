@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { publicFilterPillClass } from "@/lib/public-filter-pill";
 import { publicPanelSurfaceClass } from "@/lib/public-panel-surface";
 import { normalizePackCategory, packCategoryMenuLabel } from "@/lib/pack-categories";
+import { promotionLifecycleLabelFr } from "@/lib/pack-pricing";
 import { courseLabel } from "@/lib/course-labels";
 import type { PublicPackCard } from "@/components/public/public-packs-pricing";
 
@@ -77,6 +78,10 @@ export function PublicPacksPricingClient({ packs, canonicalCategories }: Props) 
             const price = p.priceDisplay;
             const duration = p.durationDisplay;
             const sessions = p.sessionsDisplay;
+            const promoPercent = p.discountPercent ?? p.upcomingPromoPercent;
+            const isUpcomingPromo = p.upcomingPromoPercent != null;
+            const isUpcomingOnly = isUpcomingPromo && !p.hasDiscount;
+            const hasActiveDiscount = p.hasDiscount && p.originalPriceDisplay;
 
             const quotaLine =
               p.courseQuotas.length > 0
@@ -94,12 +99,34 @@ export function PublicPacksPricingClient({ packs, canonicalCategories }: Props) 
             return (
               <article
                 key={p.id}
-                className={`flex h-full w-full min-w-0 max-w-sm flex-col rounded-2xl border border-brand-medium/20 p-3 shadow-sm transition hover:border-brand-medium/35 hover:shadow-md sm:max-w-md sm:p-4 ${publicPanelSurfaceClass}`}
+                className={`flex h-full w-full min-w-0 max-w-sm flex-col rounded-2xl border border-brand-medium/20 p-3 shadow-sm transition hover:border-brand-medium/35 hover:shadow-md sm:max-w-md sm:p-4 ${
+                  p.hasDiscount || isUpcomingPromo
+                    ? isUpcomingPromo && !p.hasDiscount
+                      ? "ring-1 ring-sky-200/90"
+                      : "ring-1 ring-emerald-200/80"
+                    : ""
+                } ${publicPanelSurfaceClass}`}
               >
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <h3 className="min-w-0 flex-1 text-lg font-semibold leading-snug text-brand-dark break-words">
-                    {p.name}
-                  </h3>
+                  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
+                    <h3 className="text-lg font-semibold leading-snug text-brand-dark break-words">
+                      {p.name}
+                    </h3>
+                    {promoPercent != null ? (
+                      <span
+                        className={`shrink-0 text-sm font-semibold tabular-nums ${
+                          isUpcomingOnly ? "text-sky-800" : "text-emerald-800"
+                        }`}
+                      >
+                        −{promoPercent} %
+                      </span>
+                    ) : null}
+                    {isUpcomingOnly ? (
+                      <span className="shrink-0 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-900">
+                        {promotionLifecycleLabelFr("upcoming")}
+                      </span>
+                    ) : null}
+                  </div>
                   <Link
                     href="/inscription"
                     className={cardCtaClass}
@@ -119,9 +146,27 @@ export function PublicPacksPricingClient({ packs, canonicalCategories }: Props) 
                     <p className="text-[10px] font-semibold uppercase tracking-wider text-brand-dark/50">
                       Prix
                     </p>
-                    <p className="mt-1 break-words text-base font-bold tabular-nums leading-tight text-brand-dark sm:text-lg">
-                      {priceShown}
-                    </p>
+                    {hasActiveDiscount ? (
+                      <p className="mt-1 flex flex-wrap items-baseline justify-center gap-x-1.5 gap-y-0 text-base font-bold tabular-nums leading-tight text-brand-dark sm:text-lg">
+                        <span className="text-sm font-medium text-brand-dark/45 line-through">
+                          {p.originalPriceDisplay}
+                        </span>
+                        <span>{priceShown}</span>
+                      </p>
+                    ) : isUpcomingOnly ? (
+                      <p className="mt-1 flex flex-wrap items-baseline justify-center gap-x-1.5 gap-y-0 text-base font-bold tabular-nums leading-tight text-brand-dark sm:text-lg">
+                        <span>{priceShown}</span>
+                        {p.upcomingPromoPriceDisplay ? (
+                          <span className="text-sm font-semibold text-sky-800">
+                            → {p.upcomingPromoPriceDisplay}
+                          </span>
+                        ) : null}
+                      </p>
+                    ) : (
+                      <p className="mt-1 break-words text-base font-bold tabular-nums leading-tight text-brand-dark sm:text-lg">
+                        {priceShown}
+                      </p>
+                    )}
                   </div>
                   <div className="min-w-0 border-l border-brand-medium/25 px-1 sm:px-1.5">
                     <p className="text-[9px] font-semibold uppercase tracking-wide text-brand-dark/50 sm:text-[10px] sm:tracking-wider">

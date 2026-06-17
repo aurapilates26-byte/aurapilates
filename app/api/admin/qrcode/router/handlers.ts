@@ -6,6 +6,7 @@ import JSZip from "jszip";
 import QRCode from "qrcode";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/auth";
+import { isStaffRole } from "@/lib/admin/access";
 import { checkRateLimit } from "@/lib/rate-limit";
 import {
   createQrCodeSchema,
@@ -13,6 +14,7 @@ import {
   listQrCodeQuerySchema,
   updateQrCodeSchema,
 } from "./schemas";
+import { compareQrCodesBySequenceName } from "@/lib/qr-code-name";
 import { prisma as db } from "@/lib/prisma";
 
 function errorResponse(message: string, status: number) {
@@ -22,7 +24,7 @@ function errorResponse(message: string, status: number) {
 function tooManyRequestsResponse(retryAfterSeconds: number) {
   return Response.json(
     {
-      error: "Trop de generations de QR code. Veuillez reessayer dans quelques instants.",
+      error: "Trop de générations de QR code. Veuillez réessayer dans quelques instants.",
     },
     {
       status: 429,
@@ -40,7 +42,7 @@ async function requireAdminSession() {
     return { error: errorResponse("Unauthorized", 401) };
   }
 
-  if (session.user.role !== "ADMIN") {
+  if (!isStaffRole(session.user.role)) {
     return { error: errorResponse("Forbidden", 403) };
   }
 
@@ -197,23 +199,52 @@ export async function listAdminQrCodes(request: Request) {
       : {}),
   };
 
-  const [items, total] = await Promise.all([
+  const [matchingRows, total, assignedCount, unassignedCount] = await Promise.all([
     db.qrCode.findMany({
       where,
-      orderBy: { updatedAt: "desc" },
-      skip: (page - 1) * pageSize,
-      take: pageSize,
+      select: { id: true, name: true },
     }),
     db.qrCode.count({ where }),
+    db.qrCode.count({
+      where: {
+        ...where,
+        assignedMemberId: { not: null },
+      },
+    }),
+    db.qrCode.count({
+      where: {
+        ...where,
+        assignedMemberId: null,
+      },
+    }),
   ]);
 
+  const sortedIds = [...matchingRows]
+    .sort(compareQrCodesBySequenceName)
+    .slice((page - 1) * pageSize, page * pageSize)
+    .map((row) => row.id);
+
+  const pageRows =
+    sortedIds.length > 0
+      ? await db.qrCode.findMany({
+          where: { id: { in: sortedIds } },
+        })
+      : [];
+
+  const rowsById = new Map(pageRows.map((row) => [row.id, row]));
+  const orderedItems = sortedIds
+    .map((id) => rowsById.get(id))
+    .filter((row): row is NonNullable<typeof row> => Boolean(row));
+
   return Response.json({
-    items: items.map((item) => mapQrCode(item, request)),
+    items: orderedItems.map((item) => mapQrCode(item, request)),
     meta: {
       page,
       pageSize,
       total,
       totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      assignedCount,
+      unassignedCount,
     },
   });
 }
@@ -242,7 +273,9 @@ export async function createAdminQrCode(request: Request) {
   const createdItems = [];
 
   for (let index = 0; index < data.quantity; index += 1) {
-    const numberedName = data.quantity > 1 ? `${data.name} ${String(index + 1).padStart(2, "0")}` : data.name;
+    const padWidth = data.quantity > 1 ? Math.max(2, String(data.quantity).length) : 0;
+    const numberedName =
+      data.quantity > 1 ? `${data.name} ${String(index + 1).padStart(padWidth, "0")}` : data.name;
     const publicId = buildPublicId();
     const qrKey = await buildUniqueQrKey();
     const scanUrl = buildPublicScanUrl(publicId, request);
@@ -393,7 +426,7 @@ export async function downloadAdminQrCodesZip(request: Request) {
   });
 
   if (!parsedQuery.success) {
-    return errorResponse("Parametres d'export invalides.", 400);
+    return errorResponse("Paramètres d'export invalides.", 400);
   }
 
   const { search, status, assignment } = parsedQuery.data;
@@ -423,7 +456,7 @@ export async function downloadAdminQrCodesZip(request: Request) {
   });
 
   if (records.length === 0) {
-    return errorResponse("Aucun QR code a exporter pour ces filtres.", 404);
+    return errorResponse("Aucun QR code à exporter pour ces filtres.", 404);
   }
 
   const zip = new JSZip();
@@ -464,7 +497,7 @@ export async function downloadAdminQrCodesZip(request: Request) {
   }
 
   if (added === 0) {
-    return errorResponse("Aucune image PNG trouvee sur le serveur pour ces QR codes.", 404);
+    return errorResponse("Aucune image PNG trouvée sur le serveur pour ces QR codes.", 404);
   }
 
   const buffer = await zip.generateAsync({

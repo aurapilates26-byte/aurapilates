@@ -1,8 +1,8 @@
 import { AdminReservationsClient } from "@/components/dashboard/admin-reservations-client";
-import { requireRole } from "@/lib/auth";
+import { requireStaff } from "@/lib/auth";
 
 export default async function AdminReservationsAdminPage() {
-  await requireRole("ADMIN");
+  await requireStaff();
 
   return <AdminReservationsClient />;
 }

@@ -1,4 +1,28 @@
+export type MemberPackSummary = {
+  remainingSessions: number | null;
+  totalSessions: number | null;
+  reservedConfirmed: number;
+  reservedWaitlist: number;
+  mixedRemainingLine: string | null;
+  subscriptionStatusLine: string | null;
+};
+
+export type MemberBookingRules = {
+  lateCancellationRuleEnabled: boolean;
+  lateCancellationHours: number;
+};
+
 export type MemberPlanningWindow = "WEEKLY" | "FIFTEEN_DAYS" | "ONE_MONTH";
+
+export type MemberPlanningPeriodMeta = {
+  status: "active" | "expired" | "upcoming";
+  daysUntilEnd: number | null;
+  daysSinceExpiry: number | null;
+  daysUntilStart: number | null;
+  periodLabel: string;
+  periodEndYmd: string;
+  periodStartYmd: string;
+};
 
 export type MemberPlanningOccurrence = {
   planningId: string;
@@ -7,7 +31,7 @@ export type MemberPlanningOccurrence = {
   courseLabel: string;
   startTime: string;
   endTime: string;
-  level: string;
+  level: string | null;
   coachName: string | null;
   coachImageUrl: string | null;
   capacity: number;
@@ -30,7 +54,7 @@ export type MemberReservationItem = {
     courseLabel: string;
     startTime: string;
     endTime: string;
-    level: string;
+    level: string | null;
     coachName: string | null;
     coachImageUrl: string | null;
   };

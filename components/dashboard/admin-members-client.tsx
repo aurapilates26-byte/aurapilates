@@ -1,31 +1,46 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { DashboardHeader } from "@/components/dashboard/header";
 import { MembersHeaderActions } from "@/components/dashboard/members-header-actions";
-import { MembersManager, type MembersManagerHandle } from "@/components/dashboard/members-manager";
+import { MembersManager } from "@/components/dashboard/members-manager";
 
 export function AdminMembersClient() {
-  const managerRef = useRef<MembersManagerHandle | null>(null);
   const [viewMode, setViewMode] = useState<"list" | "form">("list");
+  const [listMode, setListMode] = useState<"members" | "deposits">("members");
+  const [depositCount, setDepositCount] = useState(0);
 
   return (
     <>
       <DashboardHeader
         role="ADMIN"
-        title="Adhérents"
-        description="Ajoutez des adhérents en scannant des QR codes vierges, puis assignez-les de manière sécurisée."
+        title={listMode === "deposits" && viewMode === "list" ? "Avances adhérents" : "Adhérents"}
+        description={
+          listMode === "deposits" && viewMode === "list"
+            ? "Adhérents avec acompte en attente. Finalisez le solde et assignez le QR pour les activer dans la liste principale."
+            : "Ajoutez des adhérents et assignez un QR code maintenant ou plus tard depuis leur fiche."
+        }
         showRoleLine={false}
         actions={
           <MembersHeaderActions
-            managerRef={managerRef}
+            listMode={listMode}
+            depositCount={depositCount}
             viewMode={viewMode}
+            onShowDeposits={() => {
+              setListMode("deposits");
+              setViewMode("list");
+            }}
+            onShowMembers={() => setListMode("members")}
             onToggleViewMode={() => setViewMode((prev) => (prev === "list" ? "form" : "list"))}
           />
         }
       />
-      <MembersManager ref={managerRef} viewMode={viewMode} onChangeViewMode={setViewMode} />
+      <MembersManager
+        listMode={listMode}
+        viewMode={viewMode}
+        onChangeViewMode={setViewMode}
+        onDepositCountChange={setDepositCount}
+      />
     </>
   );
 }
-

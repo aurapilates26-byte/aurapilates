@@ -2,28 +2,22 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import { getServerSession } from "next-auth";
 import { z } from "zod";
 import { authOptions } from "@/auth";
+import { isStaffRole } from "@/lib/admin/access";
+import { getArchivedPlanningPeriodConfig } from "@/lib/admin/planning-period-archive";
+import { draftPeriodConfigOrNull, getAdminPlanningPeriodWindow } from "@/lib/admin/planning-period-draft";
+import { getPlanningPeriodConfig } from "@/lib/admin/planning-period-config";
+import { validatePlanningAnchorForActivePeriod } from "@/lib/admin/planning-anchor-validation";
+import { parseYmdToPrismaDate } from "@/lib/calendar-day";
+import { mapAdminPlanningItem } from "@/lib/admin/planning-map";
+import { adminPlanningPayloadSchema, planningLevelFromPayload } from "@/lib/admin/planning-payload-schema";
 
 const db = new PrismaClient();
-
-const dayOfWeekSchema = z.enum(["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]);
-const levelSchema = z.enum(["ALL_LEVELS", "BEGINNER", "INTERMEDIATE", "ADVANCED"]);
-const courseSlugSchema = z.enum(["pilates-reformer", "mat-pilates", "yoga", "dance"]);
 
 const listPlanningQuerySchema = z.object({
   search: z.string().trim().optional(),
   dayOfWeek: z.enum(["ALL", "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]).default("ALL"),
-});
-
-const createPlanningSchema = z.object({
-  courseSlug: courseSlugSchema,
-  coachId: z.string().trim().cuid().optional(),
-  dayOfWeek: dayOfWeekSchema,
-  level: levelSchema,
-  startTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/),
-  endTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/),
-  durationMinutes: z.number().int().min(10).max(24 * 60),
-  capacity: z.number().int().min(1).max(999),
-  waitlistCapacity: z.number().int().min(0).max(999).optional(),
+  scope: z.enum(["published", "draft", "archive"]).default("published"),
+  periodStartYmd: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
 function errorResponse(message: string, status: number) {
@@ -33,38 +27,8 @@ function errorResponse(message: string, status: number) {
 async function requireAdmin() {
   const session = await getServerSession(authOptions);
   if (!session?.user) return { error: errorResponse("Unauthorized", 401) };
-  if (session.user.role !== "ADMIN") return { error: errorResponse("Forbidden", 403) };
+  if (!isStaffRole(session.user.role)) return { error: errorResponse("Forbidden", 403) };
   return { session };
-}
-
-function mapPlanning(record: {
-  id: string;
-  courseSlug: string;
-  dayOfWeek: string;
-  level: string;
-  startTime: string;
-  endTime: string;
-  durationMinutes: number;
-  capacity: number;
-  waitlistCapacity: number | null;
-  createdAt: Date;
-  updatedAt: Date;
-  coach: { id: string; firstName: string; lastName: string; imageUrl: string | null } | null;
-}) {
-  return {
-    id: record.id,
-    courseSlug: record.courseSlug,
-    dayOfWeek: record.dayOfWeek,
-    level: record.level,
-    startTime: record.startTime,
-    endTime: record.endTime,
-    durationMinutes: record.durationMinutes,
-    capacity: record.capacity,
-    waitlistCapacity: record.waitlistCapacity,
-    coach: record.coach,
-    createdAt: record.createdAt,
-    updatedAt: record.updatedAt,
-  };
 }
 
 export async function GET(request: Request) {
@@ -75,12 +39,70 @@ export async function GET(request: Request) {
   const parsed = listPlanningQuerySchema.safeParse({
     search: url.searchParams.get("search") ?? undefined,
     dayOfWeek: url.searchParams.get("dayOfWeek") ?? "ALL",
+    scope: url.searchParams.get("scope") ?? "published",
+    periodStartYmd: url.searchParams.get("periodStartYmd") ?? undefined,
   });
   if (!parsed.success) return errorResponse("Invalid query parameters", 400);
 
-  const { search, dayOfWeek } = parsed.data;
+  const { search, dayOfWeek, scope, periodStartYmd } = parsed.data;
+
+  if (scope === "archive") {
+    if (!periodStartYmd) return errorResponse("Période historique requise", 400);
+    const archive = await getArchivedPlanningPeriodConfig(periodStartYmd);
+    if (!archive) return errorResponse("Période historique introuvable", 404);
+
+    const periodStart = parseYmdToPrismaDate(archive.periodStartYmd);
+    const periodEnd = parseYmdToPrismaDate(archive.periodEndYmd);
+    if (!periodStart || !periodEnd) return errorResponse("Période historique invalide", 400);
+
+    const items = await db.planning.findMany({
+      where: {
+        isDraft: false,
+        anchorSessionYmd: { gte: periodStart, lte: periodEnd },
+        ...(dayOfWeek !== "ALL" ? { dayOfWeek } : {}),
+        ...(search
+          ? {
+              OR: [
+                { courseSlug: { contains: search, mode: Prisma.QueryMode.insensitive } },
+                { coach: { firstName: { contains: search, mode: Prisma.QueryMode.insensitive } } },
+                { coach: { lastName: { contains: search, mode: Prisma.QueryMode.insensitive } } },
+              ],
+            }
+          : {}),
+      },
+      orderBy: [{ dayOfWeek: "asc" }, { startTime: "asc" }],
+      include: {
+        coach: { select: { id: true, firstName: true, lastName: true, imageUrl: true } },
+      },
+    });
+
+    return Response.json({ items: items.map(mapAdminPlanningItem) });
+  }
+
+  let periodStart: Date | null = null;
+  let periodEnd: Date | null = null;
+
+  if (scope === "published") {
+    const period = await getPlanningPeriodConfig();
+    periodStart = parseYmdToPrismaDate(period.periodStartYmd);
+    periodEnd = parseYmdToPrismaDate(period.periodEndYmd);
+  } else if (scope === "draft") {
+    const window = await getAdminPlanningPeriodWindow();
+    const draft = draftPeriodConfigOrNull(window.draft);
+    if (!draft) {
+      return Response.json({ items: [] });
+    }
+    periodStart = parseYmdToPrismaDate(draft.periodStartYmd);
+    periodEnd = parseYmdToPrismaDate(draft.periodEndYmd);
+  }
+
+  if (!periodStart || !periodEnd) {
+    return errorResponse("Période de planning invalide", 400);
+  }
 
   const where: Prisma.PlanningWhereInput = {
+    isDraft: scope === "draft",
+    anchorSessionYmd: { gte: periodStart, lte: periodEnd },
     ...(dayOfWeek !== "ALL" ? { dayOfWeek } : {}),
     ...(search
       ? {
@@ -101,18 +123,38 @@ export async function GET(request: Request) {
     },
   });
 
-  return Response.json({ items: items.map(mapPlanning) });
+  return Response.json({ items: items.map(mapAdminPlanningItem) });
 }
 
 export async function POST(request: Request) {
   const guard = await requireAdmin();
   if ("error" in guard) return guard.error;
 
+  const url = new URL(request.url);
+  const scopeParam = url.searchParams.get("scope");
+  const periodStartYmd = url.searchParams.get("periodStartYmd") ?? undefined;
+  const scope =
+    scopeParam === "draft" ? "draft" : scopeParam === "archive" ? "archive" : "published";
+
+  if (scope === "archive" && !periodStartYmd) {
+    return errorResponse("Période historique requise", 400);
+  }
+
   const raw = await request.json().catch(() => null);
-  const parsed = createPlanningSchema.safeParse(raw);
+  const parsed = adminPlanningPayloadSchema.safeParse(raw);
   if (!parsed.success) return errorResponse("Invalid request payload", 400);
 
   const data = parsed.data;
+
+  const anchorCheck = await validatePlanningAnchorForActivePeriod(
+    data.anchorSessionYmd,
+    data.dayOfWeek,
+    scope,
+    periodStartYmd,
+  );
+  if (anchorCheck.error || !anchorCheck.anchorDate) {
+    return errorResponse(anchorCheck.error ?? "Date du créneau requise.", 400);
+  }
 
   if (data.coachId) {
     const coach = await db.coach.findUnique({
@@ -128,7 +170,9 @@ export async function POST(request: Request) {
       courseSlug: data.courseSlug,
       coachId: data.coachId ?? null,
       dayOfWeek: data.dayOfWeek,
-      level: data.level,
+      anchorSessionYmd: anchorCheck.anchorDate,
+      isDraft: scope === "draft",
+      level: planningLevelFromPayload(data),
       startTime: data.startTime,
       endTime: data.endTime,
       durationMinutes: data.durationMinutes,
@@ -140,6 +184,6 @@ export async function POST(request: Request) {
     },
   });
 
-  return Response.json({ item: mapPlanning(created) }, { status: 201 });
+  return Response.json({ item: mapAdminPlanningItem(created) }, { status: 201 });
 }
 
