@@ -4,9 +4,10 @@ import Link from "next/link";
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import { useToast } from "@/components/ui/toast-provider";
-import { Button, Checkbox, ConfirmDialog, Input, Textarea } from "@/components/ui";
+import { Button, Checkbox, ConfirmDialog, Input, SelectMenu, Textarea } from "@/components/ui";
+import { COACH_PAYROLL_MODE_OPTIONS } from "@/lib/coach-payroll-mode";
 import { useCoachStore } from "@/store";
-import type { AdminCoach } from "@/types/admin/coach";
+import type { AdminCoach, CoachPayrollMode } from "@/types/admin/coach";
 
 export type CoachesManagerHandle = {
   refresh: () => void;
@@ -71,6 +72,9 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [isActive, setIsActive] = useState(true);
+  const [payrollMode, setPayrollMode] = useState<CoachPayrollMode>("PER_SESSION");
+  const [sessionCostDinars, setSessionCostDinars] = useState("");
+  const [monthlySalaryDinars, setMonthlySalaryDinars] = useState("");
   const avatarInputRef = useRef<HTMLInputElement | null>(null);
 
   const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
@@ -116,6 +120,9 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
     setEmail("");
     setPhone("");
     setIsActive(true);
+    setPayrollMode("PER_SESSION");
+    setSessionCostDinars("");
+    setMonthlySalaryDinars("");
     setFormError(null);
   };
 
@@ -137,6 +144,17 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
     }
     if (email.trim() && !isValidEmail(email.trim())) {
       setFormError("Email invalide. Exemple: coach@aurapilates.tn");
+      return;
+    }
+
+    const parsedSessionCost = sessionCostDinars.trim() === "" ? null : Number(sessionCostDinars.trim());
+    const parsedMonthlySalary = monthlySalaryDinars.trim() === "" ? null : Number(monthlySalaryDinars.trim());
+    if (isActive && payrollMode === "PER_SESSION" && (parsedSessionCost == null || parsedSessionCost <= 0)) {
+      setFormError("Coach actif payé par séance : indiquez un coût/séance supérieur à 0 DT.");
+      return;
+    }
+    if (isActive && payrollMode === "PER_MONTH" && (parsedMonthlySalary == null || parsedMonthlySalary <= 0)) {
+      setFormError("Coach actif payé par mois : indiquez un forfait mensuel supérieur à 0 DT.");
       return;
     }
 
@@ -169,6 +187,9 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
           description: description.trim() || undefined,
           email: email.trim() || undefined,
           phone: phone.trim() || undefined,
+          payrollMode,
+          sessionCostDinars: payrollMode === "PER_SESSION" ? parsedSessionCost : null,
+          monthlySalaryDinars: payrollMode === "PER_MONTH" ? parsedMonthlySalary : null,
           isActive,
         }),
       });
@@ -202,6 +223,9 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
     setDescription(coach.description ?? "");
     setEmail(coach.email ?? "");
     setPhone(coach.phone ?? "");
+    setPayrollMode(coach.payrollMode);
+    setSessionCostDinars(coach.sessionCostDinars != null ? String(coach.sessionCostDinars) : "");
+    setMonthlySalaryDinars(coach.monthlySalaryDinars != null ? String(coach.monthlySalaryDinars) : "");
     setIsActive(coach.isActive);
     setFormError(null);
     onChangeViewMode("form");
@@ -551,6 +575,40 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
                 onChange={(event) => setPhone(event.target.value)}
                 placeholder="Ex: +216 22 000 000"
               />
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <SelectMenu
+                id="coach-payroll-mode"
+                label="Mode de rémunération"
+                value={payrollMode}
+                onChange={(value) => setPayrollMode(value as CoachPayrollMode)}
+                options={COACH_PAYROLL_MODE_OPTIONS.map((option) => ({
+                  value: option.value,
+                  label: option.label,
+                }))}
+              />
+              {payrollMode === "PER_SESSION" ? (
+                <Input
+                  id="coach-session-cost"
+                  label="Coût par séance (DT)"
+                  type="number"
+                  min={0}
+                  value={sessionCostDinars}
+                  onChange={(event) => setSessionCostDinars(event.target.value)}
+                  placeholder="Ex: 40"
+                />
+              ) : (
+                <Input
+                  id="coach-monthly-salary"
+                  label="Forfait mensuel (DT)"
+                  type="number"
+                  min={0}
+                  value={monthlySalaryDinars}
+                  onChange={(event) => setMonthlySalaryDinars(event.target.value)}
+                  placeholder="Ex: 1200"
+                />
+              )}
             </div>
 
             <Textarea
