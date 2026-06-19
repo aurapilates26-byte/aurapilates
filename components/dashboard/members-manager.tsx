@@ -15,6 +15,40 @@ import {
 import { ListPageSummary, ListPagination } from "@/components/dashboard/list-pagination";
 
 const MEMBERS_PAGE_SIZE = 20;
+const MEMBERS_FETCH_PAGE_SIZE = 5000;
+
+function memberMatchesSearch(member: MemberItem, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const firstName = (member.firstName ?? "").toLowerCase();
+  const lastName = (member.lastName ?? "").toLowerCase();
+  const phone = (member.phone ?? "").toLowerCase();
+  const email = (member.email ?? "").toLowerCase();
+  const fullName = `${firstName} ${lastName}`.trim();
+  return (
+    firstName.includes(q) ||
+    lastName.includes(q) ||
+    fullName.includes(q) ||
+    phone.includes(q) ||
+    email.includes(q)
+  );
+}
+
+function sortMembersByCreatedAtDesc(members: MemberItem[]): MemberItem[] {
+  return [...members].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+  );
+}
+
+function formatMemberCreatedAt(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("fr-FR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+}
 
 const memberDetailLinkClass =
   "inline-flex h-8 w-8 items-center justify-center rounded-lg border border-brand-medium/30 bg-white text-brand-dark/80 transition hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-medium/30";
@@ -128,20 +162,33 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
   const [depositMember, setDepositMember] = useState<MemberItem | null>(null);
   const [isCompletingDeposit, setIsCompletingDeposit] = useState(false);
   const [page, setPage] = useState(1);
-  const [meta, setMeta] = useState({
-    page: 1,
-    pageSize: MEMBERS_PAGE_SIZE,
-    total: 0,
-    totalPages: 1,
-  });
+
+  const filteredItems = useMemo(() => {
+    return sortMembersByCreatedAtDesc(
+      items.filter((m) => {
+        if (!memberMatchesSearch(m, search)) return false;
+        if (packFilterId !== "ALL" && m.pack?.id !== packFilterId) return false;
+        if (statusFilter === "ALL") return true;
+        if (statusFilter === "ACTIVE") return m.isActive;
+        return !m.isActive;
+      }),
+    );
+  }, [items, search, statusFilter, packFilterId]);
 
   const visibleItems = useMemo(() => {
-    return items.filter((m) => {
-      const statusOk =
-        statusFilter === "ALL" ? true : statusFilter === "ACTIVE" ? m.isActive : !m.isActive;
-      return statusOk;
-    });
-  }, [items, statusFilter]);
+    const start = (page - 1) * MEMBERS_PAGE_SIZE;
+    return filteredItems.slice(start, start + MEMBERS_PAGE_SIZE);
+  }, [filteredItems, page]);
+
+  const meta = useMemo(
+    () => ({
+      page,
+      pageSize: MEMBERS_PAGE_SIZE,
+      total: filteredItems.length,
+      totalPages: Math.max(1, Math.ceil(filteredItems.length / MEMBERS_PAGE_SIZE)),
+    }),
+    [filteredItems.length, page],
+  );
 
   const qrIdentifyStatusText = useMemo(() => {
     if (!qrId.trim()) return "optionnel";
@@ -160,14 +207,11 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     try {
       const enrollment = listMode === "deposits" ? "DEPOSIT_PENDING" : "ALL";
       const params = new URLSearchParams({
-        page: String(page),
-        pageSize: String(MEMBERS_PAGE_SIZE),
+        page: "1",
+        pageSize: String(MEMBERS_FETCH_PAGE_SIZE),
         enrollment,
         status: "ALL",
       });
-      const q = search.trim();
-      if (q) params.set("search", q);
-      if (packFilterId !== "ALL") params.set("packId", packFilterId);
 
       const response = await fetch(`/api/admin/members?${params.toString()}`, { cache: "no-store" });
       if (!response.ok) {
@@ -175,10 +219,9 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
         throw new Error(data?.error ?? "Impossible de charger les adhérents.");
       }
       const data = (await response.json()) as MembersResponse;
-      setItems(data.items);
-      setMeta(data.meta);
+      setItems(sortMembersByCreatedAtDesc(data.items));
       if (listMode === "deposits" && onDepositCountChange) {
-        onDepositCountChange(data.meta?.total ?? data.items.length);
+        onDepositCountChange(data.items.length);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Une erreur est survenue.");
@@ -249,11 +292,17 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     }, 0);
 
     return () => window.clearTimeout(timer);
-  }, [listMode, page, search, packFilterId]);
+  }, [listMode]);
 
   useEffect(() => {
     setPage(1);
   }, [listMode, search, packFilterId, statusFilter]);
+
+  useEffect(() => {
+    if (page > meta.totalPages) {
+      setPage(meta.totalPages);
+    }
+  }, [page, meta.totalPages]);
 
   useEffect(() => {
     const trimmed = qrId.trim();
@@ -617,10 +666,9 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                     {listMode === "deposits" ? "Avances en attente" : "Liste des adhérents"}
                   </p>
                   <p className="mt-1 text-xs text-brand-dark/60">
-                    {meta.total > 0
-                      ? `${meta.total} adhérent(s) au total`
-                      : `${visibleItems.length} résultat(s)`}
-                    {statusFilter !== "ALL" ? ` — filtre affiché : ${visibleItems.length} sur cette page` : ""}
+                    {search.trim() || statusFilter !== "ALL" || packFilterId !== "ALL"
+                      ? `${filteredItems.length} résultat(s) sur ${items.length} adhérent(s)`
+                      : `${items.length} adhérent(s) au total`}
                   </p>
                 </div>
 
@@ -704,6 +752,11 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                       </span>
                     </div>
                     <p className="text-xs text-brand-dark/75">Pack: {m.pack?.name ?? "—"}</p>
+                    {listMode === "members" ? (
+                      <p className="text-xs text-brand-dark/75">
+                        Ajouté le : {formatMemberCreatedAt(m.createdAt)}
+                      </p>
+                    ) : null}
                     {listMode === "deposits" ? (
                       <>
                         <p className="text-xs text-brand-dark/75">
@@ -758,7 +811,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
               </div>
 
               <div className="hidden overflow-x-auto lg:block">
-                <table className="w-full min-w-[760px]">
+                <table className="w-full min-w-[860px]">
                   <thead>
                     <tr className="border-b border-brand-medium/15 bg-zinc-50/60 text-xs font-semibold text-brand-dark/70">
                       <th className="px-5 py-3 text-left">Nom</th>
@@ -773,6 +826,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                         <>
                           <th className="px-4 py-3 text-center">Statut</th>
                           <th className="px-4 py-3 text-center">Pack</th>
+                          <th className="px-4 py-3 text-center">Date d&apos;ajout</th>
                           <th className="px-4 py-3 text-center">QR</th>
                           <th className="px-4 py-3 text-center">Clé QR</th>
                         </>
@@ -819,6 +873,9 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                               </span>
                             </td>
                             <td className="px-4 py-4 text-center text-brand-dark/80">{m.pack?.name ?? "—"}</td>
+                            <td className="px-4 py-4 text-center tabular-nums text-brand-dark/80">
+                              {formatMemberCreatedAt(m.createdAt)}
+                            </td>
                             <td className="px-4 py-4 text-center">
                               <span
                                 className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${

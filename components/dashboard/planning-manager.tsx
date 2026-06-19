@@ -92,6 +92,36 @@ function todayPlanningDay(): PlanningDayOfWeek {
   return "SUN";
 }
 
+function planningItemApiUrl(
+  itemId: string | null,
+  sessionFormSource: "list" | "archive",
+  archivePeriodStartYmd: string,
+): string {
+  const base = itemId
+    ? `/api/admin/planning/items/${encodeURIComponent(itemId)}`
+    : "/api/admin/planning";
+  if (sessionFormSource !== "archive" || !archivePeriodStartYmd) {
+    return base;
+  }
+  const params = new URLSearchParams({
+    scope: "archive",
+    periodStartYmd: archivePeriodStartYmd,
+  });
+  return `${base}?${params.toString()}`;
+}
+
+function preselectSessionDay(
+  period: PlanningPeriodConfig | null,
+  selectedDay: PlanningDayOfWeek,
+): { anchorSessionYmd: string; dayOfWeek: PlanningDayOfWeek } | null {
+  if (!period) return null;
+  const option = buildPeriodDaySelectOptions(period.periodStartYmd, period.periodEndYmd).find(
+    (entry) => entry.dayOfWeek === selectedDay,
+  );
+  if (!option) return null;
+  return { anchorSessionYmd: option.sessionYmd, dayOfWeek: option.dayOfWeek };
+}
+
 export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManagerProps>(function PlanningManagerWithRef(
   {
     viewMode,
@@ -122,6 +152,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   const [courseSlug, setCourseSlug] = useState<string>("NONE");
   const [coachId, setCoachId] = useState<string>("NONE");
   const [dayOfWeek, setDayOfWeekLocal] = useState<"NONE" | PlanningDayOfWeek>("NONE");
+  const [anchorSessionYmd, setAnchorSessionYmd] = useState("");
   const [level, setLevel] = useState<LevelFormValue>("NONE");
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
@@ -143,6 +174,25 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     () => archivedPeriods.find((p) => p.periodStartYmd === selectedArchiveStartYmd) ?? null,
     [archivedPeriods, selectedArchiveStartYmd],
   );
+
+  const sessionPeriodConfig = useMemo((): PlanningPeriodConfig | null => {
+    if (sessionFormSource === "archive") return selectedArchivePeriod;
+    return periodConfig;
+  }, [sessionFormSource, selectedArchivePeriod, periodConfig]);
+
+  const sessionDayFormOptions = useMemo(() => {
+    if (!sessionPeriodConfig) return [];
+    return buildPeriodDaySelectOptions(
+      sessionPeriodConfig.periodStartYmd,
+      sessionPeriodConfig.periodEndYmd,
+    );
+  }, [sessionPeriodConfig]);
+
+  const useDatedDaySelect = sessionDayFormOptions.length > 0;
+
+  const isArchiveContext =
+    sessionFormSource === "archive" ||
+    (viewMode === "period-form" && periodSettingsTab === "archive");
 
   const loadArchives = useCallback(async () => {
     setArchivesLoading(true);
@@ -320,6 +370,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     setCourseSlug("NONE");
     setCoachId("NONE");
     setDayOfWeekLocal("NONE");
+    setAnchorSessionYmd("");
     setLevel("NONE");
     setStartTime("");
     setEndTime("");
@@ -344,8 +395,13 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   useEffect(() => {
     if (showSessionForm && !editingId) {
       resetForm();
+      const preselect = preselectSessionDay(sessionPeriodConfig, selectedDay);
+      if (preselect) {
+        setAnchorSessionYmd(preselect.anchorSessionYmd);
+        setDayOfWeekLocal(preselect.dayOfWeek);
+      }
     }
-  }, [editingId, showSessionForm]);
+  }, [editingId, selectedDay, sessionPeriodConfig, showSessionForm]);
 
   const handleSubmit = async () => {
     setFormError(null);
@@ -355,6 +411,10 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     }
     if (dayOfWeek === "NONE") {
       setFormError("Veuillez choisir le jour.");
+      return;
+    }
+    if (useDatedDaySelect && !anchorSessionYmd.trim()) {
+      setFormError("Veuillez choisir la date du créneau.");
       return;
     }
     if (level === "NONE") {
@@ -393,13 +453,16 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     const isEditMode = Boolean(editingId);
     setIsSubmitting(true);
     try {
-      const response = await fetch(isEditMode ? `/api/admin/planning/${encodeURIComponent(editingId!)}` : "/api/admin/planning", {
+      const response = await fetch(
+        planningItemApiUrl(editingId, isArchiveContext ? "archive" : "list", selectedArchiveStartYmd),
+        {
         method: isEditMode ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           courseSlug: courseSlug.trim(),
           coachId: coachId === "NONE" ? undefined : coachId,
           dayOfWeek: dayOfWeek as PlanningDayOfWeek,
+          anchorSessionYmd: anchorSessionYmd.trim() || undefined,
           level: level as PlanningLevel,
           startTime,
           endTime,
@@ -407,14 +470,19 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
           capacity: cap,
           waitlistCapacity: waitCap === null ? undefined : waitCap,
         }),
-      });
+      },
+      );
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(data?.error ?? "Enregistrement impossible.");
       }
-      await loadPlanning();
+      if (isArchiveContext && selectedArchiveStartYmd) {
+        await loadArchivePlanning(selectedArchiveStartYmd);
+      } else {
+        await loadPlanning();
+      }
       resetForm();
-      onChangeViewMode(sessionFormSource === "archive" ? "period-form" : "list");
+      onChangeViewMode(isArchiveContext ? "period-form" : "list");
       toast({
         variant: "success",
         title: isEditMode ? "Séance modifiée" : "Séance ajoutée",
@@ -438,6 +506,13 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     setCourseSlug(item.courseSlug);
     setCoachId(item.coach?.id ?? "NONE");
     setDayOfWeekLocal(item.dayOfWeek);
+    setAnchorSessionYmd(
+      item.anchorSessionYmd ??
+        (fromArchive && selectedArchivePeriod
+          ? preselectSessionDay(selectedArchivePeriod, item.dayOfWeek)?.anchorSessionYmd
+          : null) ??
+        "",
+    );
     setLevel(item.level ?? "NONE");
     setStartTime(item.startTime);
     setEndTime(item.endTime);
@@ -452,13 +527,24 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     if (!itemToDelete) return;
     setIsDeleting(true);
     try {
-      const response = await fetch(`/api/admin/planning/${encodeURIComponent(itemToDelete.id)}`, { method: "DELETE" });
+      const response = await fetch(
+        planningItemApiUrl(
+          itemToDelete.id,
+          isArchiveContext ? "archive" : "list",
+          selectedArchiveStartYmd,
+        ),
+        { method: "DELETE" },
+      );
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(data?.error ?? "Suppression impossible.");
       }
       setItemToDelete(null);
-      await loadPlanning();
+      if (isArchiveContext && selectedArchiveStartYmd) {
+        await loadArchivePlanning(selectedArchiveStartYmd);
+      } else {
+        await loadPlanning();
+      }
       toast({ variant: "success", title: "Séance supprimée" });
     } catch (e) {
       const message = e instanceof Error ? e.message : "Une erreur est survenue.";
@@ -644,25 +730,52 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
       ) : (
         <div className="rounded-2xl border border-brand-medium/20 bg-white p-6 shadow-sm">
           <h3 className="text-xl font-semibold text-brand-dark">{editingId ? "Modifier la séance" : "Ajouter une séance"}</h3>
-          <p className="mt-2 text-sm text-brand-dark/70">Configurez le jour, l'heure, la durée et la capacité.</p>
+          <p className="mt-2 text-sm text-brand-dark/70">
+            {isArchiveContext
+              ? "Choisissez la date exacte de la période passée, puis l'heure et la capacité."
+              : "Configurez le jour, l'heure, la durée et la capacité."}
+          </p>
 
           <div className="mt-5 space-y-4">
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <SelectMenu
                 id="planning-day-form"
-                label="Jour"
-                value={dayOfWeek}
-                onChange={(value) => setDayOfWeekLocal(value as "NONE" | PlanningDayOfWeek)}
-                options={[
-                  { value: "NONE", label: "Choisir un jour" },
-                  { value: "MON", label: "Lundi" },
-                  { value: "TUE", label: "Mardi" },
-                  { value: "WED", label: "Mercredi" },
-                  { value: "THU", label: "Jeudi" },
-                  { value: "FRI", label: "Vendredi" },
-                  { value: "SAT", label: "Samedi" },
-                  { value: "SUN", label: "Dimanche" },
-                ]}
+                label={useDatedDaySelect ? "Jour (date)" : "Jour"}
+                value={useDatedDaySelect ? anchorSessionYmd || "NONE" : dayOfWeek}
+                onChange={(value) => {
+                  if (useDatedDaySelect) {
+                    if (value === "NONE") {
+                      setAnchorSessionYmd("");
+                      setDayOfWeekLocal("NONE");
+                      return;
+                    }
+                    const option = sessionDayFormOptions.find((entry) => entry.sessionYmd === value);
+                    setAnchorSessionYmd(value);
+                    setDayOfWeekLocal(option?.dayOfWeek ?? "NONE");
+                    return;
+                  }
+                  setDayOfWeekLocal(value as "NONE" | PlanningDayOfWeek);
+                }}
+                options={
+                  useDatedDaySelect
+                    ? [
+                        { value: "NONE", label: "Choisir un jour" },
+                        ...sessionDayFormOptions.map((entry) => ({
+                          value: entry.sessionYmd,
+                          label: entry.label,
+                        })),
+                      ]
+                    : [
+                        { value: "NONE", label: "Choisir un jour" },
+                        { value: "MON", label: "Lundi" },
+                        { value: "TUE", label: "Mardi" },
+                        { value: "WED", label: "Mercredi" },
+                        { value: "THU", label: "Jeudi" },
+                        { value: "FRI", label: "Vendredi" },
+                        { value: "SAT", label: "Samedi" },
+                        { value: "SUN", label: "Dimanche" },
+                      ]
+                }
               />
               <SelectMenu
                 id="planning-course"

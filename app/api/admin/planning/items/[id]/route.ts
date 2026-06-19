@@ -115,4 +115,3 @@ export async function DELETE(_request: Request, { params }: Params) {
     return errorResponse("Impossible de supprimer ce créneau", 400);
   }
 }
-
