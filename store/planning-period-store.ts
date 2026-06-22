@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { BOOKING_WINDOW_SHORT_FR } from "@/lib/planning-booking-window";
+import { proposeNextPlanningPeriod } from "@/lib/planning-period-status";
 import type {
   AdminPlanningPeriodWindow,
   PlanningBookingWindow,
@@ -32,6 +33,11 @@ type PlanningPeriodStoreState = {
   isLoading: boolean;
   isSaving: boolean;
   error: string | null;
+  /** Valeurs du formulaire brouillon (synchro avant enregistrement). */
+  draftFormInput: SaveDraftInput | null;
+  setDraftFormInput: (input: SaveDraftInput) => void;
+  /** Crée le brouillon si absent (utilise le formulaire ou la proposition). */
+  ensureDraftSaved: () => Promise<PlanningPeriodDraftSchedule>;
   hydrate: (window: AdminPlanningPeriodWindow) => void;
   setWindow: (window: AdminPlanningPeriodWindow) => void;
   fetchConfig: (options?: FetchOptions) => Promise<void>;
@@ -69,6 +75,37 @@ export const usePlanningPeriodStore = create<PlanningPeriodStoreState>((set, get
   isLoading: false,
   isSaving: false,
   error: null,
+  draftFormInput: null,
+
+  setDraftFormInput: (input) => set({ draftFormInput: input }),
+
+  ensureDraftSaved: async () => {
+    const state = get();
+    if (state.draft) return state.draft;
+
+    const fromForm = state.draftFormInput;
+    const fromSuggestion = state.config ? proposeNextPlanningPeriod(state.config) : null;
+    const input: SaveDraftInput | null =
+      fromForm?.periodStartYmd && /^\d{4}-\d{2}-\d{2}$/.test(fromForm.periodStartYmd)
+        ? fromForm
+        : fromSuggestion
+          ? {
+              bookingWindow: fromSuggestion.bookingWindow,
+              periodStartYmd: fromSuggestion.periodStartYmd,
+            }
+          : null;
+
+    if (!input) {
+      throw new Error("Choisissez la date de début de la prochaine période.");
+    }
+
+    await get().saveDraftSchedule(input);
+    const draft = get().draft;
+    if (!draft) {
+      throw new Error("Impossible d'enregistrer le brouillon.");
+    }
+    return draft;
+  },
 
   hydrate: (window) => applyWindow(set, window),
 

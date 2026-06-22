@@ -57,8 +57,8 @@ export function PlanningDraftSessionsPanel({
   if (!draftPeriod) {
     return (
       <p className="text-sm text-brand-dark/65">
-        Créez d&apos;abord le brouillon ci-dessus, puis utilisez « Ajouter une séance » pour préparer les créneaux de
-        la prochaine période.
+        Choisissez la durée et la date ci-dessus, puis utilisez « Ajouter une séance » pour préparer les créneaux de la
+        prochaine période.
       </p>
     );
   }

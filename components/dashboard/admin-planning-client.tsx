@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { DashboardHeader } from "@/components/dashboard/header";
 import { PlanningHeaderActions } from "@/components/dashboard/planning-header-actions";
 import { PlanningManager, type PlanningManagerHandle } from "@/components/dashboard/planning-manager";
+import { useToast } from "@/components/ui/toast-provider";
 import { usePlanningPeriodStore } from "@/store/planning-period-store";
 import type { PlanningAdminScope, PlanningSessionFormSource, PlanningViewMode } from "@/types/admin/planning";
 
@@ -12,22 +13,36 @@ export function AdminPlanningClient() {
   const [viewMode, setViewMode] = useState<PlanningViewMode>("list");
   const [periodSettingsTab, setPeriodSettingsTab] = useState<PlanningAdminScope>("published");
   const [sessionFormSource, setSessionFormSource] = useState<PlanningSessionFormSource>("list");
-  const draft = usePlanningPeriodStore((s) => s.draft);
+  const ensureDraftSaved = usePlanningPeriodStore((s) => s.ensureDraftSaved);
+  const { toast } = useToast();
 
   const showAddSession =
     viewMode === "list" ||
     viewMode === "session-form" ||
     (viewMode === "period-form" && periodSettingsTab === "archive") ||
-    (viewMode === "period-form" && periodSettingsTab === "draft" && Boolean(draft));
+    (viewMode === "period-form" && periodSettingsTab === "draft");
 
-  const handleOpenSessionForm = () => {
+  const handleOpenSessionForm = async () => {
     if (viewMode === "period-form" && periodSettingsTab === "archive") {
       setSessionFormSource("archive");
-    } else if (viewMode === "period-form" && periodSettingsTab === "draft") {
-      setSessionFormSource("draft");
-    } else {
-      setSessionFormSource("list");
+      setViewMode("session-form");
+      return;
     }
+    if (viewMode === "period-form" && periodSettingsTab === "draft") {
+      try {
+        await ensureDraftSaved();
+        setSessionFormSource("draft");
+        setViewMode("session-form");
+      } catch (e) {
+        toast({
+          variant: "error",
+          title: "Brouillon",
+          description: e instanceof Error ? e.message : "Impossible de préparer le brouillon.",
+        });
+      }
+      return;
+    }
+    setSessionFormSource("list");
     setViewMode("session-form");
   };
 

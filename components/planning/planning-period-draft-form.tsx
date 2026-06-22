@@ -31,14 +31,20 @@ function formatShortFr(ymd: string): string {
 
 type PlanningPeriodDraftFormProps = {
   embedded?: boolean;
+  draftSessionCount?: number;
   onSaved?: () => void;
 };
 
-export function PlanningPeriodDraftForm({ embedded = false, onSaved }: PlanningPeriodDraftFormProps) {
+export function PlanningPeriodDraftForm({
+  embedded = false,
+  draftSessionCount = 0,
+  onSaved,
+}: PlanningPeriodDraftFormProps) {
   const draft = usePlanningPeriodStore((s) => s.draft);
   const published = usePlanningPeriodStore((s) => s.config);
   const isSaving = usePlanningPeriodStore((s) => s.isSaving);
   const saveDraftSchedule = usePlanningPeriodStore((s) => s.saveDraftSchedule);
+  const setDraftFormInput = usePlanningPeriodStore((s) => s.setDraftFormInput);
   const prepareDraftFromSuggestion = usePlanningPeriodStore((s) => s.prepareDraftFromSuggestion);
   const clearDraft = usePlanningPeriodStore((s) => s.clearDraft);
 
@@ -65,6 +71,12 @@ export function PlanningPeriodDraftForm({ embedded = false, onSaved }: PlanningP
     syncFromStore();
   }, [syncFromStore]);
 
+  useEffect(() => {
+    if (draftStartYmd && /^\d{4}-\d{2}-\d{2}$/.test(draftStartYmd)) {
+      setDraftFormInput({ bookingWindow: draftWindow, periodStartYmd: draftStartYmd });
+    }
+  }, [draftWindow, draftStartYmd, setDraftFormInput]);
+
   const previewLabel =
     draftStartYmd && /^\d{4}-\d{2}-\d{2}$/.test(draftStartYmd)
       ? `Du ${draftStartYmd.split("-").reverse().join("/")} au ${previewEndYmd(draftStartYmd, draftWindow).split("-").reverse().join("/")}`
@@ -74,6 +86,20 @@ export function PlanningPeriodDraftForm({ embedded = false, onSaved }: PlanningP
     draftStartYmd && /^\d{4}-\d{2}-\d{2}$/.test(draftStartYmd)
       ? `Du lundi au samedi visibles le samedi précédent à 13 h · dimanche du brouillon le dimanche à 13 h.`
       : null;
+
+  const handleClearDraft = async () => {
+    const confirmed = window.confirm(
+      "Supprimer le brouillon et toutes les séances préparées pour la prochaine période ?",
+    );
+    if (!confirmed) return;
+    setFormError(null);
+    try {
+      await clearDraft();
+      onSaved?.();
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : "Erreur");
+    }
+  };
 
   const handleSave = async () => {
     if (!draftStartYmd.trim()) {
@@ -187,13 +213,11 @@ export function PlanningPeriodDraftForm({ embedded = false, onSaved }: PlanningP
         <Button type="button" size="sm" disabled={isSaving} onClick={() => void handleSave()}>
           {isSaving ? "Enregistrement…" : draft ? "Mettre à jour le brouillon" : "Créer le brouillon"}
         </Button>
-        {draft ? (
+        {draft && draftSessionCount >= 1 ? (
           <button
             type="button"
             disabled={isSaving}
-            onClick={() =>
-              void clearDraft().catch((e) => setFormError(e instanceof Error ? e.message : "Erreur"))
-            }
+            onClick={() => void handleClearDraft()}
             className="text-sm font-medium text-red-800 underline-offset-2 hover:underline"
           >
             Supprimer le brouillon

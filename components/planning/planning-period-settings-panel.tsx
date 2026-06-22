@@ -108,7 +108,11 @@ export function PlanningPeriodSettingsPanel({
               Invisible pour les adhérents jusqu&apos;au jour de début choisi (affichage automatique à 00:00 ce
               jour-là).
             </p>
-            <PlanningPeriodDraftForm embedded onSaved={onSaved} />
+            <PlanningPeriodDraftForm
+              embedded
+              draftSessionCount={draftProps.items.length}
+              onSaved={onSaved}
+            />
             <PlanningDraftSessionsPanel {...draftProps} />
           </div>
         ) : (
