@@ -23,6 +23,7 @@ import type {
   PlanningDayOfWeek,
   PlanningLevel,
   PlanningPeriodConfig,
+  PlanningSessionFormSource,
   PlanningViewMode,
 } from "@/types/admin/planning";
 
@@ -41,8 +42,8 @@ type PlanningManagerProps = {
   onChangeViewMode: (mode: PlanningViewMode) => void;
   periodSettingsTab?: PlanningAdminScope;
   onPeriodSettingsTabChange?: (tab: PlanningAdminScope) => void;
-  sessionFormSource?: "list" | "archive";
-  onSessionFormSourceChange?: (source: "list" | "archive") => void;
+  sessionFormSource?: PlanningSessionFormSource;
+  onSessionFormSourceChange?: (source: PlanningSessionFormSource) => void;
 };
 
 const courseOptions = [
@@ -94,20 +95,23 @@ function todayPlanningDay(): PlanningDayOfWeek {
 
 function planningItemApiUrl(
   itemId: string | null,
-  sessionFormSource: "list" | "archive",
+  sessionFormSource: PlanningSessionFormSource,
   archivePeriodStartYmd: string,
 ): string {
   const base = itemId
     ? `/api/admin/planning/items/${encodeURIComponent(itemId)}`
     : "/api/admin/planning";
-  if (sessionFormSource !== "archive" || !archivePeriodStartYmd) {
-    return base;
+  if (sessionFormSource === "archive" && archivePeriodStartYmd) {
+    const params = new URLSearchParams({
+      scope: "archive",
+      periodStartYmd: archivePeriodStartYmd,
+    });
+    return `${base}?${params.toString()}`;
   }
-  const params = new URLSearchParams({
-    scope: "archive",
-    periodStartYmd: archivePeriodStartYmd,
-  });
-  return `${base}?${params.toString()}`;
+  if (sessionFormSource === "draft") {
+    return `${base}?scope=draft`;
+  }
+  return base;
 }
 
 function preselectSessionDay(
@@ -138,6 +142,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   const { toast } = useToast();
   const fetchPeriodConfig = usePlanningPeriodStore((s) => s.fetchConfig);
   const periodConfig = usePlanningPeriodStore((s) => s.config);
+  const draftPeriod = usePlanningPeriodStore((s) => s.draft);
   const { items, filters, isLoading, error, setItems, setLoading, setError, setSearch, setDayOfWeek, resetFilters } =
     usePlanningStore();
 
@@ -167,6 +172,10 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   const [archiveItems, setArchiveItems] = useState<AdminPlanningItem[]>([]);
   const [archiveLoading, setArchiveLoading] = useState(false);
   const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [draftItems, setDraftItems] = useState<AdminPlanningItem[]>([]);
+  const [draftLoading, setDraftLoading] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const [draftSelectedDay, setDraftSelectedDay] = useState<PlanningDayOfWeek>(() => todayPlanningDay());
   const [historicalSlot, setHistoricalSlot] = useState<AdminPlanningItem | null>(null);
   const [historicalSessionYmd, setHistoricalSessionYmd] = useState<string | null>(null);
 
@@ -175,10 +184,21 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     [archivedPeriods, selectedArchiveStartYmd],
   );
 
+  const draftPeriodConfig = useMemo((): PlanningPeriodConfig | null => {
+    if (!draftPeriod) return null;
+    return {
+      bookingWindow: draftPeriod.bookingWindow,
+      periodStartYmd: draftPeriod.periodStartYmd,
+      periodEndYmd: draftPeriod.periodEndYmd,
+      periodLabel: draftPeriod.periodLabel,
+    };
+  }, [draftPeriod]);
+
   const sessionPeriodConfig = useMemo((): PlanningPeriodConfig | null => {
     if (sessionFormSource === "archive") return selectedArchivePeriod;
+    if (sessionFormSource === "draft") return draftPeriodConfig;
     return periodConfig;
-  }, [sessionFormSource, selectedArchivePeriod, periodConfig]);
+  }, [sessionFormSource, selectedArchivePeriod, draftPeriodConfig, periodConfig]);
 
   const sessionDayFormOptions = useMemo(() => {
     if (!sessionPeriodConfig) return [];
@@ -190,9 +210,15 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
 
   const useDatedDaySelect = sessionDayFormOptions.length > 0;
 
+  const isDraftContext =
+    sessionFormSource === "draft" ||
+    (viewMode === "period-form" && periodSettingsTab === "draft");
+
   const isArchiveContext =
     sessionFormSource === "archive" ||
     (viewMode === "period-form" && periodSettingsTab === "archive");
+
+  const isPeriodPlanningContext = isArchiveContext || isDraftContext;
 
   const loadArchives = useCallback(async () => {
     setArchivesLoading(true);
@@ -272,6 +298,21 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     }
   }, []);
 
+  const loadDraftPlanning = useCallback(async () => {
+    setDraftLoading(true);
+    setDraftError(null);
+    try {
+      const res = await fetch("/api/admin/planning?scope=draft", { cache: "no-store" });
+      const data = (await res.json()) as PlanningResponse & { error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Impossible de charger le planning brouillon.");
+      setDraftItems(data.items);
+    } catch (e) {
+      setDraftError(e instanceof Error ? e.message : "Une erreur est survenue.");
+    } finally {
+      setDraftLoading(false);
+    }
+  }, []);
+
   const openHistoricalPresence = (item: AdminPlanningItem) => {
     if (!selectedArchivePeriod) return;
     const ymd = sessionYmdForHistoricalSlot(item, selectedDay, selectedArchivePeriod);
@@ -298,6 +339,20 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
       void loadArchivePlanning(selectedArchiveStartYmd);
     }
   }, [viewMode, periodSettingsTab, selectedArchiveStartYmd, loadArchivePlanning]);
+
+  useEffect(() => {
+    if (viewMode === "period-form" && periodSettingsTab === "draft" && draftPeriodConfig) {
+      void loadDraftPlanning();
+    }
+  }, [viewMode, periodSettingsTab, draftPeriodConfig, loadDraftPlanning]);
+
+  useEffect(() => {
+    if (!draftPeriodConfig) return;
+    const days = weekdaysPresentInPeriod(draftPeriodConfig.periodStartYmd, draftPeriodConfig.periodEndYmd);
+    if (days.length > 0 && !days.includes(draftSelectedDay)) {
+      setDraftSelectedDay(days[0]!);
+    }
+  }, [draftPeriodConfig, draftSelectedDay]);
 
   const visibleItems = useMemo(() => {
     const q = filters.search.trim().toLowerCase();
@@ -395,13 +450,14 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   useEffect(() => {
     if (showSessionForm && !editingId) {
       resetForm();
-      const preselect = preselectSessionDay(sessionPeriodConfig, selectedDay);
+      const dayForPreselect = isDraftContext ? draftSelectedDay : selectedDay;
+      const preselect = preselectSessionDay(sessionPeriodConfig, dayForPreselect);
       if (preselect) {
         setAnchorSessionYmd(preselect.anchorSessionYmd);
         setDayOfWeekLocal(preselect.dayOfWeek);
       }
     }
-  }, [editingId, selectedDay, sessionPeriodConfig, showSessionForm]);
+  }, [editingId, selectedDay, draftSelectedDay, isDraftContext, sessionPeriodConfig, showSessionForm]);
 
   const handleSubmit = async () => {
     setFormError(null);
@@ -454,7 +510,11 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     setIsSubmitting(true);
     try {
       const response = await fetch(
-        planningItemApiUrl(editingId, isArchiveContext ? "archive" : "list", selectedArchiveStartYmd),
+        planningItemApiUrl(
+          editingId,
+          isArchiveContext ? "archive" : isDraftContext ? "draft" : "list",
+          selectedArchiveStartYmd,
+        ),
         {
         method: isEditMode ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
@@ -478,11 +538,13 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
       }
       if (isArchiveContext && selectedArchiveStartYmd) {
         await loadArchivePlanning(selectedArchiveStartYmd);
+      } else if (isDraftContext) {
+        await loadDraftPlanning();
       } else {
         await loadPlanning();
       }
       resetForm();
-      onChangeViewMode(isArchiveContext ? "period-form" : "list");
+      onChangeViewMode(isPeriodPlanningContext ? "period-form" : "list");
       toast({
         variant: "success",
         title: isEditMode ? "Séance modifiée" : "Séance ajoutée",
@@ -496,9 +558,15 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     }
   };
 
-  const handleStartEdit = (item: AdminPlanningItem, fromArchive = false) => {
+  const handleStartEdit = (
+    item: AdminPlanningItem,
+    options: { fromArchive?: boolean; fromDraft?: boolean } = {},
+  ) => {
+    const { fromArchive = false, fromDraft = false } = options;
     if (fromArchive) {
       onSessionFormSourceChange("archive");
+    } else if (fromDraft) {
+      onSessionFormSourceChange("draft");
     } else {
       onSessionFormSourceChange("list");
     }
@@ -510,6 +578,9 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
       item.anchorSessionYmd ??
         (fromArchive && selectedArchivePeriod
           ? preselectSessionDay(selectedArchivePeriod, item.dayOfWeek)?.anchorSessionYmd
+          : null) ??
+        (fromDraft && draftPeriodConfig
+          ? preselectSessionDay(draftPeriodConfig, item.dayOfWeek)?.anchorSessionYmd
           : null) ??
         "",
     );
@@ -530,7 +601,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
       const response = await fetch(
         planningItemApiUrl(
           itemToDelete.id,
-          isArchiveContext ? "archive" : "list",
+          isArchiveContext ? "archive" : isDraftContext ? "draft" : "list",
           selectedArchiveStartYmd,
         ),
         { method: "DELETE" },
@@ -542,6 +613,8 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
       setItemToDelete(null);
       if (isArchiveContext && selectedArchiveStartYmd) {
         await loadArchivePlanning(selectedArchiveStartYmd);
+      } else if (isDraftContext) {
+        await loadDraftPlanning();
       } else {
         await loadPlanning();
       }
@@ -559,6 +632,8 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
       if (viewMode === "period-form" && periodSettingsTab === "archive" && selectedArchiveStartYmd) {
         void loadArchives();
         void loadArchivePlanning(selectedArchiveStartYmd);
+      } else if (viewMode === "period-form" && periodSettingsTab === "draft") {
+        void loadDraftPlanning();
       } else {
         void loadPlanning();
       }
@@ -568,7 +643,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   }));
 
   const backFromSessionForm = () => {
-    onChangeViewMode(sessionFormSource === "archive" ? "period-form" : "list");
+    onChangeViewMode(sessionFormSource === "list" ? "list" : "period-form");
   };
 
   return (
@@ -577,7 +652,10 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
         <PlanningPeriodSettingsPanel
           settingsTab={periodSettingsTab}
           onSettingsTabChange={onPeriodSettingsTabChange}
-          onSaved={() => void fetchPeriodConfig({ source: "admin", force: true })}
+          onSaved={() => {
+            void fetchPeriodConfig({ source: "admin", force: true });
+            void loadDraftPlanning();
+          }}
           archiveProps={{
             archivedPeriods,
             selectedArchiveStartYmd,
@@ -594,9 +672,22 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
             items: archiveItems,
             isLoading: archiveLoading,
             error: archiveError,
-            onEditSession: (item) => handleStartEdit(item, true),
+            onEditSession: (item) => handleStartEdit(item, { fromArchive: true }),
             onDeleteSession: setItemToDelete,
             onOpenPresence: openHistoricalPresence,
+          }}
+          draftProps={{
+            draftPeriod: draftPeriodConfig,
+            selectedDay: draftSelectedDay,
+            onSelectedDayChange: (day) => {
+              setDraftSelectedDay(day);
+              setDayOfWeek(day);
+            },
+            items: draftItems,
+            isLoading: draftLoading,
+            error: draftError,
+            onEditSession: (item) => handleStartEdit(item, { fromDraft: true }),
+            onDeleteSession: setItemToDelete,
           }}
         />
       ) : showList ? (
@@ -733,7 +824,9 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
           <p className="mt-2 text-sm text-brand-dark/70">
             {isArchiveContext
               ? "Choisissez la date exacte de la période passée, puis l'heure et la capacité."
-              : "Configurez le jour, l'heure, la durée et la capacité."}
+              : isDraftContext
+                ? "Choisissez la date exacte de la prochaine période (brouillon), puis l'heure et la capacité."
+                : "Configurez le jour, l'heure, la durée et la capacité."}
           </p>
 
           <div className="mt-5 space-y-4">

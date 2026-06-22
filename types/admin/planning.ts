@@ -28,6 +28,8 @@ export type PlanningFilters = {
 
 export type PlanningViewMode = "list" | "session-form" | "period-form";
 
+export type PlanningSessionFormSource = "list" | "archive" | "draft";
+
 /** Config période planning (admin + caisse + membre). */
 export type PlanningPeriodConfig = {
   bookingWindow: PlanningBookingWindow;

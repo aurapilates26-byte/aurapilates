@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { PlanningLateCancellationRuleToggle } from "@/components/planning/planning-late-cancellation-rule-toggle";
+import { PlanningDraftSessionsPanel } from "@/components/planning/planning-draft-sessions-panel";
 import { PlanningHistoricalPeriodPanel } from "@/components/planning/planning-historical-period-panel";
 import { PlanningPeriodAdminAlert } from "@/components/planning/planning-period-admin-alert";
 import { PlanningPeriodDraftForm } from "@/components/planning/planning-period-draft-form";
@@ -37,6 +38,16 @@ type PlanningPeriodSettingsPanelProps = {
     onDeleteSession: (item: AdminPlanningItem) => void;
     onOpenPresence: (item: AdminPlanningItem) => void;
   };
+  draftProps: {
+    draftPeriod: PlanningPeriodConfig | null;
+    selectedDay: PlanningDayOfWeek;
+    onSelectedDayChange: (day: PlanningDayOfWeek) => void;
+    items: AdminPlanningItem[];
+    isLoading: boolean;
+    error: string | null;
+    onEditSession: (item: AdminPlanningItem) => void;
+    onDeleteSession: (item: AdminPlanningItem) => void;
+  };
 };
 
 export function PlanningPeriodSettingsPanel({
@@ -44,6 +55,7 @@ export function PlanningPeriodSettingsPanel({
   onSettingsTabChange,
   onSaved,
   archiveProps,
+  draftProps,
 }: PlanningPeriodSettingsPanelProps) {
   const fetchConfig = usePlanningPeriodStore((s) => s.fetchConfig);
   const draft = usePlanningPeriodStore((s) => s.draft);
@@ -97,6 +109,7 @@ export function PlanningPeriodSettingsPanel({
               jour-là).
             </p>
             <PlanningPeriodDraftForm embedded onSaved={onSaved} />
+            <PlanningDraftSessionsPanel {...draftProps} />
           </div>
         ) : (
           <PlanningHistoricalPeriodPanel {...archiveProps} />
