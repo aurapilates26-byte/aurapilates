@@ -43,7 +43,7 @@ export function MembersHeaderActions({
         onClick={onToggleViewMode}
         className={primaryBtnClass}
       >
-        {viewMode === "form" ? "Retour à la liste" : "Nouvel adhérent"}
+        {viewMode === "form" ? "Retour à la liste" : "Nouvelle adhérente"}
       </button>
     </div>
   );

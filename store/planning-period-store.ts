@@ -25,7 +25,7 @@ type SaveDraftInput = {
 };
 
 type PlanningPeriodStoreState = {
-  /** Période affichée (adhérents / site). */
+  /** Période affichée (adhérentes / site). */
   config: PlanningPeriodEnriched | null;
   draft: PlanningPeriodDraftSchedule | null;
   bookingRules: AdminPlanningPeriodWindow["bookingRules"] | null;

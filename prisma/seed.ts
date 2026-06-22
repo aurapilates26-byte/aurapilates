@@ -96,7 +96,7 @@ async function main() {
   });
 
   console.log("Packs par défaut : Pack Mensuel, Pack Trimestriel");
-  console.log("Les adhérents (comptes MEMBRE + fiche Member) sont créés uniquement depuis le tableau de bord admin.");
+  console.log("Les adhérentes (comptes MEMBRE + fiche Member) sont créés uniquement depuis le tableau de bord admin.");
 }
 
 main()

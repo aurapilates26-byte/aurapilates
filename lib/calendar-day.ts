@@ -112,6 +112,21 @@ export function eachOccurrenceInRange(from: Date, to: Date, dayOfWeek: DayOfWeek
   return out;
 }
 
+/** Ajoute des minutes à un horaire HH:MM (fuseau local, même jour). */
+export function addMinutesToClockHHMM(clock: string, minutesToAdd: number): string | null {
+  if (!Number.isFinite(minutesToAdd)) return null;
+  const normalized = normalizeClockHHMM(clock);
+  const [hRaw, mRaw] = normalized.split(":");
+  const hours = Number(hRaw);
+  const minutes = Number(mRaw);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  const total = hours * 60 + minutes + minutesToAdd;
+  if (total < 0 || total >= 24 * 60) return null;
+  const endHours = Math.floor(total / 60);
+  const endMinutes = total % 60;
+  return `${pad2(endHours)}:${pad2(endMinutes)}`;
+}
+
 /** Normalise un horaire "HH:MM", "H:M" ou "HH:MM:SS" vers "HH:MM". */
 export function normalizeClockHHMM(clock: string): string {
   const parts = clock.trim().split(":");

@@ -23,7 +23,7 @@ function buildScanUrl(publicId: string) {
 export async function GET(_request: Request, { params }: Params) {
   const { publicId } = await params;
 
-  // QR site web : lien direct https://aurapilates.tn (pas /id/… comme les QR adhérents).
+  // QR site web : lien direct https://aurapilates.tn (pas /id/… comme les QR adhérentes).
   if (publicId === SITE_QR_FILE_ID) {
     await ensureSiteWebQrCodeFile({ force: true });
     const buffer = await readFile(siteQrPngPath());

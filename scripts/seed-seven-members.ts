@@ -1,5 +1,5 @@
 /**
- * Ajoute les 7 adhérents manuels avec date d'inscription passée.
+ * Ajoute les 7 adhérentes manuelles avec date d'inscription passée.
  *
  * Usage : npm run seed-seven-members
  *         npm run seed-seven-members -- --dry-run
@@ -154,7 +154,7 @@ async function main() {
     throw new Error("Aucun compte ADMIN/SUPER_ADMIN trouvé pour enregistrer le paiement.");
   }
 
-  console.log(dryRun ? "→ Simulation (dry-run)…\n" : "→ Ajout des 7 adhérents…\n");
+  console.log(dryRun ? "→ Simulation (dry-run)…\n" : "→ Ajout des 7 adhérentes…\n");
 
   let created = 0;
   let skipped = 0;

@@ -1,4 +1,4 @@
-/** Email technique créé pour la connexion téléphone + QR (pas un vrai email adhérent). */
+/** Email technique créé pour la connexion téléphone + QR (pas un vrai email adhérente). */
 export const MEMBER_PLACEHOLDER_EMAIL_SUFFIX = "@members.aurapilates.local";
 
 export function memberPlaceholderEmail(memberId: string): string {

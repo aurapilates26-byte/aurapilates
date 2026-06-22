@@ -15,7 +15,12 @@ import { planningLevelBadgeClass } from "@/lib/planning-level-badge";
 import { planningLevelLabelFr } from "@/lib/planning-public-labels";
 import { PackMetricsGrid } from "@/components/pack-metrics-grid";
 import { PaymentMethodBadge } from "@/components/dashboard/payment-method-badge";
-import { formatPackPriceDt } from "@/lib/public-pack-display";
+import {
+  comparePacksBySessionAsc,
+  formatPackPriceDt,
+  formatPackSelectOptionLabel,
+  resolvePackSessionCount,
+} from "@/lib/public-pack-display";
 import {
   PACK_PAYMENT_METHOD_LABELS,
   PACK_PAYMENT_METHODS,
@@ -25,6 +30,7 @@ import type { AdminMemberReservationItem } from "@/lib/admin/member-reservations
 import { AdminMemberReservationsPanel } from "@/components/dashboard/reservations/admin-member-reservations-panel";
 import { useMemberDetailStore } from "@/store/admin/member-detail-store";
 import { displayMemberEmail } from "@/lib/member-display-email";
+import { computePersonalDiscountPreview } from "@/lib/member-personal-discount";
 import type { PersonalDiscountType } from "@/types/admin/pack-payment";
 
 type SlotRow = {
@@ -47,31 +53,6 @@ type PackUsageSummary = {
   consumedSessions: number;
   remainingSessions: number | null;
 };
-
-function getPackSessionCount(pack: PackFormItem): number | null {
-  if (Array.isArray(pack.courseQuotas) && pack.courseQuotas.length > 0) {
-    return pack.courseQuotas.reduce((sum, q) => sum + q.sessionCount, 0);
-  }
-  return pack.sessionCount ?? null;
-}
-
-function formatPackOptionLabel(pack: PackFormItem): string {
-  const count = getPackSessionCount(pack);
-  const inactiveSuffix = pack.isActive ? "" : " (inactive)";
-  if (count === null) return `${pack.name}${inactiveSuffix}`;
-  const seanceWord = count === 1 ? "séance" : "séances";
-  return `${pack.name} (${count} ${seanceWord})${inactiveSuffix}`;
-}
-
-function comparePacksBySessionAsc(a: PackFormItem, b: PackFormItem): number {
-  const sa = getPackSessionCount(a);
-  const sb = getPackSessionCount(b);
-  if (sa === null && sb === null) return a.name.localeCompare(b.name, "fr");
-  if (sa === null) return 1;
-  if (sb === null) return -1;
-  if (sa !== sb) return sa - sb;
-  return a.name.localeCompare(b.name, "fr");
-}
 
 function formatDateFr(value: Date | string | null | undefined) {
   if (!value) return "—";
@@ -101,22 +82,6 @@ function formatPackSessionsValue(count: number | null): string {
 function formatMemberPersonalDiscount(discount: MemberDetailData["personalDiscount"]): string | null {
   if (!discount) return null;
   return discount.type === "PERCENT" ? `${discount.value}%` : `${discount.value} DT`;
-}
-
-function computeMemberPersonalDiscountPreview(
-  listPriceDinars: number | null,
-  discount: MemberDetailData["personalDiscount"],
-): { base: number; discount: number; final: number } | null {
-  if (listPriceDinars == null || !discount) return null;
-  const base = Math.max(0, listPriceDinars);
-  let discountDinars = 0;
-  if (discount.type === "PERCENT") {
-    discountDinars = Math.round((base * discount.value) / 100);
-  } else {
-    discountDinars = discount.value;
-  }
-  discountDinars = Math.max(0, Math.min(base, discountDinars));
-  return { base, discount: discountDinars, final: Math.max(0, base - discountDinars) };
 }
 
 function memberInitials(member: MemberDetailData): string {
@@ -155,7 +120,7 @@ function IconEditButton({ onClick, disabled }: { onClick: () => void; disabled?:
       type="button"
       onClick={onClick}
       disabled={disabled}
-      aria-label="Modifier l'adhérent"
+      aria-label="Modifier l'adhérente"
       title="Modifier"
       className={`${iconBtnBase} border-brand-medium/30 bg-brand-light/40 text-brand-dark focus-visible:ring-brand-medium/30`}
     >
@@ -194,7 +159,7 @@ function IconCloseButton({ onClick, disabled }: { onClick: () => void; disabled?
 function IconDeleteButton({
   onClick,
   disabled,
-  ariaLabel = "Supprimer l'adhérent",
+  ariaLabel = "Supprimer l'adhérente",
   title = "Supprimer",
 }: {
   onClick: () => void;
@@ -287,9 +252,9 @@ export function MemberDetailClient({
   const [packUsageLoading, setPackUsageLoading] = useState(true);
 
   const displayName = useMemo(() => {
-    if (!member) return "Adhérent";
+    if (!member) return "Adhérente";
     const name = `${member.firstName ?? ""} ${member.lastName ?? ""}`.trim();
-    return name || displayMemberEmail(member.email) || "Adhérent";
+    return name || displayMemberEmail(member.email) || "Adhérente";
   }, [member]);
 
   const activePacks = useMemo(() => packs.filter((p) => p.isActive), [packs]);
@@ -369,11 +334,11 @@ export function MemberDetailClient({
   }, [member, packs]);
 
   const memberPackSessions = useMemo(() => {
-    return memberPackCatalog ? getPackSessionCount(memberPackCatalog) : null;
+    return memberPackCatalog ? resolvePackSessionCount(memberPackCatalog) : null;
   }, [memberPackCatalog]);
 
   const memberDiscountPreview = useMemo(
-    () => computeMemberPersonalDiscountPreview(memberPackCatalog?.priceCents ?? null, member?.personalDiscount ?? null),
+    () => computePersonalDiscountPreview(memberPackCatalog?.priceCents ?? null, member?.personalDiscount ?? null),
     [member?.personalDiscount, memberPackCatalog?.priceCents],
   );
 
@@ -406,7 +371,7 @@ export function MemberDetailClient({
     });
     if (!response.ok) {
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
-      throw new Error(data?.error ?? "Impossible de charger l'adhérent.");
+      throw new Error(data?.error ?? "Impossible de charger l'adhérente.");
     }
     const data = (await response.json()) as { item: MemberDetailData };
     setMember(data.item);
@@ -635,7 +600,7 @@ export function MemberDetailClient({
         qrAssignedMemberId &&
         qrAssignedMemberId !== member.id
       ) {
-        setFormError("Ce QR code est déjà assigné à un autre adhérent.");
+        setFormError("Ce QR code est déjà assigné à une autre adhérente.");
         return;
       }
     }
@@ -679,7 +644,7 @@ export function MemberDetailClient({
       useMemberDetailStore.getState().setCachedDetail(data.item);
       populateForm(data.item, packs);
       setPanelMode("view");
-      toast({ variant: "success", title: "Adhérent mis à jour" });
+      toast({ variant: "success", title: "Adhérente mise à jour" });
     } catch (e) {
       const message = e instanceof Error ? e.message : "Erreur";
       setFormError(message);
@@ -700,7 +665,7 @@ export function MemberDetailClient({
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(data?.error ?? "Suppression impossible.");
       }
-      toast({ variant: "success", title: "Adhérent supprimé" });
+      toast({ variant: "success", title: "Adhérente supprimée" });
       router.push("/dashboard/adherents");
     } catch (e) {
       toast({
@@ -814,7 +779,7 @@ export function MemberDetailClient({
     return (
       <div className="space-y-4">
         <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-sm text-red-700">
-          {loadError ?? "Adhérent introuvable."}
+          {loadError ?? "Adhérente introuvable."}
         </div>
         <Link
           href="/dashboard/adherents"
@@ -834,7 +799,7 @@ export function MemberDetailClient({
       <DashboardHeader
         role="ADMIN"
         title={displayName}
-        description="Fiche adhérent, réservations et actions."
+        description="Fiche adhérente, réservations et actions."
         showRoleLine={false}
         actions={
           panelMode === "edit" ? undefined : panelMode === "book" ? (
@@ -871,7 +836,7 @@ export function MemberDetailClient({
               </h2>
               {panelMode === "book" ? (
                 <p className="mt-1 text-sm text-brand-dark/65">
-                  Choisissez une date puis un créneau pour inscrire l&apos;adhérent.
+                  Choisissez une date puis un créneau pour inscrire l&apos;adhérente.
                 </p>
               ) : null}
             </div>
@@ -1042,7 +1007,7 @@ export function MemberDetailClient({
                   onChange={setPackId}
                   options={[
                     { value: "", label: packCategory ? "Choisir un pack" : "Catégorie d'abord" },
-                    ...packsForForm.map((p) => ({ value: p.id, label: formatPackOptionLabel(p) })),
+                    ...packsForForm.map((p) => ({ value: p.id, label: formatPackSelectOptionLabel(p) })),
                   ]}
                 />
                 <Input id="detail-phone" label="Téléphone" value={phone} onChange={(e) => setPhone(e.target.value)} />
@@ -1333,7 +1298,7 @@ export function MemberDetailClient({
 
       <ConfirmDialog
         isOpen={showDeleteConfirm}
-        title="Supprimer cet adhérent ?"
+        title="Supprimer cette adhérente ?"
         description={`${displayName} sera supprimé avec son compte utilisateur.`}
         confirmText="Supprimer"
         isConfirming={isDeleting}
@@ -1387,7 +1352,7 @@ export function MemberDetailClient({
             }}
             options={[
               { value: "", label: renewPackCategory ? "Choisir un pack" : "Catégorie d'abord" },
-              ...renewPacksForSelect.map((p) => ({ value: p.id, label: formatPackOptionLabel(p) })),
+              ...renewPacksForSelect.map((p) => ({ value: p.id, label: formatPackSelectOptionLabel(p) })),
             ]}
           />
           {selectedRenewPack && renewalDurationHint ? (

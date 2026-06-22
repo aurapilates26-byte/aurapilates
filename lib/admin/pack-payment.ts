@@ -85,7 +85,7 @@ type PackPaymentRow = PackPayment & {
 };
 
 function memberDisplayName(firstName: string | null, lastName: string | null): string {
-  return `${firstName ?? ""} ${lastName ?? ""}`.trim() || "Adhérent";
+  return `${firstName ?? ""} ${lastName ?? ""}`.trim() || "Adhérente";
 }
 
 export async function loadPackPromotionRecords(): Promise<PackPromotionRecord[]> {
@@ -117,7 +117,7 @@ function memberPaidAtDate(member: { packStartedAt: Date | null; createdAt: Date 
 }
 
 /**
- * Adhérents déjà en base avec un pack mais sans ligne pack_payments (créés avant les hooks).
+ * Adhérentes déjà en base avec un pack mais sans ligne pack_payments (créés avant les hooks).
  * Crée une vente AUTO : prix catalogue + remise valable à la date d'inscription.
  */
 export async function syncMissingPackPaymentsFromMembers(): Promise<number> {
@@ -317,7 +317,7 @@ export async function createPackPayment(input: CreatePackPaymentInput): Promise<
     select: { id: true },
   });
   if (!member) {
-    throw new Error("Adhérent introuvable");
+    throw new Error("Adhérente introuvable");
   }
 
   const promotions = await loadPackPromotionRecords();
@@ -365,7 +365,7 @@ export async function recordAutoPackPaymentInTransaction(
   );
 }
 
-/** Met à jour le moyen de paiement sur tous les encaissements d'un pack adhérent. */
+/** Met à jour le moyen de paiement sur tous les encaissements d'un pack adhérente. */
 export async function updateMemberPackPaymentMethodsInTransaction(
   tx: Prisma.TransactionClient,
   memberId: string,
@@ -378,7 +378,7 @@ export async function updateMemberPackPaymentMethodsInTransaction(
   });
 }
 
-/** Montants déjà encaissés pour le pack en cours d'un adhérent. */
+/** Montants déjà encaissés pour le pack en cours d'une adhérente. */
 export async function sumPackPaymentsForMemberPack(
   memberId: string,
   packId: string,

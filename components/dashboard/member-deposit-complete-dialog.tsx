@@ -71,7 +71,7 @@ export function MemberDepositCompleteDialog({
       const data = (await response.json()) as { qrKey?: string; assignedMemberId?: string | null };
       if (data.assignedMemberId && data.assignedMemberId !== member?.id) {
         setQrKey(null);
-        setQrError("Ce QR est déjà assigné à un autre adhérent.");
+        setQrError("Ce QR est déjà assigné à une autre adhérente.");
         return;
       }
       setQrKey(data.qrKey ?? null);
@@ -90,7 +90,7 @@ export function MemberDepositCompleteDialog({
   }, [qrId, isOpen, fetchQrKey]);
 
   const displayName = member
-    ? `${member.firstName ?? ""} ${member.lastName ?? ""}`.trim() || "Adhérent"
+    ? `${member.firstName ?? ""} ${member.lastName ?? ""}`.trim() || "Adhérente"
     : "";
 
   return (

@@ -1,5 +1,5 @@
 /**
- * Remet tous les adhérents avec pack en « En attente » pour reconstituer
+ * Remet toutes les adhérentes avec pack en « En attente » pour reconstituer
  * l'historique via Planning → Historique → Présences.
  *
  * Usage :
@@ -16,12 +16,12 @@ const prisma = new PrismaClient();
 const dryRun = process.argv.includes("--dry-run");
 
 async function main() {
-  console.log(dryRun ? "→ Simulation (dry-run)…" : "→ Remise en attente des adhérents…");
+  console.log(dryRun ? "→ Simulation (dry-run)…" : "→ Remise en attente des adhérentes…");
 
   const result = await resetMembersToPendingForHistoricalPresence(prisma, { dryRun });
 
   console.log("\nRésumé :");
-  console.log(`  Adhérents ciblés      : ${result.membersTargeted}`);
+  console.log(`  Adhérentes ciblées      : ${result.membersTargeted}`);
   console.log(`  Réservations suppr.   : ${result.reservationsDeleted}`);
   console.log(`  Présences suppr.      : ${result.attendancesDeleted}`);
   console.log(`  Check-ins suppr.      : ${result.checkInsDeleted}`);

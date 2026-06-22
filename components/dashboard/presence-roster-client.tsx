@@ -559,7 +559,7 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
 
         {selectedMember && inputsMatchSelectedMember() ? (
           <p className="mt-2 text-sm font-medium text-brand-dark">
-            Adhérent : <span className="font-semibold">{selectedMember.name}</span>
+            Adhérente : <span className="font-semibold">{selectedMember.name}</span>
             {selectedMember.phone ? (
               <span className="text-brand-dark/70"> · {selectedMember.phone}</span>
             ) : null}

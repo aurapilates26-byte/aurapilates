@@ -54,7 +54,7 @@ export async function GET(_request: Request, { params }: Params) {
     where: { id: memberId },
     select: { id: true },
   });
-  if (!member) return errorResponse("Adhérent introuvable", 404);
+  if (!member) return errorResponse("Adhérente introuvable", 404);
 
   const fromDay = startOfLocalToday();
   const fromYmd = formatYmdLocal(fromDay);
@@ -129,7 +129,7 @@ export async function POST(request: Request, { params }: Params) {
     where: { id: memberId },
     select: { id: true },
   });
-  if (!member) return errorResponse("Adhérent introuvable", 404);
+  if (!member) return errorResponse("Adhérente introuvable", 404);
 
   try {
     const result = await createMemberReservation({

@@ -295,7 +295,7 @@ export async function createMemberReservation(params: {
 
 export function reservationErrorMessage(code: string): string {
   if (code === "PLANNING_NOT_FOUND") return "Cours introuvable";
-  if (code === "MEMBER_NOT_FOUND") return "Adhérent introuvable";
+  if (code === "MEMBER_NOT_FOUND") return "Adhérente introuvable";
   if (code === "INVALID_DATE" || code === "PAST_DATE") return "Date invalide ou passée";
   if (code === "SLOT_ENDED") return "Ce créneau est déjà terminé";
   if (code === "DAY_MISMATCH") return "Ce cours n'a pas lieu à cette date";

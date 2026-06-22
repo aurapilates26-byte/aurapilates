@@ -3,7 +3,7 @@ import { join } from "node:path";
 import QRCode from "qrcode";
 
 /**
- * QR marketing du site — fichier dans `public/qrcode/` mais contenu différent des QR adhérents :
+ * QR marketing du site — fichier dans `public/qrcode/` mais contenu différent des QR adhérentes :
  * scan → ouverture directe du site (pas de page /id/ ni d'identifiant membre).
  */
 export const SITE_QR_FILE_ID = "site-web";

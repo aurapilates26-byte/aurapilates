@@ -150,7 +150,7 @@ export function AdminMemberReservationsPanel({
       <div>
         <h4 className="text-sm font-semibold text-brand-dark">Réservations</h4>
         <p className="mt-0.5 text-xs text-brand-dark/60">
-          Prochaines séances et historique de l&apos;adhérent.
+          Prochaines séances et historique de l&apos;adhérente.
         </p>
       </div>
 

@@ -31,12 +31,50 @@ export function formatPackDurationDisplay(value: string | null): string | null {
   return String(value).trim();
 }
 
+export function resolvePackSessionCount(p: {
+  sessionCount?: number | null;
+  courseQuotas?: { courseSlug: string; sessionCount: number }[];
+}): number | null {
+  if (Array.isArray(p.courseQuotas) && p.courseQuotas.length > 0) {
+    const sum = p.courseQuotas.reduce((s, q) => s + q.sessionCount, 0);
+    return sum > 0 ? sum : null;
+  }
+  if (p.sessionCount != null) return p.sessionCount;
+  return null;
+}
+
 export function computePackSessionsDisplay(p: {
   sessionCount: number | null;
   courseQuotas: { courseSlug: string; sessionCount: number }[];
 }): number | null {
-  if (p.sessionCount != null) return p.sessionCount;
-  if (p.courseQuotas.length === 0) return null;
-  const sum = p.courseQuotas.reduce((s, q) => s + q.sessionCount, 0);
-  return sum > 0 ? sum : null;
+  return resolvePackSessionCount(p);
+}
+
+export type PackSelectItem = {
+  name: string;
+  isActive?: boolean;
+  sessionCount?: number | null;
+  courseQuotas?: { courseSlug: string; sessionCount: number }[];
+};
+
+export function formatPackSelectOptionLabel(pack: PackSelectItem): string {
+  const count = resolvePackSessionCount(pack);
+  const inactiveSuffix = pack.isActive === false ? " (inactive)" : "";
+  if (count === null) return `${pack.name}${inactiveSuffix}`;
+  const seanceWord = count === 1 ? "séance" : "séances";
+  return `${pack.name} (${count} ${seanceWord})${inactiveSuffix}`;
+}
+
+export function comparePacksBySessionAsc<T extends PackSelectItem>(a: T, b: T): number {
+  const sa = resolvePackSessionCount(a);
+  const sb = resolvePackSessionCount(b);
+  if (sa === null && sb === null) return a.name.localeCompare(b.name, "fr");
+  if (sa === null) return 1;
+  if (sb === null) return -1;
+  if (sa !== sb) return sa - sb;
+  return a.name.localeCompare(b.name, "fr");
+}
+
+export function sortPacksBySessionAsc<T extends PackSelectItem>(packs: T[]): T[] {
+  return [...packs].sort(comparePacksBySessionAsc);
 }

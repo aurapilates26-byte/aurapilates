@@ -29,7 +29,7 @@ import type {
 const EXPIRING_PACK_DAYS = 7;
 
 function memberDisplayName(firstName: string | null, lastName: string | null): string {
-  return `${firstName ?? ""} ${lastName ?? ""}`.trim() || "Adhérent";
+  return `${firstName ?? ""} ${lastName ?? ""}`.trim() || "Adhérente";
 }
 
 function formatDayLabelFr(d: Date): string {
@@ -370,7 +370,7 @@ export async function fetchAdminOverviewSnapshot(greetingName: string | null): P
       id: "low-balance",
       variant: "attention",
       title: "Séances presque épuisées",
-      description: `${membersLowBalance} adhérent${membersLowBalance > 1 ? "s" : ""} avec une ou zéro séance restante.`,
+      description: `${membersLowBalance} adhérente${membersLowBalance > 1 ? "s" : ""} avec une ou zéro séance restante.`,
       href: "/dashboard/adherents",
     });
   }

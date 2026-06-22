@@ -7,7 +7,7 @@ const STAFF_NAV_ALL = [
   { label: "Vue d'ensemble", href: "/dashboard" },
   { label: "Planning", href: "/dashboard/planning" },
   { label: "Réservations", href: "/dashboard/reservations-admin" },
-  { label: "Adhérents", href: "/dashboard/adherents" },
+  { label: "Adhérentes", href: "/dashboard/adherents" },
   { label: "Packs", href: "/dashboard/packs" },
   { label: "Coachs", href: "/dashboard/coachs" },
   { label: "Présence", href: "/dashboard/presence" },

@@ -47,12 +47,12 @@ export type MarkHistoricalPresenceResult = {
 };
 
 function memberDisplayName(firstName: string | null, lastName: string | null): string {
-  return `${firstName ?? ""} ${lastName ?? ""}`.trim() || "Adhérent";
+  return `${firstName ?? ""} ${lastName ?? ""}`.trim() || "Adhérente";
 }
 
 export function historicalPresenceErrorMessage(code: string): string {
   if (code === "PLANNING_NOT_FOUND") return "Créneau introuvable";
-  if (code === "MEMBER_NOT_FOUND") return "Adhérent introuvable";
+  if (code === "MEMBER_NOT_FOUND") return "Adhérente introuvable";
   if (code === "INVALID_DATE") return "Date invalide";
   if (code === "FUTURE_DATE") return "La saisie concerne uniquement les cours déjà passés";
   if (code === "SESSION_NOT_ENDED") return "Présence disponible après la fin du cours";

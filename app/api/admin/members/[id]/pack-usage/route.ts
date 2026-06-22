@@ -36,7 +36,7 @@ export async function GET(_request: Request, { params }: Params) {
       },
     },
   });
-  if (!member) return errorResponse("Adhérent introuvable", 404);
+  if (!member) return errorResponse("Adhérente introuvable", 404);
   if (!member.packId || !member.pack) {
     return Response.json({
       totalSessions: null,

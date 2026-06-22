@@ -23,15 +23,7 @@ const optionalEmailPreprocessor = z.preprocess((value) => {
   return trimmed === "" ? undefined : trimmed;
 }, z.string().email().optional());
 
-const optionalPersonalDiscountSchema = z
-  .object({
-    type: z.enum(["PERCENT", "AMOUNT"]),
-    value: z.number().int().positive(),
-    reason: z.string().trim().max(160).optional(),
-  })
-  .optional();
-
-const updatePersonalDiscountSchema = z.union([
+const personalDiscountInputSchema = z.union([
   z.object({
     type: z.enum(["PERCENT", "AMOUNT"]),
     value: z.number().int().positive(),
@@ -51,7 +43,7 @@ export const createMemberSchema = z.object({
   packId: z.string().trim().cuid(),
   isActive: z.boolean().optional(),
   qrId: optionalQrIdPreprocessor,
-  personalDiscount: optionalPersonalDiscountSchema,
+  personalDiscount: personalDiscountInputSchema,
   paymentMode: z.enum(["full", "deposit"]).default("full"),
   depositAmountDinars: z.number().int().positive().optional(),
   paymentMethod: z.enum(PACK_PAYMENT_METHODS),
@@ -83,7 +75,7 @@ export const updateMemberSchema = z.object({
   isActive: z.boolean().optional(),
   // Allow reassigning QR if needed later
   qrId: z.string().trim().min(10).optional(),
-  personalDiscount: updatePersonalDiscountSchema,
+  personalDiscount: personalDiscountInputSchema,
   paymentMethod: z.enum(PACK_PAYMENT_METHODS).optional(),
 });
 

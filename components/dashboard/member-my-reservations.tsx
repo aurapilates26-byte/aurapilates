@@ -5,6 +5,10 @@ import { useRouter } from "next/navigation";
 import { ConfirmDialog } from "@/components/ui";
 import { useToast } from "@/components/ui/toast-provider";
 import { planningLevelLabelFr } from "@/lib/planning-public-labels";
+import {
+  DEFAULT_STUDIO_BOOKING_RULES,
+  memberLateCancellationNoticeFr,
+} from "@/lib/studio-booking-rules";
 import { useMemberBookingStore } from "@/store/member/member-booking-store";
 import type { MemberReservationItem } from "@/types/member/booking";
 
@@ -63,7 +67,10 @@ export function MemberMyReservations({ limit = 3 }: { limit?: number }) {
   const { toast } = useToast();
   const myReservations = useMemberBookingStore((s) => s.myReservations);
   const reservationHistory = useMemberBookingStore((s) => s.reservationHistory);
+  const bookingRules = useMemberBookingStore((s) => s.bookingRules);
   const loadAll = useMemberBookingStore((s) => s.loadAll);
+
+  const cancellationNotice = memberLateCancellationNoticeFr(bookingRules ?? DEFAULT_STUDIO_BOOKING_RULES);
   const [booted, setBooted] = useState(false);
   const [tab, setTab] = useState<ReservationsTab>("upcoming");
   const [actionKey, setActionKey] = useState<string | null>(null);
@@ -164,8 +171,7 @@ export function MemberMyReservations({ limit = 3 }: { limit?: number }) {
       {!loading && tab === "upcoming" ? (
         <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900 sm:text-xs lg:text-sm">
           <p>
-            <span className="font-semibold">Note :</span> les annulations sont acceptées jusqu&apos;à 6 heures avant le cours ;
-            passé ce délai, la séance est facturée.
+            <span className="font-semibold">Note :</span> {cancellationNotice}
           </p>
         </div>
       ) : null}

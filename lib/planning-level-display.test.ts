@@ -4,7 +4,7 @@ import { planningLevelDisplay } from "@/lib/planning-level-display";
 describe("planningLevelDisplay", () => {
   it("returns label and tone for ALL_LEVELS", () => {
     expect(planningLevelDisplay("ALL_LEVELS")).toEqual({
-      label: "initiations",
+      label: "initiation",
       toneClass: expect.stringContaining("border-violet"),
     });
   });

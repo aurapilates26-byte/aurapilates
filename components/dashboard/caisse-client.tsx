@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { memberAttendanceLabel } from "@/lib/member-label-fr";
 import { packCategoryMenuLabel } from "@/lib/pack-categories";
 import { DashboardHeader } from "@/components/dashboard/header";
 import { Button, DatePicker, Modal, MonthPicker } from "@/components/ui";
@@ -164,7 +165,7 @@ function CoachBilledSessionCard({ session }: { session: CoachSessionDetailDto })
   const presenceLabel =
     session.attendanceCount === 0
       ? "Aucune présence marquée"
-      : `${session.attendanceCount} adhérent${session.attendanceCount > 1 ? "s" : ""} présent${session.attendanceCount > 1 ? "s" : ""}`;
+      : memberAttendanceLabel(session.attendanceCount);
 
   return (
     <li className="rounded-lg border border-brand-medium/12 bg-white px-3 py-2.5 shadow-sm">
@@ -575,7 +576,7 @@ export function CaisseClient({ initial }: CaisseClientProps) {
           hint={
             globalKpis.saleCount === 0
               ? "Aucune vente enregistrée"
-              : `Panier moyen ${formatDt(globalKpis.avgBasketDinars!)} · ${globalKpis.uniqueMemberCount} adhérent${globalKpis.uniqueMemberCount > 1 ? "s" : ""}`
+              : `Panier moyen ${formatDt(globalKpis.avgBasketDinars!)} · ${globalKpis.uniqueMemberCount} adhérente${globalKpis.uniqueMemberCount > 1 ? "s" : ""}`
           }
           tone="neutral"
           prominent
@@ -1064,7 +1065,7 @@ function PackRevenueSection({ payments, totalDinars }: { payments: PackPaymentDt
               </colgroup>
               <thead>
                 <tr className="border-b border-brand-medium/15 text-center text-xs font-semibold uppercase tracking-wide text-brand-dark/50">
-                  <th className={PACK_REVENUE_CELL}>Adhérent</th>
+                  <th className={PACK_REVENUE_CELL}>Adhérente</th>
                   <th className={PACK_REVENUE_CELL}>Pack</th>
                   <th className={PACK_REVENUE_CELL}>Remise</th>
                   <th className={PACK_REVENUE_CELL}>Paiement</th>
@@ -1710,7 +1711,7 @@ function CoachChargeCard({
 
 const PACK_REVENUE_CELL = "px-2 py-3 align-middle text-center";
 
-/** Vente recréée automatiquement (adhérent avec pack mais sans ligne caisse auparavant). */
+/** Vente recréée automatiquement (adhérente avec pack mais sans ligne caisse auparavant). */
 function isCatchUpPackPayment(p: PackPaymentDto): boolean {
   return (p.note ?? "").includes("Rattrapage");
 }
@@ -1725,7 +1726,7 @@ function packSourceBadgeLabel(p: PackPaymentDto): string {
 
 function packSourceBadgeTitle(p: PackPaymentDto): string {
   if (isCatchUpPackPayment(p)) {
-    return "Adhérent déjà en base sans vente caisse : encaissement ajouté ensuite (rattrapage)";
+    return "Adhérente déjà en base sans vente caisse : encaissement ajouté ensuite (rattrapage)";
   }
   if (p.source === "AUTO") {
     return "Vente enregistrée automatiquement à l'inscription ou au renouvellement pack";

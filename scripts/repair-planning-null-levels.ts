@@ -1,6 +1,6 @@
 /**
  * Répare les séances Pilates reformer dont le niveau est null en base.
- * Cause : avant correction, « initiations » (ALL_LEVELS) était enregistré comme null.
+ * Cause : avant correction, « initiation » (ALL_LEVELS) était enregistré comme null.
  *
  * Usage :
  *   npx tsx scripts/repair-planning-null-levels.ts          # aperçu
@@ -33,7 +33,7 @@ async function main() {
   }
 
   if (!apply) {
-    console.log("\nAucune modification (ajoutez --apply pour définir ALL_LEVELS / initiations).");
+    console.log("\nAucune modification (ajoutez --apply pour définir ALL_LEVELS / initiation).");
     return;
   }
 
@@ -41,7 +41,7 @@ async function main() {
     where: { courseSlug: REFORMER_PLANNING_COURSE_SLUG, level: null },
     data: { level: "ALL_LEVELS" },
   });
-  console.log(`\n${result.count} séance(s) mises à jour → initiations (ALL_LEVELS).`);
+  console.log(`\n${result.count} séance(s) mises à jour → initiation (ALL_LEVELS).`);
 }
 
 main().finally(() => prisma.$disconnect());

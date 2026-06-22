@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { memberCountLabel } from "@/lib/member-label-fr";
 import type {
   AdminOverviewPackCategoryGroup,
   AdminOverviewPackLine,
@@ -137,7 +138,7 @@ function formatPct(pct: number | null): string {
 }
 
 function formatPackMemberCount(count: number): string {
-  return `${count} adhérent${count > 1 ? "s" : ""}`;
+  return memberCountLabel(count);
 }
 
 function PackLineRow({ pack }: { pack: AdminOverviewPackLine }) {
@@ -303,7 +304,7 @@ export function AdminOverviewDashboard({ data }: AdminOverviewDashboardProps) {
     },
     {
       id: "overview-members",
-      title: "Adhérents",
+      title: "Adhérentes",
       value: pulse.members.total,
       hint: `studio · ${pulse.members.active} actifs · ${pulse.members.expired} expiré${pulse.members.expired > 1 ? "s" : ""}`,
       href: "#overview-members",
@@ -375,9 +376,9 @@ export function AdminOverviewDashboard({ data }: AdminOverviewDashboardProps) {
 
         <DetailSection
           id="overview-members"
-          title="Adhérents"
+          title="Adhérentes"
           pageHref="/dashboard/adherents"
-          pageLabel="Gérer les adhérents"
+          pageLabel="Gérer les adhérentes"
         >
           <div className="space-y-4">
             <div className="flex w-full flex-wrap items-start gap-2 sm:gap-3">
@@ -405,7 +406,7 @@ export function AdminOverviewDashboard({ data }: AdminOverviewDashboardProps) {
             </div>
             <div className="grid w-full grid-cols-2 items-start gap-2 md:grid-cols-4 md:gap-3">
               <MemberStatCard
-                label="Adhérents actifs"
+                label="Adhérentes actives"
                 value={pulse.members.active}
                 hint="Pack démarré, période valide."
               />
@@ -420,7 +421,7 @@ export function AdminOverviewDashboard({ data }: AdminOverviewDashboardProps) {
                 hint="Validité du pack dépassée."
               />
               <MemberStatCard
-                label="Adhérents renouvelés"
+                label="Adhérentes renouvelées"
                 value={pulse.members.renewed}
                 hint="Au moins un renouvellement de pack."
               />
@@ -447,7 +448,7 @@ export function AdminOverviewDashboard({ data }: AdminOverviewDashboardProps) {
             <MemberStatCard label="QR assignés" value={pulse.qr.assigned} />
             <MemberStatCard label="Total cartes" value={pulse.qr.total} />
             <MemberStatCard label="QR disponibles" value={pulse.qr.available} />
-            <MemberStatCard label="Adhérents sans QR" value={details.qr.membersWithoutQr} />
+            <MemberStatCard label="Adhérentes sans QR" value={details.qr.membersWithoutQr} />
           </div>
         </DetailSection>
 

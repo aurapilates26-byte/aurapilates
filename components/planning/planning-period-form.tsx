@@ -160,7 +160,7 @@ export function PlanningPeriodForm({ embedded = false, onCancel, onSaved }: Plan
       <h3 className="text-lg font-semibold text-brand-dark sm:text-xl">Période du planning</h3>
       <p className="mt-2 text-sm leading-relaxed text-brand-dark/70">
         Fixez la durée et la date de début. Les créneaux restent en place : vous décalez seulement la fenêtre pendant
-        laquelle les adhérents peuvent réserver en ligne.
+        laquelle les adhérentes peuvent réserver en ligne.
       </p>
       {fields}
     </div>

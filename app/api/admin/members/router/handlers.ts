@@ -429,7 +429,7 @@ export async function createAdminMember(request: Request) {
         paymentMethod,
       });
     } else {
-      const noteParts = ["Création adhérent"];
+      const noteParts = ["Création adhérente"];
       if (personalDiscount?.reason) {
         noteParts.push(`Remise perso: ${personalDiscount.reason}`);
       }
@@ -745,7 +745,7 @@ export async function deleteAdminMemberById(id: string) {
       }
     });
   } catch {
-    return errorResponse("Impossible de supprimer cet adhérent (restrictions ou données liées).", 409);
+    return errorResponse("Impossible de supprimer cette adhérente (restrictions ou données liées).", 409);
   }
 
   return new Response(null, { status: 204 });

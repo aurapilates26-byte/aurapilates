@@ -1,7 +1,7 @@
 -- Total attendu pour ventes en plusieurs fois (acompte + solde).
 ALTER TABLE "pack_payments" ADD COLUMN "packSaleTotalDinars" INTEGER;
 
--- Rétro-remplissage : total attendu depuis l'adhérent (inscriptions acompte).
+-- Rétro-remplissage : total attendu depuis l'adhérente (inscriptions acompte).
 UPDATE "pack_payments" pp
 SET "packSaleTotalDinars" = m."expectedPackAmountDinars"
 FROM "members" m

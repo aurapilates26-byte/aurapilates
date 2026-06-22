@@ -130,7 +130,7 @@ export async function readStaggeredPublicationContext(): Promise<StaggeredPublic
   };
 }
 
-/** Créneau visible adhérent / site pendant la transition samedi–dimanche. */
+/** Créneau visible adhérente / site pendant la transition samedi–dimanche. */
 export function isPlanningOccurrenceVisibleToPublic(
   ctx: StaggeredPublicationContext,
   slot: {

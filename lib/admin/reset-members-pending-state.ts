@@ -4,7 +4,7 @@ import { resetMemberPackBalancesForPack } from "@/lib/admin/member-pack-renewal"
 export type ResetMembersPendingOptions = {
   /** Ne pas écrire en base — affiche seulement le résumé. */
   dryRun?: boolean;
-  /** Limiter à certains ids (sinon tous les adhérents avec pack). */
+  /** Limiter à certains ids (sinon toutes les adhérentes avec pack). */
   memberIds?: string[];
   /** Supprimer les paiements AUTO liés au pack (dates héritées du backup). */
   clearAutoPackPayments?: boolean;
@@ -19,7 +19,7 @@ export type ResetMembersPendingResult = {
 };
 
 /**
- * Remet les adhérents en attente (pack non démarré) pour reconstituer l'historique
+ * Remet les adhérentes en attente (pack non démarré) pour reconstituer l'historique
  * via « Présences » dans le planning passé.
  *
  * - isActive → false, packStartedAt → null

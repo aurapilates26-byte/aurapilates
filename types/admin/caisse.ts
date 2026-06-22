@@ -31,7 +31,7 @@ export type CaisseMonthSnapshot = {
   planningPeriodStatus: PlanningPeriodStatus;
   /** Message si la période planning ne recoupe pas le mois ou est expirée. */
   planningPeriodCoachHint: string | null;
-  /** Ventes pack (auto à la création / renouvellement adhérent). */
+  /** Ventes pack (auto à la création / renouvellement adhérente). */
   payments: PackPaymentDto[];
   /** Charges saisies manuellement. */
   expenses: CashExpenseDto[];

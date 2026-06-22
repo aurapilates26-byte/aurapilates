@@ -365,7 +365,7 @@ export function QrCodeManager() {
           <section className="rounded-2xl border border-brand-medium/20 bg-white p-6 shadow-sm">
             <h3 className="text-lg font-semibold text-brand-dark">QR code du site web</h3>
             <p className="mt-2 text-sm text-brand-dark/70">
-              Ouvre directement le site officiel au scan. Ce QR n&apos;est pas un identifiant adhérent (pas de page /id/).
+              Ouvre directement le site officiel au scan. Ce QR n&apos;est pas un identifiant adhérente (pas de page /id/).
             </p>
             <SiteWebQrPreview />
           </section>

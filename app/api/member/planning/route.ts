@@ -111,6 +111,7 @@ export async function GET(request: Request) {
     spotsRemaining: number;
     waitSpotsRemaining: number | null;
     myReservation: { id: string; status: string } | null;
+    isPast: boolean;
   };
 
   const occurrences: OccRow[] = [];
@@ -133,9 +134,7 @@ export async function GET(request: Request) {
       if (!isPlanningOccurrenceVisibleToPublic(staggeredCtx, p, sessionKey)) {
         continue;
       }
-      if (isSessionSlotEndedLocal(sessionKey, p.endTime)) {
-        continue;
-      }
+      const isPast = isSessionSlotEndedLocal(sessionKey, p.endTime);
       const rows = reservations.filter(
         (r) => r.planningId === p.id && ymdKeysForDbDate(new Date(r.sessionDate)).has(sessionKey),
       );
@@ -164,6 +163,7 @@ export async function GET(request: Request) {
         spotsRemaining,
         waitSpotsRemaining,
         myReservation: mine ? { id: mine.id, status: mine.status } : null,
+        isPast,
       });
     }
   }

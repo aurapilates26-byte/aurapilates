@@ -170,7 +170,7 @@ export async function DELETE(_request: Request, { params }: Params) {
 
   if (!pack) return errorResponse("Pack not found", 404);
   if (pack._count.members > 0) {
-    return errorResponse("Impossible de supprimer un pack déjà assigné à des adhérents", 409);
+    return errorResponse("Impossible de supprimer un pack déjà assigné à des adhérentes", 409);
   }
 
   await db.pack.delete({

@@ -8,6 +8,10 @@ import { PlanningLevelPill } from "@/components/dashboard/planning-session-card"
 import { badgeClasses } from "@/lib/badge-classes";
 import { planningLevelBadgeClass } from "@/lib/planning-level-badge";
 import { planningLevelLabelFr } from "@/lib/planning-public-labels";
+import {
+  DEFAULT_STUDIO_BOOKING_RULES,
+  memberLateCancellationConfirmNoticeFr,
+} from "@/lib/studio-booking-rules";
 import { useMemberBookingStore } from "@/store/member/member-booking-store";
 import type { MemberPlanningWindow } from "@/types/member/booking";
 
@@ -94,7 +98,12 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
   const eligibility = useMemberBookingStore((s) => s.eligibility);
   const planningRange = useMemberBookingStore((s) => s.planningRange);
   const planningWindow = useMemberBookingStore((s) => s.planningWindow);
+  const bookingRules = useMemberBookingStore((s) => s.bookingRules);
   const loadAll = useMemberBookingStore((s) => s.loadAll);
+
+  const cancellationNotice = memberLateCancellationConfirmNoticeFr(
+    bookingRules ?? DEFAULT_STUDIO_BOOKING_RULES,
+  );
 
   const [loading, setLoading] = useState(true);
   const [actionKey, setActionKey] = useState<string | null>(null);
@@ -120,6 +129,15 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
     if (dc !== 0) return dc;
     return a.startTime.localeCompare(b.startTime);
   });
+  const daysWithOccurrences = useMemo(() => {
+    const s = new Set<number>();
+    for (const o of nextOccurrences) {
+      const wd = weekdayFromYmd(o.sessionDate);
+      if (wd != null) s.add(wd);
+    }
+    return s;
+  }, [nextOccurrences]);
+
   const visible = nextOccurrences.filter((o) => {
     const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(o.sessionDate);
     if (!m) return false;
@@ -263,6 +281,16 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
                   }`}
                 >
                   <span>{dayLabels[d]?.toUpperCase()}</span>
+                  {daysWithOccurrences.has(d) ? (
+                    <span
+                      className={`inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold leading-none ${
+                        selectedDay === d ? "bg-white/20 text-white" : "bg-brand-medium/15 text-brand-dark/70"
+                      }`}
+                      title="Séances planifiées ce jour"
+                    >
+                      {nextOccurrences.filter((o) => weekdayFromYmd(o.sessionDate) === d).length}
+                    </span>
+                  ) : null}
                   {daysWithMyReservations.has(d) ? (
                     <span
                       className={`h-1.5 w-1.5 shrink-0 rounded-full ${
@@ -290,17 +318,20 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
               <div className="mt-4 grid grid-cols-1 gap-3">
                 {visible.map((o) => {
                   const rowKey = `${o.planningId}-${o.sessionDate}`;
-                  const canBookMain = !o.myReservation && o.spotsRemaining > 0;
+                  const isPast = o.isPast;
+                  const canBookMain = !isPast && !o.myReservation && o.spotsRemaining > 0;
                   const categoryBlocked =
+                    !isPast &&
                     eligibility?.mode === "single" &&
                     eligibility.allowedCourseSlugs.length > 0 &&
                     !eligibility.allowedCourseSlugs.includes(o.courseSlug);
                   const canWait =
+                    !isPast &&
                     !o.myReservation &&
                     o.spotsRemaining === 0 &&
                     o.waitlistCapacity != null &&
                     (o.waitSpotsRemaining ?? 0) > 0;
-                  const full = !o.myReservation && !canBookMain && !canWait;
+                  const full = !isPast && !o.myReservation && !canBookMain && !canWait;
                   const enrolled = Boolean(o.myReservation);
                   const enrolledLabel = o.myReservation?.status === "WAITLIST" ? "En attente" : "Déjà inscrite";
 
@@ -315,9 +346,16 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
                   };
 
                   return (
-                    <article key={rowKey} className="rounded-xl border border-brand-medium/20 bg-zinc-50/40 p-3 sm:p-4">
+                    <article
+                      key={rowKey}
+                      className={`rounded-xl border p-3 sm:p-4 ${
+                        isPast
+                          ? "border-brand-medium/15 bg-zinc-100/70 opacity-80"
+                          : "border-brand-medium/20 bg-zinc-50/40"
+                      }`}
+                    >
                       <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0 flex-1">
+                        <div className={`min-w-0 flex-1 ${isPast ? "text-brand-dark/55" : ""}`}>
                           <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-dark/60 sm:text-xs">
                             {dayLabelFromYmd(o.sessionDate)} · {formatDateFrFromYmd(o.sessionDate)}
                           </p>
@@ -349,7 +387,11 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
                         </div>
 
                         <div className="flex items-center justify-end gap-1.5 shrink-0">
-                          {enrolled ? (
+                          {isPast && !enrolled ? (
+                            <span className="rounded-full border border-zinc-300 bg-zinc-200/80 px-2.5 py-0.5 text-[11px] font-semibold text-zinc-600 sm:px-3 sm:py-1 sm:text-xs">
+                              Séance passée
+                            </span>
+                          ) : enrolled ? (
                             <button
                               type="button"
                               className={actionBtnNeutralClass}
@@ -410,7 +452,12 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
                         </div>
                       </div>
 
-                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <div className={`mt-3 flex flex-wrap items-center gap-2 ${isPast ? "opacity-75" : ""}`}>
+                        {isPast ? (
+                          <span className="rounded-full border border-zinc-300/80 bg-zinc-200/60 px-2 py-0.5 text-[11px] font-medium text-zinc-600">
+                            Créneau terminé — réservation fermée
+                          </span>
+                        ) : null}
                         {o.level && planningLevelLabelFr(o.level) ? (
                           <PlanningLevelPill
                             levelLabel={planningLevelLabelFr(o.level)!}
@@ -481,8 +528,7 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
                 </svg>
               </span>
               <p className="leading-relaxed">
-                <span className="font-semibold">Note importante :</span> les annulations sont acceptées jusqu&apos;à 6 heures
-                avant le cours ; passé ce délai, la séance est facturée.
+                <span className="font-semibold">Note importante :</span> {cancellationNotice}
               </p>
             </div>
           </div>

@@ -207,12 +207,12 @@ export function PlanningHistoricalPresenceDialog({
         <p className="text-xs leading-relaxed text-brand-dark/65">
           La présence est enregistrée à la <strong>date du cours</strong> ({dateFr}), pas à
           aujourd&apos;hui. Une réservation <code className="text-[10px]">ATTENDED</code> est créée
-          automatiquement et <strong>1 séance est débitée</strong> du pack de l&apos;adhérent.
+          automatiquement et <strong>1 séance est débitée</strong> du pack de l&apos;adhérente.
         </p>
 
         <div>
           <label htmlFor="historical-member-search" className="text-xs font-semibold text-brand-dark/70">
-            Rechercher un adhérent
+            Rechercher une adhérente
           </label>
           <Input
             id="historical-member-search"
@@ -225,10 +225,10 @@ export function PlanningHistoricalPresenceDialog({
             className="mt-1"
             autoComplete="off"
           />
-          {searching ? <p className="mt-1 text-xs text-brand-dark/50">Recherche dans les adhérents…</p> : null}
+          {searching ? <p className="mt-1 text-xs text-brand-dark/50">Recherche dans les adhérentes…</p> : null}
           {searchError ? <p className="mt-1 text-xs text-red-600">{searchError}</p> : null}
           {!searching && query.trim().length >= 2 && hits.length === 0 && !searchError ? (
-            <p className="mt-1 text-xs text-brand-dark/55">Aucun adhérent trouvé pour « {query.trim()} ».</p>
+            <p className="mt-1 text-xs text-brand-dark/55">Aucune adhérente trouvée pour « {query.trim()} ».</p>
           ) : null}
 
           {hits.length > 0 ? (

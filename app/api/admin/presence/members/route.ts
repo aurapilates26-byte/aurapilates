@@ -10,7 +10,7 @@ function errorResponse(message: string, status: number) {
 
 const querySchema = z.object({
   q: z.string().trim().min(2),
-  /** Inclure les adhérents inactifs (saisie historique). */
+  /** Inclure les adhérentes inactives (saisie historique). */
   historical: z.enum(["1", "true"]).optional(),
 });
 

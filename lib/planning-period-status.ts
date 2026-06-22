@@ -111,7 +111,7 @@ export function adminPeriodAlertMessageFr(meta: PlanningPeriodEnriched): string 
       meta.daysSinceExpiry != null && meta.daysSinceExpiry > 0
         ? ` depuis ${meta.daysSinceExpiry} jour${meta.daysSinceExpiry > 1 ? "s" : ""}`
         : "";
-    return `La période de réservation est terminée${since} (${meta.periodLabel}). Les adhérents ne peuvent plus réserver en ligne.`;
+    return `La période de réservation est terminée${since} (${meta.periodLabel}). Les adhérentes ne peuvent plus réserver en ligne.`;
   }
   if (
     meta.status === "active" &&

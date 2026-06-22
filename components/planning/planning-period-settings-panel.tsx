@@ -68,7 +68,7 @@ export function PlanningPeriodSettingsPanel({
     <div className="rounded-2xl border border-brand-medium/20 bg-white p-4 shadow-sm sm:p-6">
       <h3 className="text-lg font-semibold text-brand-dark sm:text-xl">Période du planning</h3>
       <p className="mt-2 max-w-3xl text-sm leading-relaxed text-brand-dark/70">
-        Configurez la période visible par les adhérents, préparez la suivante en brouillon, ou reconstituez
+        Configurez la période visible par les adhérentes, préparez la suivante en brouillon, ou reconstituez
         l&apos;historique des périodes passées.
       </p>
 
@@ -98,14 +98,14 @@ export function PlanningPeriodSettingsPanel({
         {settingsTab === "published" ? (
           <div className="space-y-4">
             <p className="text-sm text-brand-dark/65">
-              Ce que les adhérents et le site public voient actuellement.
+              Ce que les adhérentes et le site public voient actuellement.
             </p>
             <PlanningPeriodForm embedded onSaved={onSaved} />
           </div>
         ) : settingsTab === "draft" ? (
           <div className="space-y-4">
             <p className="text-sm text-brand-dark/65">
-              Invisible pour les adhérents jusqu&apos;au jour de début choisi (affichage automatique à 00:00 ce
+              Invisible pour les adhérentes jusqu&apos;au jour de début choisi (affichage automatique à 00:00 ce
               jour-là).
             </p>
             <PlanningPeriodDraftForm

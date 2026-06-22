@@ -13,6 +13,13 @@ import {
   type PackPaymentMethodValue,
 } from "@/lib/pack-payment-method";
 import { ListPageSummary, ListPagination } from "@/components/dashboard/list-pagination";
+import {
+  formatPackSelectOptionLabel,
+  sortPacksBySessionAsc,
+} from "@/lib/public-pack-display";
+import { computePersonalDiscountPreviewFromForm } from "@/lib/member-personal-discount";
+import type { PackDisplayPricing } from "@/lib/pack-pricing";
+import type { PersonalDiscountType } from "@/types/admin/pack-payment";
 
 const MEMBERS_PAGE_SIZE = 20;
 const MEMBERS_FETCH_PAGE_SIZE = 5000;
@@ -57,7 +64,7 @@ function MemberDetailLink({ memberId }: { memberId: string }) {
   return (
     <Link
       href={`/dashboard/adherents/${memberId}`}
-      aria-label="Voir la fiche adhérent"
+      aria-label="Voir la fiche adhérente"
       title="Voir la fiche"
       className={memberDetailLinkClass}
     >
@@ -118,6 +125,8 @@ type PackItem = {
   isActive: boolean;
   sessionCount?: number | null;
   durationDays?: string | null;
+  priceCents?: number | null;
+  pricing?: PackDisplayPricing;
   courseQuotas?: { courseSlug: string; sessionCount: number }[];
 };
 
@@ -156,6 +165,9 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
   const [packCategory, setPackCategory] = useState("");
   const [packId, setPackId] = useState("");
   const [isActive, setIsActive] = useState(false);
+  const [discountType, setDiscountType] = useState<"NONE" | PersonalDiscountType>("NONE");
+  const [discountValue, setDiscountValue] = useState("");
+  const [discountReason, setDiscountReason] = useState("");
   const [paymentMode, setPaymentMode] = useState<"full" | "deposit">("full");
   const [depositAmountDinars, setDepositAmountDinars] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PackPaymentMethodValue>("CASH");
@@ -195,7 +207,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     if (qrStatus === "UNKNOWN") return isFetchingQrKey ? "Vérification..." : "Non vérifié";
     if (qrStatus === "UNASSIGNED") return "Disponible";
     if (qrStatus === "ASSIGNED") {
-      if (editingMemberId && qrAssignedMemberId === editingMemberId) return "Lié à cet adhérent";
+      if (editingMemberId && qrAssignedMemberId === editingMemberId) return "Liée à cette adhérente";
       return "Déjà assigné";
     }
     return "Identifiant introuvable";
@@ -216,7 +228,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
       const response = await fetch(`/api/admin/members?${params.toString()}`, { cache: "no-store" });
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(data?.error ?? "Impossible de charger les adhérents.");
+        throw new Error(data?.error ?? "Impossible de charger les adhérentes.");
       }
       const data = (await response.json()) as MembersResponse;
       setItems(sortMembersByCreatedAtDesc(data.items));
@@ -268,8 +280,24 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
       const selected = packsForForm.find((p) => p.id === packId);
       if (selected) list = [selected, ...list];
     }
-    return [...list].sort((a, b) => a.name.localeCompare(b.name, "fr"));
+    return sortPacksBySessionAsc(list);
   }, [packCategory, packId, packsForForm]);
+
+  const selectedPack = useMemo(
+    () => packsForForm.find((pack) => pack.id === packId),
+    [packId, packsForForm],
+  );
+
+  const selectedPackListPriceDinars = useMemo(() => {
+    if (!selectedPack) return null;
+    return selectedPack.pricing?.finalPriceDinars ?? selectedPack.priceCents ?? null;
+  }, [selectedPack]);
+
+  const createDiscountPreview = useMemo(
+    () =>
+      computePersonalDiscountPreviewFromForm(selectedPackListPriceDinars, discountType, discountValue),
+    [selectedPackListPriceDinars, discountType, discountValue],
+  );
 
   const handlePackCategoryChange = (value: string) => {
     setPackCategory(value);
@@ -369,6 +397,9 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     setPackCategory("");
     setPackId("");
     setIsActive(false);
+    setDiscountType("NONE");
+    setDiscountValue("");
+    setDiscountReason("");
     setPaymentMode("full");
     setDepositAmountDinars("");
     setPaymentMethod("CASH");
@@ -444,17 +475,43 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
       return;
     }
 
+    if (!isEditMode && discountType !== "NONE") {
+      const parsedDiscount = Number.parseInt(discountValue, 10);
+      if (!Number.isFinite(parsedDiscount) || parsedDiscount <= 0) {
+        setModalError("La remise personnalisée doit être un entier positif.");
+        return;
+      }
+      if (discountType === "PERCENT" && parsedDiscount > 100) {
+        setModalError("La remise en pourcentage doit être entre 1 et 100.");
+        return;
+      }
+      if (
+        discountType === "AMOUNT" &&
+        selectedPackListPriceDinars != null &&
+        parsedDiscount > selectedPackListPriceDinars
+      ) {
+        setModalError("La remise ne peut pas dépasser le montant à encaisser.");
+        return;
+      }
+    }
+
     if (!isEditMode && paymentMode === "deposit") {
-      const deposit = Number(depositAmountDinars);
+      const deposit = Number.parseInt(depositAmountDinars, 10);
       if (!Number.isFinite(deposit) || deposit <= 0) {
         setModalError("Indiquez un montant d'acompte valide.");
+        return;
+      }
+      const expectedTotal =
+        createDiscountPreview?.final ?? selectedPackListPriceDinars ?? null;
+      if (expectedTotal != null && deposit >= expectedTotal) {
+        setModalError("L'acompte doit être inférieur au montant total du pack.");
         return;
       }
     }
 
     if (!isEditMode) {
       if (trimmedQr && qrStatus === "ASSIGNED") {
-        setModalError("Ce QR code est déjà assigné à un adhérent.");
+        setModalError("Ce QR code est déjà assigné à une adhérente.");
         return;
       }
     } else if (trimmedQr) {
@@ -465,7 +522,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
         qrAssignedMemberId &&
         qrAssignedMemberId !== editingMemberId
       ) {
-        setModalError("Ce QR code est déjà assigné à un autre adhérent.");
+        setModalError("Ce QR code est déjà assigné à une autre adhérente.");
         return;
       }
     }
@@ -473,23 +530,35 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     setIsSubmitting(true);
     try {
       if (!isEditMode) {
+        const createBody: Record<string, unknown> = {
+          qrId: trimmedQr || undefined,
+          email: email.trim() || undefined,
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          phone: phone.trim(),
+          birthDate: birthDate || undefined,
+          packId,
+          isActive,
+          paymentMode,
+          paymentMethod,
+        };
+
+        if (discountType !== "NONE") {
+          createBody.personalDiscount = {
+            type: discountType,
+            value: Number.parseInt(discountValue, 10),
+            reason: discountReason.trim() || undefined,
+          };
+        }
+
+        if (paymentMode === "deposit") {
+          createBody.depositAmountDinars = Number.parseInt(depositAmountDinars, 10);
+        }
+
         const response = await fetch("/api/admin/members", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            qrId: trimmedQr,
-            email: email.trim() || undefined,
-            firstName: firstName.trim(),
-            lastName: lastName.trim(),
-            phone: phone.trim(),
-            birthDate: birthDate || undefined,
-            packId,
-            isActive,
-            paymentMode,
-            depositAmountDinars:
-              paymentMode === "deposit" ? Number(depositAmountDinars) : undefined,
-            paymentMethod,
-          }),
+          body: JSON.stringify(createBody),
         });
 
         if (!response.ok) {
@@ -503,8 +572,8 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
         resetForm();
         toast({
           variant: "success",
-          title: "Adhérent créé",
-          description: "Le nouvel adhérent a été ajouté et le QR code a été assigné.",
+          title: "Adhérente créée",
+          description: "La nouvelle adhérente a été ajoutée et le QR code a été assigné.",
         });
         return;
       }
@@ -551,7 +620,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
       resetForm();
       toast({
         variant: "success",
-        title: "Adhérent mis à jour",
+        title: "Adhérente mise à jour",
         description: "Les informations ont été enregistrées.",
       });
     } catch (e) {
@@ -592,7 +661,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
       await loadMembers();
       toast({
         variant: "success",
-        title: "Adhérent supprimé",
+        title: "Adhérente supprimée",
         description:
           `${target.firstName ?? ""} ${target.lastName ?? ""}`.trim() || "Profil retiré — compte supprimé.",
       });
@@ -627,7 +696,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
       setDepositMember(null);
       await loadMembers();
       await refreshDepositCount();
-      toast({ variant: "success", title: "Acompte finalisé", description: "L'adhérent est maintenant actif." });
+      toast({ variant: "success", title: "Acompte finalisé", description: "L'adhérente est maintenant active." });
     } catch (e) {
       toast({
         variant: "error",
@@ -663,12 +732,12 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
               <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
                 <div>
                   <p className="text-base font-semibold text-brand-dark">
-                    {listMode === "deposits" ? "Avances en attente" : "Liste des adhérents"}
+                    {listMode === "deposits" ? "Avances en attente" : "Liste des adhérentes"}
                   </p>
                   <p className="mt-1 text-xs text-brand-dark/60">
                     {search.trim() || statusFilter !== "ALL" || packFilterId !== "ALL"
-                      ? `${filteredItems.length} résultat(s) sur ${items.length} adhérent(s)`
-                      : `${items.length} adhérent(s) au total`}
+                      ? `${filteredItems.length} résultat(s) sur ${items.length} adhérente(s)`
+                      : `${items.length} adhérente(s) au total`}
                   </p>
                 </div>
 
@@ -686,8 +755,8 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                     onChange={(value) => setStatusFilter(value)}
                     options={[
                       { value: "ALL", label: "Tous" },
-                      { value: "ACTIVE", label: "Actifs" },
-                      { value: "INACTIVE", label: "Inactifs" },
+                      { value: "ACTIVE", label: "Actives" },
+                      { value: "INACTIVE", label: "Inactives" },
                     ]}
                   />
                   <SelectMenu
@@ -720,7 +789,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
             <div className="px-5 py-10 text-center text-sm text-brand-dark/60">
               {listMode === "deposits"
                 ? "Aucune avance en attente."
-                : "Aucun adhérent. Ajustez la recherche ou les filtres."}
+                : "Aucune adhérente. Ajustez la recherche ou les filtres."}
             </div>
           ) : (
             <>
@@ -733,12 +802,12 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                           <Link href={`/dashboard/adherents/${m.id}`} className="hover:underline">
                             {(m.firstName || m.lastName)
                               ? `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim()
-                              : "Adhérent"}
+                              : "Adhérente"}
                           </Link>
                         ) : (
                           (m.firstName || m.lastName)
                             ? `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim()
-                            : "Adhérent"
+                            : "Adhérente"
                         )}
                       </p>
                       <span
@@ -748,7 +817,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                             : "border border-zinc-200 bg-zinc-50 text-zinc-800"
                         }`}
                       >
-                        {m.isActive ? "Actif" : "Inactif"}
+                        {m.isActive ? "Active" : "Inactive"}
                       </span>
                     </div>
                     <p className="text-xs text-brand-dark/75">Pack: {m.pack?.name ?? "—"}</p>
@@ -794,7 +863,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                             <button
                               type="button"
                               onClick={() => setMemberToDelete(m)}
-                              aria-label="Supprimer l'adhérent"
+                              aria-label="Supprimer l'adhérente"
                               title="Supprimer"
                               className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 transition hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200"
                             >
@@ -842,12 +911,12 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                             <Link href={`/dashboard/adherents/${m.id}`} className="hover:underline">
                               {(m.firstName || m.lastName)
                                 ? `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim()
-                                : "Adhérent"}
+                                : "Adhérente"}
                             </Link>
                           ) : (
                             (m.firstName || m.lastName)
                               ? `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim()
-                              : "Adhérent"
+                              : "Adhérente"
                           )}
                         </td>
                         {listMode === "deposits" ? (
@@ -869,7 +938,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                                     : "border border-zinc-200 bg-zinc-50 text-zinc-800"
                                 }`}
                               >
-                                {m.isActive ? "Actif" : "Inactif"}
+                                {m.isActive ? "Active" : "Inactive"}
                               </span>
                             </td>
                             <td className="px-4 py-4 text-center text-brand-dark/80">{m.pack?.name ?? "—"}</td>
@@ -904,7 +973,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                                 <button
                                   type="button"
                                   onClick={() => setMemberToDelete(m)}
-                                  aria-label="Supprimer l'adhérent"
+                                  aria-label="Supprimer l'adhérente"
                                   title="Supprimer"
                                   className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 transition hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200"
                                 >
@@ -927,13 +996,13 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                   meta={meta}
                   isLoading={isLoading}
                   hasError={Boolean(error)}
-                  itemLabel="adhérents"
+                  itemLabel="adhérentes"
                 />
                 <ListPagination
                   page={meta.page}
                   totalPages={meta.totalPages}
                   onPageChange={setPage}
-                  ariaLabel="Pagination des adhérents"
+                  ariaLabel="Pagination des adhérentes"
                 />
               </div>
             </>
@@ -942,7 +1011,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
       ) : (
         <div className="rounded-2xl border border-brand-medium/20 bg-white p-6 shadow-sm">
           <h3 className="text-xl font-semibold text-brand-dark">
-            {editingMemberId ? "Modifier un adhérent" : "Ajouter un adhérent"}
+            {editingMemberId ? "Modifier une adhérente" : "Ajouter une adhérente"}
           </h3>
           <p className="mt-2 text-sm text-brand-dark/70">
             {editingMemberId ? (
@@ -1050,7 +1119,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                     { value: "" as string, label: packCategory ? "Choisir un pack" : "Catégorie d'abord" },
                     ...packsForCategory.map((pack) => ({
                       value: pack.id,
-                      label: `${pack.name}${pack.isActive ? "" : " (inactive)"}`,
+                      label: formatPackSelectOptionLabel(pack),
                     })),
                   ]}
                 />
@@ -1062,7 +1131,66 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                 />
               </div>
 
-              <Checkbox checked={isActive} onChange={(e) => setIsActive(e.target.checked)} label="Actif" />
+              {!editingMemberId ? (
+                <>
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                    <SelectMenu
+                      id="member-discount-type"
+                      label="Remise personnalisée"
+                      value={discountType}
+                      onChange={(value) => setDiscountType(value as "NONE" | PersonalDiscountType)}
+                      options={[
+                        { value: "NONE", label: "Aucune remise" },
+                        { value: "PERCENT", label: "Pourcentage (%)" },
+                        { value: "AMOUNT", label: "Montant (DT)" },
+                      ]}
+                    />
+                    <Input
+                      id="member-discount-value"
+                      type="number"
+                      min={0}
+                      disabled={discountType === "NONE"}
+                      label={discountType === "PERCENT" ? "Valeur (%)" : "Valeur (DT)"}
+                      value={discountValue}
+                      onChange={(e) => setDiscountValue(e.target.value)}
+                      placeholder={discountType === "PERCENT" ? "Ex: 10" : "Ex: 50"}
+                    />
+                    <Input
+                      id="member-discount-reason"
+                      disabled={discountType === "NONE"}
+                      label="Motif remise (optionnel)"
+                      value={discountReason}
+                      onChange={(e) => setDiscountReason(e.target.value)}
+                      placeholder="Ex. : tarif préférentiel"
+                    />
+                  </div>
+                  {createDiscountPreview ? (
+                    <div className="rounded-xl border border-sky-200/80 bg-sky-50/70 px-4 py-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-sky-900/80">
+                        Aperçu du prix final
+                      </p>
+                      <div className="mt-2 rounded-lg border border-sky-200/70 bg-white/75 px-3 py-2">
+                        <p className="text-xs text-sky-900/80">
+                          Prix catalogue: <span className="font-semibold">{createDiscountPreview.base} DT</span>
+                        </p>
+                        <p className="text-xs text-sky-900/80">
+                          Remise appliquée: <span className="font-semibold">−{createDiscountPreview.discount} DT</span>
+                        </p>
+                        <p className="text-xs font-bold text-sky-950">
+                          Prix final: {createDiscountPreview.final} DT
+                        </p>
+                      </div>
+                      {paymentMode === "deposit" ? (
+                        <p className="mt-2 text-xs text-sky-900/75">
+                          L&apos;acompte s&apos;applique sur ce montant final.
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
+
+              <Checkbox checked={isActive} onChange={(e) => setIsActive(e.target.checked)} label="Active" />
 
               {!editingMemberId ? (
                 <>
@@ -1158,7 +1286,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
 
       <ConfirmDialog
         isOpen={Boolean(memberToDelete)}
-        title="Supprimer cet adhérent ?"
+        title="Supprimer cette adhérente ?"
         description={
           memberToDelete
             ? `${memberToDelete.firstName ?? ""} ${memberToDelete.lastName ?? ""}`.trim() ||

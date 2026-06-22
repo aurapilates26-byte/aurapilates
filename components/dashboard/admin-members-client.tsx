@@ -14,11 +14,11 @@ export function AdminMembersClient() {
     <>
       <DashboardHeader
         role="ADMIN"
-        title={listMode === "deposits" && viewMode === "list" ? "Avances adhérents" : "Adhérents"}
+        title={listMode === "deposits" && viewMode === "list" ? "Avances adhérentes" : "Adhérentes"}
         description={
           listMode === "deposits" && viewMode === "list"
-            ? "Adhérents avec acompte en attente. Finalisez le solde et assignez le QR pour les activer dans la liste principale."
-            : "Ajoutez des adhérents et assignez un QR code maintenant ou plus tard depuis leur fiche."
+            ? "Adhérentes avec acompte en attente. Finalisez le solde et assignez le QR pour les activer dans la liste principale."
+            : "Ajoutez des adhérentes et assignez un QR code maintenant ou plus tard depuis leur fiche."
         }
         showRoleLine={false}
         actions={

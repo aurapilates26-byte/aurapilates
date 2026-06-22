@@ -9,6 +9,16 @@ import { PlanningHistoricalPresenceDialog } from "@/components/planning/planning
 import { PlanningDayPill } from "@/components/planning/planning-day-pill";
 import { PlanningPeriodActiveBadge } from "@/components/planning/planning-period-active-badge";
 import { PlanningPeriodSettingsPanel } from "@/components/planning/planning-period-settings-panel";
+import {
+  computePlanningCourseEnd,
+  computePlanningGlobalSlotEnd,
+  DEFAULT_PLANNING_CAPACITY,
+  DEFAULT_PLANNING_COURSE_MINUTES,
+  DEFAULT_PLANNING_WAITLIST_CAPACITY,
+  hasPlanningSlotOverlap,
+  PLANNING_GLOBAL_SLOT_MINUTES,
+  PLANNING_SLOT_OVERLAP_ERROR,
+} from "@/lib/planning-session-slot";
 import { badgeClasses } from "@/lib/badge-classes";
 import { planningLevelBadgeClass } from "@/lib/planning-level-badge";
 import { buildPeriodDaySelectOptions, weekdayDateLineForPeriod, weekdaysPresentInPeriod } from "@/lib/planning-period-day-dates";
@@ -160,10 +170,9 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   const [anchorSessionYmd, setAnchorSessionYmd] = useState("");
   const [level, setLevel] = useState<LevelFormValue>("NONE");
   const [startTime, setStartTime] = useState("");
-  const [endTime, setEndTime] = useState("");
-  const [durationMinutes, setDurationMinutes] = useState("");
-  const [capacity, setCapacity] = useState("");
-  const [waitlistCapacity, setWaitlistCapacity] = useState("");
+  const [durationMinutes, setDurationMinutes] = useState(String(DEFAULT_PLANNING_COURSE_MINUTES));
+  const [capacity, setCapacity] = useState(String(DEFAULT_PLANNING_CAPACITY));
+  const [waitlistCapacity, setWaitlistCapacity] = useState(String(DEFAULT_PLANNING_WAITLIST_CAPACITY));
 
   const [archivedPeriods, setArchivedPeriods] = useState<PlanningArchivedPeriodItem[]>([]);
   const [selectedArchiveStartYmd, setSelectedArchiveStartYmd] = useState("");
@@ -209,6 +218,17 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   }, [sessionPeriodConfig]);
 
   const useDatedDaySelect = sessionDayFormOptions.length > 0;
+
+  const computedGlobalSlotEnd = useMemo(() => {
+    if (!startTime) return null;
+    return computePlanningGlobalSlotEnd(startTime);
+  }, [startTime]);
+
+  const computedCourseEnd = useMemo(() => {
+    const duration = Number(durationMinutes);
+    if (!startTime || !Number.isFinite(duration) || duration < 10) return null;
+    return computePlanningCourseEnd(startTime, duration);
+  }, [durationMinutes, startTime]);
 
   const isDraftContext =
     sessionFormSource === "draft" ||
@@ -428,10 +448,9 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     setAnchorSessionYmd("");
     setLevel("NONE");
     setStartTime("");
-    setEndTime("");
-    setDurationMinutes("");
-    setCapacity("");
-    setWaitlistCapacity("");
+    setDurationMinutes(String(DEFAULT_PLANNING_COURSE_MINUTES));
+    setCapacity(String(DEFAULT_PLANNING_CAPACITY));
+    setWaitlistCapacity(String(DEFAULT_PLANNING_WAITLIST_CAPACITY));
     setFormError(null);
   };
 
@@ -481,20 +500,23 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
       setFormError("Heure de début invalide.");
       return;
     }
-    if (!endTime) {
-      setFormError("Heure de fin invalide.");
-      return;
-    }
     const duration = Number(durationMinutes);
     const cap = Number(capacity);
     const waitCap = waitlistCapacity.trim() ? Number(waitlistCapacity) : null;
+    const endTime = computePlanningGlobalSlotEnd(startTime);
 
     if (!Number.isFinite(duration) || duration < 10) {
       setFormError("La durée doit être d'au moins 10 minutes.");
       return;
     }
-    if (endTime <= startTime) {
-      setFormError("L'heure de fin doit être après l'heure de début.");
+    if (duration > PLANNING_GLOBAL_SLOT_MINUTES) {
+      setFormError(
+        `La durée du cours ne peut pas dépasser ${PLANNING_GLOBAL_SLOT_MINUTES} minutes (créneau global d'1 heure).`,
+      );
+      return;
+    }
+    if (!endTime) {
+      setFormError("Impossible de calculer la fin du créneau (vérifiez l'heure de début).");
       return;
     }
     if (!Number.isFinite(cap) || cap < 1) {
@@ -503,6 +525,20 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     }
     if (waitCap !== null && (!Number.isFinite(waitCap) || waitCap < 0)) {
       setFormError("Liste d'attente invalide.");
+      return;
+    }
+
+    const resolvedAnchorYmd = anchorSessionYmd.trim();
+    const sessionItemsForDuplicateCheck = isArchiveContext
+      ? archiveItems
+      : isDraftContext
+        ? draftItems
+        : items;
+    if (
+      resolvedAnchorYmd &&
+      hasPlanningSlotOverlap(sessionItemsForDuplicateCheck, resolvedAnchorYmd, startTime, editingId)
+    ) {
+      setFormError(PLANNING_SLOT_OVERLAP_ERROR);
       return;
     }
 
@@ -586,7 +622,6 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     );
     setLevel(item.level ?? "NONE");
     setStartTime(item.startTime);
-    setEndTime(item.endTime);
     setDurationMinutes(String(item.durationMinutes));
     setCapacity(String(item.capacity));
     setWaitlistCapacity(item.waitlistCapacity !== null ? String(item.waitlistCapacity) : "");
@@ -905,7 +940,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
               />
             </div>
 
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <Input
                 id="planning-start-time"
                 label="Heure de début"
@@ -914,22 +949,32 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
                 onChange={(e) => setStartTime(e.target.value)}
               />
               <Input
-                id="planning-end-time"
-                label="Heure de fin"
-                type="time"
-                value={endTime}
-                onChange={(e) => setEndTime(e.target.value)}
-              />
-              <Input
                 id="planning-duration"
                 label="Durée (minutes)"
                 type="number"
                 min={10}
                 value={durationMinutes}
                 onChange={(e) => setDurationMinutes(e.target.value)}
-                placeholder="60"
               />
             </div>
+            {computedGlobalSlotEnd ? (
+              <div className="rounded-xl border border-brand-medium/15 bg-zinc-50/60 px-4 py-3 text-sm text-brand-dark/70">
+                <p>
+                  Créneau réservé (1 h) :{" "}
+                  <span className="font-semibold text-brand-dark">
+                    {startTime} – {computedGlobalSlotEnd}
+                  </span>
+                </p>
+                {computedCourseEnd ? (
+                  <p className="mt-1">
+                    Cours effectif ({durationMinutes} min) :{" "}
+                    <span className="font-semibold text-brand-dark">
+                      {startTime} – {computedCourseEnd}
+                    </span>
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
 
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <Input
@@ -939,7 +984,6 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
                 min={1}
                 value={capacity}
                 onChange={(e) => setCapacity(e.target.value)}
-                placeholder="8"
               />
               <Input
                 id="planning-waitlist"
@@ -948,7 +992,6 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
                 min={0}
                 value={waitlistCapacity}
                 onChange={(e) => setWaitlistCapacity(e.target.value)}
-                placeholder="0"
               />
             </div>
           </div>

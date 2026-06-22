@@ -336,7 +336,7 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
                         <th className="px-4 py-3 text-center">Séances</th>
                         <th className="px-4 py-3 text-center">Prix</th>
                         <th className="px-4 py-3 text-center">Duree</th>
-                        <th className="px-4 py-3 text-center">Adherents</th>
+                        <th className="px-4 py-3 text-center">Adhérentes</th>
                         <th className="px-4 py-3 text-center">Action</th>
                       </tr>
                     </thead>

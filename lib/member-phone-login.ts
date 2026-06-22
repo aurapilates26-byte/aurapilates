@@ -50,7 +50,7 @@ async function ensureMemberUser(member: {
 }): Promise<User> {
   if (member.user) return member.user;
 
-  const displayName = `${member.firstName ?? ""} ${member.lastName ?? ""}`.trim() || "Adhérent";
+  const displayName = `${member.firstName ?? ""} ${member.lastName ?? ""}`.trim() || "Adhérente";
   const email = memberPlaceholderEmail(member.id);
 
   const user = await prisma.user.create({
@@ -69,7 +69,7 @@ async function ensureMemberUser(member: {
   return user;
 }
 
-/** Authentifie un adhérent via téléphone + clé QR assignée. */
+/** Authentifie une adhérente via téléphone + clé QR assignée. */
 export async function authenticateMemberByPhoneAndQrKey(
   phone: string,
   key: string,
@@ -112,7 +112,7 @@ export async function authenticateMemberByPhoneAndQrKey(
   };
 }
 
-/** Réutilisé par le scan QR : adhérent assigné + clé valide. */
+/** Réutilisé par le scan QR : adhérente assignée + clé valide. */
 export async function authenticateMemberByQrPublicIdAndKey(
   publicId: string,
   key: string,

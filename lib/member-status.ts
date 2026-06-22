@@ -1,6 +1,6 @@
 import { packExpiresAtLocal } from "@/lib/member-pack-period";
 
-/** Statut opérationnel d'une fiche adhérent (indépendant du seul booléen `isActive` en base). */
+/** Statut opérationnel d'une fiche adhérente (indépendant du seul booléen `isActive` en base). */
 export type MemberOperationalStatus = "active" | "pending" | "expired" | "no_pack";
 
 export type MemberStatusInput = {
@@ -34,7 +34,7 @@ function isPackExpired(
 }
 
 /**
- * Classifie un adhérent pour le tableau de bord et les listes.
+ * Classifie une adhérente pour le tableau de bord et les listes.
  * - active : pack démarré (1ʳᵉ réservation), flag actif, période non expirée
  * - pending : pack assigné mais pas encore actif (pas de réservation / renouvellement en attente)
  * - expired : pack démarré mais date de fin dépassée
@@ -83,7 +83,7 @@ export function aggregateMemberStatusCounts(
 export function memberOperationalStatusLabelFr(status: MemberOperationalStatus): string {
   switch (status) {
     case "active":
-      return "Actif";
+      return "Active";
     case "pending":
       return "En attente";
     case "expired":

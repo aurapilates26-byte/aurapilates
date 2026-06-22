@@ -61,13 +61,13 @@ enum ReservationSource {
   ADMIN
 }
 
-/// Encaissement pack : source de vérité pour les entrées caisse (ventes pack adhérents).
+/// Encaissement pack : source de vérité pour les entrées caisse (ventes pack adhérentes).
 enum PackPaymentSource {
   AUTO
   MANUAL
 }
 
-/// Statut d'inscription pack : acompte en cours ou adhérent actif (liste principale).
+/// Statut d'inscription pack : acompte en cours ou adhérente active (liste principale).
 enum MemberEnrollmentStatus {
   ACTIVE
   DEPOSIT_PENDING
@@ -221,7 +221,7 @@ model Pack {
   @@map("packs")
 }
 
-/// Vente / encaissement d'un pack adhérent (entrée caisse). Montants en dinars entiers.
+/// Vente / encaissement d'un pack adhérente (entrée caisse). Montants en dinars entiers.
 model PackPayment {
   id               String            @id @default(cuid())
   memberId         String
@@ -371,7 +371,7 @@ model StudioPlanningPeriod {
   id              String        @id @default("singleton")
   bookingWindow   BookingWindow @default(WEEKLY)
   periodStartDate DateTime      @db.Date
-  /// Période suivante en préparation (invisible adhérents jusqu'à draftPublishAt).
+  /// Période suivante en préparation (invisible adhérentes jusqu'à draftPublishAt).
   draftPeriodStartDate DateTime? @db.Date
   draftBookingWindow   BookingWindow?
   /// Samedi 13h : ouverture lun–sam du brouillon.
@@ -413,7 +413,7 @@ model Planning {
   durationMinutes  Int
   capacity         Int
   waitlistCapacity Int?
-  /// Créneau brouillon (période suivante) — masqué adhérents / site jusqu'à publication.
+  /// Créneau brouillon (période suivante) — masqué adhérentes / site jusqu'à publication.
   isDraft          Boolean   @default(false)
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt

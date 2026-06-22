@@ -54,7 +54,7 @@ export default async function ConnexionPage() {
             <LoginForm />
 
             <p className="mt-6 text-sm text-brand-dark/80">
-              Pas encore adhérent ? Contactez le studio pour créer votre dossier et recevoir votre code QR.
+              Pas encore adhérente ? Contactez le studio pour créer votre dossier et recevoir votre code QR.
             </p>
           </div>
         </div>

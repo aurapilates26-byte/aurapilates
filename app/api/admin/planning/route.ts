@@ -7,6 +7,10 @@ import { getArchivedPlanningPeriodConfig } from "@/lib/admin/planning-period-arc
 import { draftPeriodConfigOrNull, getAdminPlanningPeriodWindow } from "@/lib/admin/planning-period-draft";
 import { getPlanningPeriodConfig } from "@/lib/admin/planning-period-config";
 import { validatePlanningAnchorForActivePeriod } from "@/lib/admin/planning-anchor-validation";
+import {
+  findOverlappingPlanningSlot,
+  PLANNING_SLOT_OVERLAP_ERROR,
+} from "@/lib/admin/planning-slot-duplicate";
 import { parseYmdToPrismaDate } from "@/lib/calendar-day";
 import { mapAdminPlanningItem } from "@/lib/admin/planning-map";
 import { adminPlanningPayloadSchema, planningLevelFromPayload } from "@/lib/admin/planning-payload-schema";
@@ -163,6 +167,15 @@ export async function POST(request: Request) {
     });
     if (!coach) return errorResponse("Coach not found", 404);
     if (!coach.isActive) return errorResponse("Selected coach is inactive", 409);
+  }
+
+  const duplicate = await findOverlappingPlanningSlot(db, {
+    anchorSessionYmd: anchorCheck.anchorDate,
+    startTime: data.startTime,
+    isDraft: scope === "draft",
+  });
+  if (duplicate) {
+    return errorResponse(PLANNING_SLOT_OVERLAP_ERROR, 409);
   }
 
   const created = await db.planning.create({

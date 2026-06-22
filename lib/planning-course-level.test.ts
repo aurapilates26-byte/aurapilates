@@ -7,7 +7,7 @@ import {
 } from "@/lib/planning-course-level";
 
 describe("resolvePlanningLevelForCourse", () => {
-  it("keeps initiations (ALL_LEVELS) for Pilates reformer", () => {
+  it("keeps initiation (ALL_LEVELS) for Pilates reformer", () => {
     const result = resolvePlanningLevelForCourse(REFORMER_PLANNING_COURSE_SLUG, "ALL_LEVELS");
     expect(result).toEqual({ ok: true, level: "ALL_LEVELS" });
   });

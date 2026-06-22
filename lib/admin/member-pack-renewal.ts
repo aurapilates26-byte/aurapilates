@@ -36,7 +36,7 @@ export function isMemberPackExpiredByDate(
   return expires.getTime() < startOfLocalDay(today).getTime();
 }
 
-/** Séances restantes sur le pack actuellement assigné à l'adhérent. */
+/** Séances restantes sur le pack actuellement assigné à l'adhérente. */
 export function getRemainingSessionsForPack(state: MemberPackState): number {
   if (!state.packId) return 0;
 

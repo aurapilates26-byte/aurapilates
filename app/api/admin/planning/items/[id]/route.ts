@@ -3,6 +3,10 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/auth";
 import { isStaffRole } from "@/lib/admin/access";
 import { validatePlanningAnchorForActivePeriod } from "@/lib/admin/planning-anchor-validation";
+import {
+  findOverlappingPlanningSlot,
+  PLANNING_SLOT_OVERLAP_ERROR,
+} from "@/lib/admin/planning-slot-duplicate";
 import { mapAdminPlanningItem } from "@/lib/admin/planning-map";
 import { adminPlanningPayloadSchema, planningLevelFromPayload } from "@/lib/admin/planning-payload-schema";
 
@@ -70,6 +74,16 @@ export async function PUT(request: Request, { params }: Params) {
     });
     if (!coach) return errorResponse("Coach not found", 404);
     if (!coach.isActive) return errorResponse("Selected coach is inactive", 409);
+  }
+
+  const duplicate = await findOverlappingPlanningSlot(db, {
+    anchorSessionYmd: anchorCheck.anchorDate,
+    startTime: data.startTime,
+    isDraft: scope === "draft",
+    excludeId: id,
+  });
+  if (duplicate) {
+    return errorResponse(PLANNING_SLOT_OVERLAP_ERROR, 409);
   }
 
   try {

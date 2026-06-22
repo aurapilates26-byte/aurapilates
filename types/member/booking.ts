@@ -41,6 +41,8 @@ export type MemberPlanningOccurrence = {
   spotsRemaining: number;
   waitSpotsRemaining: number | null;
   myReservation: { id: string; status: string } | null;
+  /** Créneau déjà terminé (jour courant ou passé) — affiché en grisé, non réservable. */
+  isPast: boolean;
 };
 
 export type MemberReservationItem = {

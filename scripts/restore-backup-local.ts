@@ -5,7 +5,7 @@
  *
  * Étapes :
  * 1. Supprime toute la data locale et recrée le schéma actuel (prisma db push --force-reset)
- * 2. Importe les données du backup (adhérents, packs, QR, planning…)
+ * 2. Importe les données du backup (adhérentes, packs, QR, planning…)
  * 3. Complète les tables/colonnes ajoutées depuis le backup (caisse, périodes, paiements)
  */
 import { readFileSync } from "node:fs";
@@ -445,7 +445,7 @@ async function printSummary() {
 
   console.log("\nRésumé :");
   console.log(`  Utilisateurs : ${users}`);
-  console.log(`  Adhérents    : ${members}`);
+  console.log(`  Adhérentes    : ${members}`);
   console.log(`  Staff        : ${staff.map((s) => `${s.email} (${s.role})`).join(", ")}`);
   console.log(`  Packs        : ${packs}`);
   console.log(`  QR actifs    : ${qrcodes}`);
@@ -478,12 +478,12 @@ async function main() {
   await seedPlanningPeriod();
   await seedPlanningArchives();
 
-  console.log("→ Adhérents remis en attente (pack non démarré, sans réservations importées)…");
+  console.log("→ Adhérentes remises en attente (pack non démarré, sans réservations importées)…");
   const resetSummary = await resetMembersToPendingForHistoricalPresence(prisma, {
     clearAutoPackPayments: true,
   });
   console.log(
-    `  · ${resetSummary.membersTargeted} adhérents · ${resetSummary.reservationsDeleted} réservations supprimées`,
+    `  · ${resetSummary.membersTargeted} adhérentes · ${resetSummary.reservationsDeleted} réservations supprimées`,
   );
 
   const staff = await seedLocalStaffAccounts(prisma);
