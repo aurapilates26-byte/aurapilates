@@ -12,6 +12,7 @@ enum UserRole {
   /** Direction / gérant : toutes les pages admin dont caisse et vue d'ensemble. */
   SUPER_ADMIN
   MEMBRE
+  COACH
 }
 
 enum QrCodeStatus {
@@ -108,6 +109,7 @@ model User {
   updatedAt      DateTime  @updatedAt
   sessions          Session[]
   memberProfile     Member?
+  coachProfile      Coach?
   createdQrCodes    QrCode[]       @relation("QrCodeCreatedBy")
   createdReservations Reservation[] @relation("ReservationCreatedBy")
   recordedPackPayments PackPayment[] @relation("PackPaymentRecordedBy")
@@ -341,6 +343,7 @@ model PackFeature {
 
 model Coach {
   id                String   @id @default(cuid())
+  userId            String?  @unique
   imageUrl          String?
   firstName         String
   lastName          String
@@ -355,7 +358,9 @@ model Coach {
   isActive            Boolean          @default(true)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
+  user              User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   planning          Planning[]
+  assignedQrCodes   QrCode[] @relation("QrCodeAssignedCoach")
 
   @@index([lastName, firstName])
   @@map("coaches")
@@ -381,6 +386,9 @@ model StudioPlanningPeriod {
   draftPublicationPhase DraftPublicationPhase?
   /// Règle membre : annulation tardive (< 6 h) = séance non rendue. Si false, toute annulation rend la séance.
   lateCancellationRuleEnabled Boolean @default(true)
+  /// Plage horaire quotidienne : les adhérentes peuvent réserver en ligne (HH:MM, fuseau local studio).
+  memberReservationOpenTime  String @default("08:00")
+  memberReservationCloseTime String @default("22:00")
   updatedAt       DateTime      @updatedAt
 
   @@map("studio_planning_period")
@@ -478,17 +486,20 @@ model QrCode {
   name            String
   status          QrCodeStatus   @default(DRAFT)
   assignedMemberId String?
+  assignedCoachId  String?
   createdByUserId String
   assignedAt      DateTime?
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
   assignedMember  Member?        @relation("QrCodeAssignedMember", fields: [assignedMemberId], references: [id], onDelete: SetNull)
+  assignedCoach   Coach?         @relation("QrCodeAssignedCoach", fields: [assignedCoachId], references: [id], onDelete: SetNull)
   createdByUser   User           @relation("QrCodeCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
   checkIns        CheckIn[]
 
   @@index([publicId])
   @@index([status])
   @@index([assignedMemberId])
+  @@index([assignedCoachId])
   @@index([createdByUserId])
   @@map("qrcodes")
 }

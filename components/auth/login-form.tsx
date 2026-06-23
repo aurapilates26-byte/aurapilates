@@ -42,7 +42,7 @@ export function LoginForm() {
   return (
     <form className="mt-8 space-y-5" onSubmit={handleSubmit}>
       <p className="text-xs leading-relaxed text-brand-dark/65">
-        Adhérentes : <span className="font-semibold">téléphone</span> +{" "}
+        Adhérentes et coachs : <span className="font-semibold">téléphone</span> +{" "}
         <span className="font-semibold">clé QR</span>. Administration :{" "}
         <span className="font-semibold">email</span> + <span className="font-semibold">mot de passe</span>.
       </p>

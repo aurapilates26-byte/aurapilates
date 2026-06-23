@@ -7,6 +7,7 @@ import { DashboardRoleProvider } from "@/components/dashboard/dashboard-role-con
 import { DashboardSidebar } from "@/components/dashboard/sidebar";
 import {
   canAccessDashboardPath,
+  coachLandingPath,
   staffLandingPath,
   type DashboardRole,
 } from "@/lib/admin/access";
@@ -34,7 +35,12 @@ export function DashboardShell({ role, children }: DashboardShellProps) {
 
   useEffect(() => {
     if (!canAccessDashboardPath(pathname, role)) {
-      const target = role === "MEMBRE" ? "/dashboard" : staffLandingPath(role);
+      const target =
+        role === "COACH"
+          ? coachLandingPath()
+          : role === "MEMBRE"
+            ? "/dashboard"
+            : staffLandingPath(role);
       router.replace(target);
     }
   }, [pathname, role, router]);

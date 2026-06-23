@@ -10,6 +10,8 @@ export type MemberPackSummary = {
 export type MemberBookingRules = {
   lateCancellationRuleEnabled: boolean;
   lateCancellationHours: number;
+  memberReservationOpenTime: string;
+  memberReservationCloseTime: string;
 };
 
 export type MemberPlanningWindow = "WEEKLY" | "FIFTEEN_DAYS" | "ONE_MONTH";

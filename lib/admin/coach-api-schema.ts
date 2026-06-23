@@ -19,7 +19,7 @@ export const coachBodySchema = z
     lastName: z.string().trim().min(2).max(80),
     description: z.string().trim().max(3000).optional(),
     email: z.union([z.string().trim().email(), z.literal("")]).optional(),
-    phone: z.string().trim().min(6).max(40).optional(),
+    phone: z.string().trim().min(6, "Le numéro de téléphone est requis.").max(40),
     payrollMode: coachPayrollModeSchema.optional(),
     sessionCostDinars: dinarsAmountSchema,
     monthlySalaryDinars: dinarsAmountSchema,

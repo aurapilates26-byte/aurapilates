@@ -77,6 +77,8 @@ export type AdminPlanningPeriodWindow = {
   bookingRules: {
     lateCancellationRuleEnabled: boolean;
     lateCancellationHours: number;
+    memberReservationOpenTime: string;
+    memberReservationCloseTime: string;
   };
 };
 

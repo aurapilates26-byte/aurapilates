@@ -4,9 +4,13 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LogoutButton } from "@/components/dashboard/logout-button";
 import {
+  getCoachNavigation,
   getMemberNavigation,
   getStaffNavigation,
-  staffRoleLabelFr,
+  isCoachRole,
+  isStaffRole,
+  staffLandingPath,
+  coachLandingPath,
   type DashboardRole,
 } from "@/lib/admin/access";
 
@@ -99,6 +103,13 @@ function NavIcon({ href, active }: { href: string; active: boolean }) {
       </svg>
     );
   }
+  if (href === "/dashboard/coach") {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={cls} aria-hidden="true">
+        <path d="M12 2l3 7 7 3-7 3-3 7-3-7-7-3 7-3 3-7Z" />
+      </svg>
+    );
+  }
   if (href === "/dashboard/coachs") {
     return (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={cls} aria-hidden="true">
@@ -131,6 +142,7 @@ function NavIcon({ href, active }: { href: string; active: boolean }) {
 
 function navigationForRole(role: DashboardRole): NavItem[] {
   if (role === "MEMBRE") return [...getMemberNavigation()];
+  if (role === "COACH") return [...getCoachNavigation()];
   return [...getStaffNavigation(role)];
 }
 
@@ -144,7 +156,7 @@ export function DashboardSidebar({ role, variant = "desktop", onRequestClose }: 
       : "sticky top-0 flex h-dvh w-[196px] shrink-0 flex-col border-r border-brand-medium/20 bg-white";
 
   const dashboardTitle =
-    role === "MEMBRE" ? "Membre" : role === "SUPER_ADMIN" ? "Direction" : "Admin";
+    role === "MEMBRE" ? "Membre" : role === "COACH" ? "Coach" : role === "SUPER_ADMIN" ? "Direction" : "Admin";
 
   return (
     <aside className={asideClasses}>

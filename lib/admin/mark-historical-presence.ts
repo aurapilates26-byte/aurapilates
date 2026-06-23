@@ -24,9 +24,8 @@ import {
   packStartDateLocal,
 } from "@/lib/member-pack-period";
 import { prisma } from "@/lib/prisma";
+import { HISTORICAL_PRESENCE_MARKED_BY } from "@/lib/admin/unmark-historical-presence";
 import type { PlanningPeriodConfig } from "@/types/admin/planning";
-
-const ATTENDANCE_MARKED_BY = "ADMIN_HISTORICAL" as const;
 
 export type HistoricalPresenceRosterItem = {
   reservationId: string;
@@ -322,7 +321,7 @@ export async function markHistoricalPresence(input: {
             memberId: input.memberId,
             planningId: input.planningId,
             sessionDate: sessionDateDb,
-            markedBy: ATTENDANCE_MARKED_BY,
+            markedBy: HISTORICAL_PRESENCE_MARKED_BY.ATTENDED_REPAIR,
           },
         });
         return {
@@ -343,7 +342,7 @@ export async function markHistoricalPresence(input: {
             memberId: input.memberId,
             planningId: input.planningId,
             sessionDate: sessionDateDb,
-            markedBy: ATTENDANCE_MARKED_BY,
+            markedBy: HISTORICAL_PRESENCE_MARKED_BY.BOOKED,
           },
         });
         return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: activation.packStartAdjusted };
@@ -361,7 +360,7 @@ export async function markHistoricalPresence(input: {
             memberId: input.memberId,
             planningId: input.planningId,
             sessionDate: sessionDateDb,
-            markedBy: ATTENDANCE_MARKED_BY,
+            markedBy: HISTORICAL_PRESENCE_MARKED_BY.WAITLIST,
           },
         });
         return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: activation.packStartAdjusted };
@@ -379,7 +378,7 @@ export async function markHistoricalPresence(input: {
               memberId: input.memberId,
               planningId: input.planningId,
               sessionDate: sessionDateDb,
-              markedBy: ATTENDANCE_MARKED_BY,
+              markedBy: HISTORICAL_PRESENCE_MARKED_BY.CANCELLED,
             },
           });
           return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: activation.packStartAdjusted };
@@ -400,7 +399,7 @@ export async function markHistoricalPresence(input: {
             memberId: input.memberId,
             planningId: input.planningId,
             sessionDate: sessionDateDb,
-            markedBy: ATTENDANCE_MARKED_BY,
+            markedBy: HISTORICAL_PRESENCE_MARKED_BY.CANCELLED_REFUNDED,
           },
         });
         return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: activation.packStartAdjusted };
@@ -424,7 +423,7 @@ export async function markHistoricalPresence(input: {
           memberId: input.memberId,
           planningId: input.planningId,
           sessionDate: sessionDateDb,
-          markedBy: ATTENDANCE_MARKED_BY,
+          markedBy: HISTORICAL_PRESENCE_MARKED_BY.NEW,
         },
       });
       return { reservationId: created.id, alreadyMarked: false, packStartAdjusted: activation.packStartAdjusted };

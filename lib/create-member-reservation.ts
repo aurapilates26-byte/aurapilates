@@ -7,6 +7,8 @@ import {
   startOfLocalToday,
 } from "@/lib/calendar-day";
 import { getPlanningPeriodConfig } from "@/lib/admin/planning-period-config";
+import { getStudioBookingRules } from "@/lib/studio-booking-rules-server";
+import { isMemberReservationDeskOpen } from "@/lib/studio-booking-rules";
 import { assertMemberCanBookOccurrence } from "@/lib/admin/planning-staggered-publish";
 import { prisma } from "@/lib/prisma";
 import { getEligibilityForPack, isCourseAllowedForPack } from "@/lib/pack-eligibility";
@@ -56,6 +58,10 @@ export async function createMemberReservation(params: {
   }
 
   if (source === "MEMBER") {
+    const bookingRules = await getStudioBookingRules();
+    if (!isMemberReservationDeskOpen(bookingRules)) {
+      throw new Error("RESERVATION_DESK_CLOSED");
+    }
     await getPlanningPeriodConfig();
   }
 
@@ -298,6 +304,9 @@ export function reservationErrorMessage(code: string): string {
   if (code === "MEMBER_NOT_FOUND") return "Adhérente introuvable";
   if (code === "INVALID_DATE" || code === "PAST_DATE") return "Date invalide ou passée";
   if (code === "SLOT_ENDED") return "Ce créneau est déjà terminé";
+  if (code === "RESERVATION_DESK_CLOSED") {
+    return "Les réservations en ligne sont fermées pour le moment (voir les horaires affichés dans le planning).";
+  }
   if (code === "DAY_MISMATCH") return "Ce cours n'a pas lieu à cette date";
   if (code === "ALREADY_RESERVED") return "Déjà inscrit sur ce créneau";
   if (code === "ALREADY_ATTENDED") return "Présence déjà enregistrée";

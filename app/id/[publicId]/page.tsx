@@ -11,7 +11,6 @@ type Params = {
 export default async function PublicQrIdPage({ params }: Params) {
   const { publicId: rawPublicId } = await params;
 
-  // Backward-compat: some old QR images may encode `/id/<publicId>.png`.
   if (rawPublicId.toLowerCase().endsWith(".png")) {
     redirect(`/id/${rawPublicId.slice(0, -4)}`);
   }
@@ -23,8 +22,10 @@ export default async function PublicQrIdPage({ params }: Params) {
     select: {
       publicId: true,
       assignedMemberId: true,
+      assignedCoachId: true,
       status: true,
       assignedMember: { select: { firstName: true, lastName: true } },
+      assignedCoach: { select: { firstName: true, lastName: true } },
     },
   });
 
@@ -39,11 +40,21 @@ export default async function PublicQrIdPage({ params }: Params) {
     );
   }
 
-  const assignmentStatus = item.assignedMemberId ? "ASSIGNED" : "UNASSIGNED";
+  const isAssigned = Boolean(item.assignedMemberId || item.assignedCoachId);
+  const assignmentStatus = isAssigned ? "ASSIGNED" : "UNASSIGNED";
   const memberName = item.assignedMember
     ? `${item.assignedMember.firstName ?? ""} ${item.assignedMember.lastName ?? ""}`.trim() || null
     : null;
+  const coachName = item.assignedCoach
+    ? `${item.assignedCoach.firstName ?? ""} ${item.assignedCoach.lastName ?? ""}`.trim() || null
+    : null;
 
-  return <QrIdVerifyClient publicId={publicId} assignmentStatus={assignmentStatus} memberName={memberName} />;
+  return (
+    <QrIdVerifyClient
+      publicId={publicId}
+      assignmentStatus={assignmentStatus}
+      memberName={memberName}
+      coachName={coachName}
+    />
+  );
 }
-

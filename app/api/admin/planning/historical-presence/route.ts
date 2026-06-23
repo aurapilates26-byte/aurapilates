@@ -7,6 +7,10 @@ import {
   listHistoricalPresenceRoster,
   markHistoricalPresence,
 } from "@/lib/admin/mark-historical-presence";
+import {
+  unmarkHistoricalPresence,
+  unmarkHistoricalPresenceErrorMessage,
+} from "@/lib/admin/unmark-historical-presence";
 import type { PlanningPeriodConfig } from "@/types/admin/planning";
 
 function errorResponse(message: string, status: number) {
@@ -28,6 +32,10 @@ const postSchema = z.object({
     periodEndYmd: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     periodLabel: z.string().min(1),
   }),
+});
+
+const deleteSchema = z.object({
+  reservationId: z.string().trim().cuid(),
 });
 
 export async function GET(request: Request) {
@@ -70,5 +78,25 @@ export async function POST(request: Request) {
   } catch (e) {
     const code = e instanceof Error ? e.message : "UNKNOWN";
     return errorResponse(historicalPresenceErrorMessage(code), 409);
+  }
+}
+
+export async function DELETE(request: Request) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user || !isStaffRole(session.user.role)) {
+    return errorResponse("Accès refusé", 403);
+  }
+
+  const raw = await request.json().catch(() => null);
+  const parsed = deleteSchema.safeParse(raw);
+  if (!parsed.success) return errorResponse("Données invalides", 400);
+
+  try {
+    const result = await unmarkHistoricalPresence(parsed.data.reservationId);
+    const items = await listHistoricalPresenceRoster(result.planningId, result.sessionDateYmd);
+    return Response.json({ ok: true, result, items });
+  } catch (e) {
+    const code = e instanceof Error ? e.message : "UNKNOWN";
+    return errorResponse(unmarkHistoricalPresenceErrorMessage(code), 409);
   }
 }

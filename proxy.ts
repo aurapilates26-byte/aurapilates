@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import {
   canAccessDashboardPath,
+  coachLandingPath,
   parseDashboardRole,
   staffLandingPath,
 } from "@/lib/admin/access";
@@ -24,7 +25,11 @@ export async function proxy(request: NextRequest) {
   const role = parseDashboardRole(typeof token.role === "string" ? token.role : undefined);
   if (!canAccessDashboardPath(pathname, role)) {
     const target =
-      role === "MEMBRE" ? "/dashboard" : staffLandingPath(role === "SUPER_ADMIN" ? "SUPER_ADMIN" : "ADMIN");
+      role === "COACH"
+        ? coachLandingPath()
+        : role === "MEMBRE"
+          ? "/dashboard"
+          : staffLandingPath(role === "SUPER_ADMIN" ? "SUPER_ADMIN" : "ADMIN");
     return NextResponse.redirect(new URL(target, request.url));
   }
 

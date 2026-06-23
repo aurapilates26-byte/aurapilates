@@ -46,6 +46,7 @@ export function PlanningHistoricalPresenceDialog({
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [marking, setMarking] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const loadRoster = useCallback(async () => {
     if (!slot || !sessionDateYmd) return;
@@ -188,6 +189,44 @@ export function PlanningHistoricalPresenceDialog({
     }
   };
 
+  const removePresence = async (item: RosterItem) => {
+    setDeletingId(item.reservationId);
+    try {
+      const res = await fetch("/api/admin/planning/historical-presence", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ reservationId: item.reservationId }),
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        items?: RosterItem[];
+        result?: { packCredited?: boolean };
+        error?: string;
+      };
+      if (!res.ok) throw new Error(data.error ?? "Suppression impossible");
+      setRoster(data.items ?? []);
+      if (selectedMember?.id === item.memberId) {
+        setSelectedMember(null);
+      }
+      toast({
+        variant: "success",
+        title: "Présence supprimée",
+        description: data.result?.packCredited
+          ? `${item.memberName} retirée · 1 séance recréditée au pack.`
+          : `${item.memberName} retirée de la liste.`,
+      });
+    } catch (e) {
+      toast({
+        variant: "error",
+        title: "Erreur",
+        description: e instanceof Error ? e.message : "Suppression impossible",
+      });
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   const dateFr = sessionDateYmd ? sessionDateYmd.split("-").reverse().join("/") : "—";
   const alreadyInRoster = selectedMember ? roster.some((r) => r.memberId === selectedMember.id) : false;
 
@@ -290,10 +329,28 @@ export function PlanningHistoricalPresenceDialog({
               {roster.map((r) => (
                 <li
                   key={r.reservationId}
-                  className="rounded-lg border border-brand-medium/15 bg-zinc-50/80 px-3 py-2 text-sm"
+                  className="flex items-center justify-between gap-2 rounded-lg border border-brand-medium/15 bg-zinc-50/80 px-3 py-2 text-sm"
                 >
-                  <span className="font-medium text-brand-dark">{r.memberName}</span>
-                  {r.phone ? <span className="text-brand-dark/55"> · {r.phone}</span> : null}
+                  <span className="min-w-0">
+                    <span className="font-medium text-brand-dark">{r.memberName}</span>
+                    {r.phone ? <span className="text-brand-dark/55"> · {r.phone}</span> : null}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={Boolean(deletingId) || marking}
+                    onClick={() => void removePresence(r)}
+                    aria-label={`Supprimer la présence de ${r.memberName}`}
+                    title="Supprimer la présence"
+                    className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 transition hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {deletingId === r.reservationId ? (
+                      <span className="text-[10px] font-semibold">…</span>
+                    ) : (
+                      <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current" aria-hidden="true">
+                        <path d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z" />
+                      </svg>
+                    )}
+                  </button>
                 </li>
               ))}
             </ul>

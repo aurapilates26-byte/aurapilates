@@ -18,6 +18,7 @@ import { coachPayrollModeLabelFr } from "@/lib/coach-payroll-mode";
 import type { PlanningDayOfWeek } from "@/types/admin/planning";
 import type { PlanningPeriodConfig } from "@/types/admin/planning";
 import { listArchivedPlanningPeriodsForAdmin } from "@/lib/admin/planning-period-archive";
+import { getCoachAssignedQrCode, type CoachQrCodeDto } from "@/lib/admin/coach-qrcode-server";
 
 export type CoachPlanningSlotDetail = {
   planningId: string;
@@ -72,6 +73,7 @@ export type CoachDetailData = {
   monthYearMonth: string;
   sessionsInMonth: number;
   monthlyCostDinars: number;
+  qrCode: CoachQrCodeDto | null;
 };
 
 const ORDERED_DAYS: PlanningDayOfWeek[] = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
@@ -188,6 +190,7 @@ export async function getCoachDetailById(id: string): Promise<CoachDetailData | 
   const monthYearMonth = currentYearMonth();
   const payroll = await computeCoachPayrollForMonth(monthYearMonth);
   const line = payroll.lines.find((l) => l.coachId === coach.id);
+  const qrCode = await getCoachAssignedQrCode(coach.id);
 
   const totalCostActivePeriodDinars =
     line?.monthlyCostDinars ??
@@ -258,5 +261,6 @@ export async function getCoachDetailById(id: string): Promise<CoachDetailData | 
     monthYearMonth,
     sessionsInMonth,
     monthlyCostDinars: line?.monthlyCostDinars ?? 0,
+    qrCode,
   };
 }

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { getSession, signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { isStaffRole } from "@/lib/admin/access";
+import { coachLandingPath, isCoachRole, isStaffRole, postLoginPath } from "@/lib/admin/access";
 
 type AssignmentStatus = "ASSIGNED" | "UNASSIGNED";
 
@@ -12,10 +12,12 @@ export function QrIdVerifyClient({
   publicId,
   assignmentStatus,
   memberName,
+  coachName,
 }: {
   publicId: string;
   assignmentStatus: AssignmentStatus;
   memberName?: string | null;
+  coachName?: string | null;
 }) {
   const router = useRouter();
   const [key, setKey] = useState("");
@@ -49,8 +51,13 @@ export function QrIdVerifyClient({
         router.refresh();
         return;
       }
+      if (isCoachRole(session?.user?.role)) {
+        router.push(coachLandingPath());
+        router.refresh();
+        return;
+      }
 
-      router.push("/dashboard");
+      router.push(postLoginPath(session?.user?.role));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Une erreur est survenue.");
     } finally {
@@ -67,6 +74,11 @@ export function QrIdVerifyClient({
           </div>
 
           <div className="text-center">
+            {assignmentStatus === "ASSIGNED" && coachName ? (
+              <p className="mt-2 text-sm text-brand-dark/80">
+                Coach : <span className="font-semibold text-brand-dark">{coachName}</span>
+              </p>
+            ) : null}
             {assignmentStatus === "ASSIGNED" && memberName ? (
               <p className="mt-2 text-sm text-brand-dark/80">
                 Membre : <span className="font-semibold text-brand-dark">{memberName}</span>

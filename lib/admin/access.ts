@@ -1,7 +1,7 @@
 import type { UserRole } from "@prisma/client";
 
 /** Rôle tableau de bord (session NextAuth / Prisma UserRole). */
-export type DashboardRole = "MEMBRE" | "ADMIN" | "SUPER_ADMIN";
+export type DashboardRole = "MEMBRE" | "ADMIN" | "SUPER_ADMIN" | "COACH";
 
 const STAFF_NAV_ALL = [
   { label: "Vue d'ensemble", href: "/dashboard" },
@@ -15,16 +15,21 @@ const STAFF_NAV_ALL = [
   { label: "Caisse", href: "/dashboard/caisse" },
 ] as const;
 
-const ADMIN_HIDDEN_HREFS = new Set(["/dashboard", "/dashboard/caisse", "/dashboard/coachs"]);
+const ADMIN_HIDDEN_HREFS = new Set(["/dashboard", "/dashboard/caisse"]);
 
 export function parseDashboardRole(role: string | undefined): DashboardRole {
   if (role === "SUPER_ADMIN") return "SUPER_ADMIN";
   if (role === "ADMIN") return "ADMIN";
+  if (role === "COACH") return "COACH";
   return "MEMBRE";
 }
 
 export function isStaffRole(role: string | undefined): role is "ADMIN" | "SUPER_ADMIN" {
   return role === "ADMIN" || role === "SUPER_ADMIN";
+}
+
+export function isCoachRole(role: string | undefined): role is "COACH" {
+  return role === "COACH";
 }
 
 export function isSuperAdminRole(role: string | undefined): boolean {
@@ -34,6 +39,7 @@ export function isSuperAdminRole(role: string | undefined): boolean {
 export function staffRoleLabelFr(role: DashboardRole): string {
   if (role === "SUPER_ADMIN") return "Direction";
   if (role === "ADMIN") return "Administrateur";
+  if (role === "COACH") return "Coach";
   return "Membre";
 }
 
@@ -49,15 +55,17 @@ export function isSuperAdminOnlyPath(pathname: string): boolean {
   return (
     path === "/dashboard" ||
     path === "/dashboard/caisse" ||
-    path.startsWith("/dashboard/caisse/") ||
-    path === "/dashboard/coachs" ||
-    path.startsWith("/dashboard/coachs/")
+    path.startsWith("/dashboard/caisse/")
   );
 }
 
 export function canAccessDashboardPath(pathname: string, role: DashboardRole): boolean {
   const path = normalizeDashboardPath(pathname);
   if (!path.startsWith("/dashboard")) return true;
+
+  if (role === "COACH") {
+    return path === "/dashboard/coach";
+  }
 
   if (role === "MEMBRE") return path === "/dashboard";
 
@@ -73,9 +81,14 @@ export function staffLandingPath(role: "ADMIN" | "SUPER_ADMIN"): string {
   return role === "ADMIN" ? "/dashboard/planning" : "/dashboard";
 }
 
-/** URL cible juste après connexion (évite le passage par /dashboard pour l’admin). */
+export function coachLandingPath(): string {
+  return "/dashboard/coach";
+}
+
+/** URL cible juste après connexion. */
 export function postLoginPath(role: string | undefined): string {
   const parsed = parseDashboardRole(role);
+  if (parsed === "COACH") return coachLandingPath();
   if (parsed === "ADMIN" || parsed === "SUPER_ADMIN") {
     return staffLandingPath(parsed);
   }
@@ -89,6 +102,10 @@ export function getStaffNavigation(role: "ADMIN" | "SUPER_ADMIN") {
 
 export function getMemberNavigation() {
   return [{ label: "Vue d'ensemble", href: "/dashboard" }] as const;
+}
+
+export function getCoachNavigation() {
+  return [{ label: "Mon espace", href: "/dashboard/coach" }] as const;
 }
 
 export type StaffNavItem = (typeof STAFF_NAV_ALL)[number];

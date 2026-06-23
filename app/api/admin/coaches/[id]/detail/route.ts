@@ -1,10 +1,10 @@
 import { getCoachDetailById } from "@/lib/admin/coach-detail-server";
-import { errorResponse, requireSuperAdmin } from "@/lib/admin/pack-promotion-auth";
+import { errorResponse, requireStaff } from "@/lib/admin/pack-promotion-auth";
 
 type Params = { params: Promise<{ id: string }> };
 
 export async function GET(_request: Request, { params }: Params) {
-  const guard = await requireSuperAdmin();
+  const guard = await requireStaff();
   if ("error" in guard) return guard.error;
 
   const { id } = await params;

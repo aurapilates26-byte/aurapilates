@@ -12,6 +12,8 @@ import type { CoachDetailData } from "@/lib/admin/coach-detail-server";
 import { useCoachStore } from "@/store/admin/coach-store";
 import { useCoachDetailStore } from "@/store/admin/coach-detail-store";
 import { DAY_LABEL_FR } from "@/lib/planning-public-labels";
+import { useDashboardRole } from "@/components/dashboard/dashboard-role-context";
+import { isSuperAdminRole } from "@/lib/admin/access";
 import type { PlanningDayOfWeek } from "@/types/admin/planning";
 
 const ORDERED_DAYS: PlanningDayOfWeek[] = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
@@ -75,6 +77,8 @@ type CoachDetailClientProps = {
 
 export function CoachDetailClient({ coachId }: CoachDetailClientProps) {
   const router = useRouter();
+  const role = useDashboardRole();
+  const canEditCoach = isSuperAdminRole(role);
   const { toast } = useToast();
   const cachedDetail = useCoachDetailStore((s) => s.cachedDetails[coachId]);
   const fetchCoachDetail = useCoachDetailStore((s) => s.fetchCoachDetail);
@@ -100,6 +104,7 @@ export function CoachDetailClient({ coachId }: CoachDetailClientProps) {
   const [sessionCostDinars, setSessionCostDinars] = useState("");
   const [monthlySalaryDinars, setMonthlySalaryDinars] = useState("");
   const [isActive, setIsActive] = useState(true);
+  const [isGeneratingQr, setIsGeneratingQr] = useState(false);
 
   const populateForm = useCallback((c: CoachDetailData) => {
     setFirstName(c.firstName);
@@ -158,6 +163,10 @@ export function CoachDetailClient({ coachId }: CoachDetailClientProps) {
     setFormError(null);
     const parsedSessionCost = sessionCostDinars.trim() === "" ? null : Number(sessionCostDinars.trim());
     const parsedMonthlySalary = monthlySalaryDinars.trim() === "" ? null : Number(monthlySalaryDinars.trim());
+    if (!phone.trim() || phone.trim().length < 6) {
+      setFormError("Le numéro de téléphone est requis (6 caractères minimum).");
+      return;
+    }
     if (isActive && payrollMode === "PER_SESSION" && (parsedSessionCost == null || parsedSessionCost <= 0)) {
       setFormError("Coach actif payé par séance : coût/séance > 0.");
       return;
@@ -176,7 +185,7 @@ export function CoachDetailClient({ coachId }: CoachDetailClientProps) {
           lastName: lastName.trim(),
           description: description.trim() || undefined,
           email: email.trim() || undefined,
-          phone: phone.trim() || undefined,
+          phone: phone.trim(),
           payrollMode,
           sessionCostDinars: payrollMode === "PER_SESSION" ? parsedSessionCost : null,
           monthlySalaryDinars: payrollMode === "PER_MONTH" ? parsedMonthlySalary : null,
@@ -200,6 +209,29 @@ export function CoachDetailClient({ coachId }: CoachDetailClientProps) {
       toast({ variant: "error", title: "Erreur", description: message });
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleGenerateQr = async () => {
+    if (!coach) return;
+    setIsGeneratingQr(true);
+    try {
+      const response = await fetch(`/api/admin/coaches/${encodeURIComponent(coachId)}/qrcode`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(body?.error ?? "Génération impossible.");
+      }
+      invalidateDetail(coachId);
+      const detail = await fetchCoachDetail(coachId, { force: true });
+      setCoach(detail);
+      toast({ variant: "success", title: "QR code coach généré" });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Erreur";
+      toast({ variant: "error", title: "Erreur", description: message });
+    } finally {
+      setIsGeneratingQr(false);
     }
   };
 
@@ -255,12 +287,12 @@ export function CoachDetailClient({ coachId }: CoachDetailClientProps) {
               <h2 className="text-lg font-semibold text-brand-dark">
                 {panelMode === "edit" ? "Modifier le coach" : "Informations"}
               </h2>
-              {panelMode === "view" ? (
+              {panelMode === "view" && canEditCoach ? (
                 <div className="flex items-center gap-2">
                   <IconEditButton onClick={() => { populateForm(coach); setPanelMode("edit"); }} />
                   <IconDeleteButton onClick={() => setShowDeleteConfirm(true)} />
                 </div>
-              ) : (
+              ) : panelMode === "edit" ? (
                 <button
                   type="button"
                   onClick={() => { populateForm(coach); setPanelMode("view"); }}
@@ -268,7 +300,7 @@ export function CoachDetailClient({ coachId }: CoachDetailClientProps) {
                 >
                   Annuler
                 </button>
-              )}
+              ) : null}
             </div>
 
             <button
@@ -307,7 +339,7 @@ export function CoachDetailClient({ coachId }: CoachDetailClientProps) {
                   <Input id="coach-fn" label="Prénom" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
                   <Input id="coach-ln" label="Nom" value={lastName} onChange={(e) => setLastName(e.target.value)} />
                   <Input id="coach-email" label="Email" value={email} onChange={(e) => setEmail(e.target.value)} />
-                  <Input id="coach-phone" label="Téléphone" value={phone} onChange={(e) => setPhone(e.target.value)} />
+                  <Input id="coach-phone" label="Téléphone *" value={phone} onChange={(e) => setPhone(e.target.value)} required />
                   <SelectMenu
                     id="coach-detail-payroll-mode"
                     label="Mode de rémunération"
@@ -514,6 +546,46 @@ export function CoachDetailClient({ coachId }: CoachDetailClientProps) {
                 <dd className="font-medium text-brand-dark">{coach.monthlyCostDinars} DT</dd>
               </div>
             </dl>
+          </div>
+
+          <div className="rounded-2xl border border-brand-medium/20 bg-white p-5 shadow-sm">
+            <h3 className="text-sm font-semibold text-brand-dark">Connexion coach (QR)</h3>
+            <p className="mt-1 text-xs leading-relaxed text-brand-dark/60">
+              Le coach se connecte avec son téléphone + clé, ou en scannant ce QR.
+            </p>
+
+            {coach.qrCode ? (
+              <div className="mt-4 space-y-3">
+                <div className="mx-auto w-fit overflow-hidden rounded-xl border border-brand-medium/15 bg-white p-2">
+                  <img src={coach.qrCode.imageUrl} alt="QR code coach" className="h-40 w-40 object-contain" />
+                </div>
+                <InfoField label="Identifiant QR">
+                  <span className="break-all font-mono text-xs font-normal">{coach.qrCode.qrId}</span>
+                </InfoField>
+                <InfoField label="Clé QR">
+                  <span className="font-mono text-sm tracking-widest">{coach.qrCode.qrKey}</span>
+                </InfoField>
+              </div>
+            ) : (
+              <p className="mt-3 text-sm text-brand-dark/60">Aucun QR assigné.</p>
+            )}
+
+            <Button
+              type="button"
+              size="sm"
+              className="mt-4 w-full justify-center"
+              disabled={isGeneratingQr || !coach.phone?.trim()}
+              onClick={() => void handleGenerateQr()}
+            >
+              {isGeneratingQr
+                ? "Génération…"
+                : coach.qrCode
+                  ? "Régénérer le QR"
+                  : "Générer le QR coach"}
+            </Button>
+            {!coach.phone?.trim() ? (
+              <p className="mt-2 text-xs text-amber-800">Ajoutez un téléphone avant de générer le QR.</p>
+            ) : null}
           </div>
         </aside>
       </section>

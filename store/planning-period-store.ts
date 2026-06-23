@@ -139,7 +139,12 @@ export const usePlanningPeriodStore = create<PlanningPeriodStoreState>((set, get
         applyWindow(set, {
           published: data,
           draft: null,
-          bookingRules: { lateCancellationRuleEnabled: true, lateCancellationHours: 6 },
+          bookingRules: {
+            lateCancellationRuleEnabled: true,
+            lateCancellationHours: 6,
+            memberReservationOpenTime: "08:00",
+            memberReservationCloseTime: "22:00",
+          },
         });
       } else {
         const data = (await response.json()) as AdminPlanningPeriodWindow;

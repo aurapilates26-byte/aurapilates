@@ -33,7 +33,12 @@ export function PlanningLateCancellationRuleToggle() {
           error?: string;
           published?: Parameters<typeof setWindow>[0]["published"];
           draft?: Parameters<typeof setWindow>[0]["draft"];
-          bookingRules?: { lateCancellationRuleEnabled: boolean; lateCancellationHours: number };
+          bookingRules?: {
+            lateCancellationRuleEnabled: boolean;
+            lateCancellationHours: number;
+            memberReservationOpenTime: string;
+            memberReservationCloseTime: string;
+          };
         } | null;
         if (!res.ok || !data?.bookingRules || !data.published) {
           throw new Error(data?.error ?? "Enregistrement impossible");

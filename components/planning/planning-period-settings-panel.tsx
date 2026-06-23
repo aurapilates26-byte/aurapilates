@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { PlanningLateCancellationRuleToggle } from "@/components/planning/planning-late-cancellation-rule-toggle";
+import { PlanningMemberReservationHoursPanel } from "@/components/planning/planning-member-reservation-hours-panel";
 import { PlanningDraftSessionsPanel } from "@/components/planning/planning-draft-sessions-panel";
 import { PlanningHistoricalPeriodPanel } from "@/components/planning/planning-historical-period-panel";
 import { PlanningPeriodAdminAlert } from "@/components/planning/planning-period-admin-alert";
@@ -76,7 +77,14 @@ export function PlanningPeriodSettingsPanel({
         <PlanningPeriodAdminAlert hideModifyButton onRenewed={onSaved} />
       </div>
 
-      <div className="mt-4">
+      <div className="mt-4 space-y-4">
+        <div>
+          <h4 className="text-sm font-semibold text-brand-dark">Réservations adhérentes</h4>
+          <p className="mt-1 text-xs text-brand-dark/65 sm:text-sm">
+            Horaires d&apos;accès au formulaire de réservation et règles d&apos;annulation.
+          </p>
+        </div>
+        <PlanningMemberReservationHoursPanel />
         <PlanningLateCancellationRuleToggle />
       </div>
 

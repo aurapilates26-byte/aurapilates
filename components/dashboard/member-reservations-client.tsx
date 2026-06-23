@@ -10,7 +10,10 @@ import { planningLevelBadgeClass } from "@/lib/planning-level-badge";
 import { planningLevelLabelFr } from "@/lib/planning-public-labels";
 import {
   DEFAULT_STUDIO_BOOKING_RULES,
+  isMemberReservationDeskOpen,
   memberLateCancellationConfirmNoticeFr,
+  memberReservationDeskClosedNoticeFr,
+  memberReservationHoursNoticeFr,
 } from "@/lib/studio-booking-rules";
 import { useMemberBookingStore } from "@/store/member/member-booking-store";
 import type { MemberPlanningWindow } from "@/types/member/booking";
@@ -102,6 +105,13 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
   const loadAll = useMemberBookingStore((s) => s.loadAll);
 
   const cancellationNotice = memberLateCancellationConfirmNoticeFr(
+    bookingRules ?? DEFAULT_STUDIO_BOOKING_RULES,
+  );
+  const reservationHoursNotice = memberReservationHoursNoticeFr(
+    bookingRules ?? DEFAULT_STUDIO_BOOKING_RULES,
+  );
+  const reservationDeskOpen = isMemberReservationDeskOpen(bookingRules ?? DEFAULT_STUDIO_BOOKING_RULES);
+  const reservationDeskClosedNotice = memberReservationDeskClosedNoticeFr(
     bookingRules ?? DEFAULT_STUDIO_BOOKING_RULES,
   );
 
@@ -254,6 +264,23 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
           </p>
         </div>
 
+        {!loading ? (
+          <div
+            className={`mt-3 rounded-xl border px-3 py-2 text-[11px] sm:text-xs lg:text-sm ${
+              reservationDeskOpen
+                ? "border-brand-medium/20 bg-brand-light/30 text-brand-dark/80"
+                : "border-amber-200 bg-amber-50 text-amber-900"
+            }`}
+          >
+            <p>
+              <span className="font-semibold">Horaires de réservation :</span> {reservationHoursNotice}
+            </p>
+            {!reservationDeskOpen ? (
+              <p className="mt-1 font-medium">{reservationDeskClosedNotice}</p>
+            ) : null}
+          </div>
+        ) : null}
+
         {loading ? (
           <p className="mt-4 text-sm text-brand-dark/65">Chargement...</p>
         ) : nextOccurrences.length === 0 ? (
@@ -319,13 +346,15 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
                 {visible.map((o) => {
                   const rowKey = `${o.planningId}-${o.sessionDate}`;
                   const isPast = o.isPast;
-                  const canBookMain = !isPast && !o.myReservation && o.spotsRemaining > 0;
+                  const canBookMain =
+                    reservationDeskOpen && !isPast && !o.myReservation && o.spotsRemaining > 0;
                   const categoryBlocked =
                     !isPast &&
                     eligibility?.mode === "single" &&
                     eligibility.allowedCourseSlugs.length > 0 &&
                     !eligibility.allowedCourseSlugs.includes(o.courseSlug);
                   const canWait =
+                    reservationDeskOpen &&
                     !isPast &&
                     !o.myReservation &&
                     o.spotsRemaining === 0 &&
@@ -399,6 +428,10 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
                             >
                               {enrolledLabel}
                             </button>
+                          ) : !reservationDeskOpen && !isPast && !enrolled ? (
+                            <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-900 sm:px-3 sm:py-1 sm:text-xs">
+                              Fermé
+                            </span>
                           ) : canBookMain ? (
                             <button
                               type="button"

@@ -45,7 +45,7 @@ const updateCoachSchema = z.object({
   lastName: z.string().trim().min(2).max(80),
   description: z.string().trim().max(3000).optional(),
   email: optionalEmailSchema,
-  phone: z.string().trim().min(6).max(40).optional(),
+  phone: z.string().trim().min(6, "Le numéro de téléphone est requis.").max(40),
   payrollMode: coachPayrollModeSchema.optional(),
   sessionCostDinars: dinarsAmountSchema,
   monthlySalaryDinars: dinarsAmountSchema,

@@ -142,6 +142,10 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
       setFormError("Le nom et le prénom sont obligatoires.");
       return;
     }
+    if (!phone.trim() || phone.trim().length < 6) {
+      setFormError("Le numéro de téléphone est requis (6 caractères minimum).");
+      return;
+    }
     if (email.trim() && !isValidEmail(email.trim())) {
       setFormError("Email invalide. Exemple: coach@aurapilates.tn");
       return;
@@ -186,7 +190,7 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
           lastName: lastName.trim(),
           description: description.trim() || undefined,
           email: email.trim() || undefined,
-          phone: phone.trim() || undefined,
+          phone: phone.trim(),
           payrollMode,
           sessionCostDinars: payrollMode === "PER_SESSION" ? parsedSessionCost : null,
           monthlySalaryDinars: payrollMode === "PER_MONTH" ? parsedMonthlySalary : null,
@@ -570,10 +574,11 @@ export const CoachesManager = forwardRef<CoachesManagerHandle, CoachesManagerPro
               />
               <Input
                 id="coach-phone"
-                label="Téléphone"
+                label="Téléphone *"
                 value={phone}
                 onChange={(event) => setPhone(event.target.value)}
                 placeholder="Ex: +216 22 000 000"
+                required
               />
             </div>
 

@@ -10,6 +10,11 @@ import {
   authenticateMemberByQrPublicIdAndKey,
   memberPhoneLoginErrorMessage,
 } from "@/lib/member-phone-login";
+import {
+  authenticateCoachByPhoneAndQrKey,
+  authenticateCoachByQrPublicIdAndKey,
+  coachPhoneLoginErrorMessage,
+} from "@/lib/coach-phone-login";
 import { resolveAuthSecret } from "@/lib/auth-secret";
 import { prisma } from "@/lib/prisma";
 
@@ -160,6 +165,18 @@ export const authOptions: NextAuthOptions = {
             };
           }
 
+          const coachResult = await authenticateCoachByQrPublicIdAndKey(publicId, key);
+          if (coachResult.ok) {
+            const { user } = coachResult.value;
+            return {
+              id: user.id,
+              email: user.email,
+              name: user.name,
+              image: user.image,
+              role: user.role,
+            };
+          }
+
           const memberResult = await authenticateMemberByQrPublicIdAndKey(publicId, key);
           if (!memberResult.ok) {
             return null;
@@ -209,6 +226,21 @@ export const authOptions: NextAuthOptions = {
             image: user.image,
             role: user.role,
           };
+        }
+
+        const coachResult = await authenticateCoachByPhoneAndQrKey(identifier, secret);
+        if (coachResult.ok) {
+          const { user } = coachResult.value;
+          return {
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            image: user.image,
+            role: user.role,
+          };
+        }
+        if (coachResult.reason !== "NOT_FOUND") {
+          throw new Error(coachPhoneLoginErrorMessage(coachResult.reason));
         }
 
         const memberResult = await authenticateMemberByPhoneAndQrKey(identifier, secret);

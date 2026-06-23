@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isMemberCancellationRefundable,
+  isMemberReservationDeskOpen,
   memberLateCancellationNoticeFr,
   MEMBER_LATE_CANCELLATION_HOURS,
 } from "./studio-booking-rules";
@@ -61,15 +62,41 @@ describe("isMemberCancellationRefundable", () => {
 });
 
 describe("memberLateCancellationNoticeFr", () => {
+  const baseRules = {
+    lateCancellationRuleEnabled: true,
+    lateCancellationHours: 6,
+    memberReservationOpenTime: "08:00",
+    memberReservationCloseTime: "22:00",
+  };
+
   it("affiche le délai quand la règle est activée", () => {
-    expect(memberLateCancellationNoticeFr({ lateCancellationRuleEnabled: true, lateCancellationHours: 6 })).toContain(
-      "6 heures",
-    );
+    expect(memberLateCancellationNoticeFr(baseRules)).toContain("6 heures");
   });
 
   it("indique le remboursement total quand la règle est désactivée", () => {
-    expect(memberLateCancellationNoticeFr({ lateCancellationRuleEnabled: false, lateCancellationHours: 6 })).toContain(
+    expect(memberLateCancellationNoticeFr({ ...baseRules, lateCancellationRuleEnabled: false })).toContain(
       "Toute annulation",
     );
+  });
+});
+
+describe("isMemberReservationDeskOpen", () => {
+  const rules = {
+    lateCancellationRuleEnabled: true,
+    lateCancellationHours: 6,
+    memberReservationOpenTime: "08:00",
+    memberReservationCloseTime: "22:00",
+  };
+
+  it("accepte une heure dans la plage", () => {
+    expect(isMemberReservationDeskOpen(rules, new Date(2026, 5, 22, 15, 10, 0))).toBe(true);
+  });
+
+  it("refuse avant ouverture", () => {
+    expect(isMemberReservationDeskOpen(rules, new Date(2026, 5, 22, 7, 30, 0))).toBe(false);
+  });
+
+  it("refuse après fermeture", () => {
+    expect(isMemberReservationDeskOpen(rules, new Date(2026, 5, 22, 22, 30, 0))).toBe(false);
   });
 });

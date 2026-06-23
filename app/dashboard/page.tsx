@@ -5,7 +5,7 @@ import { MemberMyReservations } from "@/components/dashboard/member-my-reservati
 import { MemberReservationsClient } from "@/components/dashboard/member-reservations-client";
 import { fetchAdminOverviewSnapshot } from "@/lib/admin/overview-metrics";
 import { redirect } from "next/navigation";
-import { parseDashboardRole } from "@/lib/admin/access";
+import { coachLandingPath, parseDashboardRole } from "@/lib/admin/access";
 import { requireUser } from "@/lib/auth";
 import { getMemberPackSummary } from "@/lib/member/member-pack-summary";
 import { prisma } from "@/lib/prisma";
@@ -38,6 +38,9 @@ export default async function DashboardPage() {
 
   if (role === "ADMIN") {
     redirect("/dashboard/planning");
+  }
+  if (role === "COACH") {
+    redirect(coachLandingPath());
   }
 
   const adminOverview =
