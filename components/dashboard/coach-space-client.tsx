@@ -34,6 +34,13 @@ function reservationStatusLabel(status: string): string {
   return status;
 }
 
+function compareSessionDateTimeDesc(a: CoachSpaceSessionDto, b: CoachSpaceSessionDto): number {
+  if (a.sessionDateYmd !== b.sessionDateYmd) {
+    return b.sessionDateYmd.localeCompare(a.sessionDateYmd);
+  }
+  return b.startTime.localeCompare(a.startTime);
+}
+
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
     <article className="relative min-w-0 overflow-hidden rounded-2xl border border-brand-medium/20 bg-white p-4 shadow-sm">
@@ -175,7 +182,7 @@ export function CoachSpaceClient() {
   );
 
   const billedSessions = useMemo(
-    () => data?.sessions.filter((s) => s.isBilled) ?? [],
+    () => (data?.sessions.filter((s) => s.isBilled).sort(compareSessionDateTimeDesc) ?? []),
     [data?.sessions],
   );
   const upcomingSessions = useMemo(

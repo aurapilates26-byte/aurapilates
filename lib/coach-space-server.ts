@@ -1,6 +1,6 @@
 import "server-only";
 
-import { formatYmdLocal, parseYmdToPrismaDate, startOfLocalToday } from "@/lib/calendar-day";
+import { formatYmdLocal, parseYmdToPrismaDate } from "@/lib/calendar-day";
 import { currentYearMonth, normalizeYearMonthParam } from "@/lib/admin/caisse-summary";
 import { computeCoachPayrollForMonth } from "@/lib/admin/coach-payroll";
 import {
@@ -9,7 +9,7 @@ import {
   type CoachPeriodSummaryDto,
   type CoachPlanningSlotDetail,
 } from "@/lib/admin/coach-detail-server";
-import { yearMonthFromDate } from "@/lib/admin/pack-payment";
+import { clampHistoryYearMonth, listPastHistoryYearMonths } from "@/lib/caisse-history-period";
 import { coachPayrollModeLabelFr } from "@/lib/coach-payroll-mode";
 import { prisma } from "@/lib/prisma";
 import type { CoachPayrollPeriodDto, CoachSessionDetailDto } from "@/types/admin/coach-payroll";
@@ -73,16 +73,6 @@ function sessionReservationKey(planningId: string, sessionDateYmd: string): stri
   return `${planningId}|${sessionDateYmd}`;
 }
 
-export function recentCoachYearMonths(count = 12): string[] {
-  const anchor = startOfLocalToday();
-  const months: string[] = [];
-  for (let offset = 0; offset < count; offset += 1) {
-    const d = new Date(anchor.getFullYear(), anchor.getMonth() - offset, 1);
-    months.push(yearMonthFromDate(d));
-  }
-  return months;
-}
-
 async function loadReservationsForSessions(
   sessionDetails: CoachSessionDetailDto[],
 ): Promise<Map<string, CoachSpaceReservationDto[]>> {
@@ -130,7 +120,7 @@ export async function getCoachSpaceData(
   coachId: string,
   yearMonthInput?: string,
 ): Promise<CoachSpaceData | null> {
-  const yearMonth = normalizeYearMonthParam(yearMonthInput);
+  const yearMonth = clampHistoryYearMonth(normalizeYearMonthParam(yearMonthInput));
 
   const detail = await getCoachDetailById(coachId);
   if (!detail || !detail.isActive) return null;
@@ -160,7 +150,7 @@ export async function getCoachSpaceData(
       monthlySalaryDinars: detail.monthlySalaryDinars,
     },
     yearMonth,
-    availableMonths: recentCoachYearMonths(12),
+    availableMonths: listPastHistoryYearMonths(24),
     payroll: {
       billingPeriodLabel: payrollMonth.billingPeriodLabel,
       bookingWindowLabel: payrollMonth.bookingWindowLabel,
