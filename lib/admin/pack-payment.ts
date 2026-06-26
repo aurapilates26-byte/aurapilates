@@ -471,6 +471,16 @@ export async function listPackPaymentsForDateRange(from: Date, to: Date): Promis
   return rows.map(serializePackPayment);
 }
 
+export async function listPackPaymentsForMember(memberId: string): Promise<PackPaymentDto[]> {
+  const rows = await prisma.packPayment.findMany({
+    where: { memberId },
+    orderBy: [{ paidAt: "desc" }, { createdAt: "desc" }],
+    include: packPaymentInclude,
+  });
+
+  return rows.map(serializePackPayment);
+}
+
 /** Pour saisie manuelle avec date YYYY-MM-DD. */
 export function parsePaidAtYmd(ymd: string): Date | null {
   return parseYmdToPrismaDate(ymd.trim());

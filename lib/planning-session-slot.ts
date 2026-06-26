@@ -8,10 +8,11 @@ export const DEFAULT_PLANNING_CAPACITY = 6;
 export const DEFAULT_PLANNING_WAITLIST_CAPACITY = 2;
 
 export const PLANNING_SLOT_OVERLAP_ERROR =
-  "Ce créneau chevauche une séance existante sur cette date (bloc d'1 heure).";
+  "Ce créneau chevauche une séance existante du même cours sur cette date (bloc d'1 heure).";
 
 export type PlanningSlotIdentity = {
   id: string;
+  courseSlug: string;
   anchorSessionYmd: string | null;
   startTime: string;
 };
@@ -56,12 +57,15 @@ export function doPlanningGlobalSlotsOverlap(startA: string, startB: string): bo
 export function hasPlanningSlotOverlap(
   items: PlanningSlotIdentity[],
   anchorSessionYmd: string,
+  courseSlug: string,
   startTime: string,
   excludeId?: string | null,
 ): boolean {
+  const normalizedCourse = courseSlug.trim();
   return items.some(
     (item) =>
       item.id !== excludeId &&
+      item.courseSlug === normalizedCourse &&
       isSamePlanningDay(item.anchorSessionYmd, anchorSessionYmd) &&
       doPlanningGlobalSlotsOverlap(item.startTime, startTime),
   );

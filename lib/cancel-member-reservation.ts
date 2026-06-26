@@ -30,7 +30,16 @@ export async function cancelMemberReservation(params: {
 
   const reservation = await prisma.reservation.findFirst({
     where: { id: reservationId, memberId },
-    include: { planning: { select: { startTime: true, courseSlug: true } } },
+    include: {
+      planning: { select: { startTime: true, courseSlug: true } },
+      debitedPack: {
+        select: {
+          id: true,
+          sessionCount: true,
+          courseQuotas: { select: { courseSlug: true, sessionCount: true } },
+        },
+      },
+    },
   });
 
   if (!reservation) {
@@ -131,16 +140,14 @@ export async function cancelMemberReservation(params: {
         },
       });
 
-      if (
-        wasBooked &&
-        refundable &&
-        reservation.packRefundedAt == null &&
-        memberRow?.packId &&
-        memberRow.pack
-      ) {
+      const packToCredit =
+        reservation.debitedPack ??
+        (memberRow?.packId && memberRow.pack ? memberRow.pack : null);
+
+      if (wasBooked && refundable && reservation.packRefundedAt == null && packToCredit) {
         await creditMemberPackSession(tx, {
           memberId,
-          pack: memberRow.pack,
+          pack: packToCredit,
           courseSlug: reservation.planning.courseSlug,
         });
       }

@@ -10,15 +10,13 @@ import { getPlanningPeriodConfig } from "@/lib/admin/planning-period-config";
 import { getStudioBookingRules } from "@/lib/studio-booking-rules-server";
 import { isMemberReservationDeskOpen } from "@/lib/studio-booking-rules";
 import { assertMemberCanBookOccurrence } from "@/lib/admin/planning-staggered-publish";
-import { prisma } from "@/lib/prisma";
-import { getEligibilityForPack, isCourseAllowedForPack } from "@/lib/pack-eligibility";
-import { tryActivatePendingPackIfCurrentFinished } from "@/lib/admin/member-pack-renewal";
+import { resetMemberPackBalancesForPack } from "@/lib/admin/member-pack-renewal";
 import { activateMemberPackOnSessionDate } from "@/lib/admin/member-pack-activation";
-import { debitMemberPackSession } from "@/lib/member-pack-session-ledger";
 import {
-  isSessionDateWithinPackPeriod,
-  packExpiresAtLocal,
-} from "@/lib/member-pack-period";
+  debitSelectedPackSession,
+  resolvePackForMemberBooking,
+} from "@/lib/admin/member-pack-selection";
+import { prisma } from "@/lib/prisma";
 
 export const PACK_ERRORS = {
   noSessionsLeft: "NO_SESSIONS_LEFT",
@@ -41,6 +39,8 @@ export async function createMemberReservation(params: {
   memberId: string;
   planningId: string;
   sessionDate: string;
+  /** Pack à débiter (optionnel : le plus récent éligible est choisi par défaut). */
+  packId?: string;
   source?: "ADMIN" | "MEMBER";
   /** Compte staff (admin/direction) ayant saisi la réservation manuellement. */
   createdByUserId?: string;
@@ -86,123 +86,48 @@ export async function createMemberReservation(params: {
         throw new Error("DAY_MISMATCH");
       }
 
-      await tryActivatePendingPackIfCurrentFinished(tx, params.memberId);
-
-      const memberWithPack = await tx.member.findUnique({
+      const memberRow = await tx.member.findUnique({
         where: { id: params.memberId },
         select: {
           id: true,
           userId: true,
           isActive: true,
           packStartedAt: true,
-          pack: {
-            select: {
-              id: true,
-              category: true,
-              durationDays: true,
-              sessionCount: true,
-              isActive: true,
-              courseQuotas: { select: { courseSlug: true, sessionCount: true } },
-            },
-          },
         },
       });
+      if (!memberRow) throw new Error("MEMBER_NOT_FOUND");
 
-      if (!memberWithPack) throw new Error("MEMBER_NOT_FOUND");
-      if (!memberWithPack.pack) throw new Error(PACK_ERRORS.noPack);
+      const selected = await resolvePackForMemberBooking(tx, {
+        memberId: params.memberId,
+        courseSlug: planning.courseSlug,
+        sessionDateLocal,
+        preferredPackId: params.packId ?? null,
+        primaryPackStartedAt: memberRow.packStartedAt,
+      });
 
-      const createdByUserId =
-        source === "ADMIN" ? params.createdByUserId ?? null : memberWithPack.userId ?? null;
-
-      const pack = memberWithPack.pack;
+      const pack = selected.pack;
       if (!pack.isActive) throw new Error(PACK_ERRORS.packInactive);
 
-      const activation = await activateMemberPackOnSessionDate(tx, {
-        memberId: params.memberId,
-        currentPackStartedAt: memberWithPack.packStartedAt,
-        sessionDateDb,
-        sessionDateLocal,
-      });
-      const packStartedAt = activation.packStartedAt;
-      const packStartDate = activation.packStartDate;
+      const createdByUserId =
+        source === "ADMIN" ? params.createdByUserId ?? null : memberRow.userId ?? null;
 
-      if (
-        memberWithPack.packStartedAt &&
-        !isSessionDateWithinPackPeriod(sessionDateLocal, packStartedAt, pack.durationDays)
-      ) {
-        const expiresAt = packExpiresAtLocal(packStartedAt, pack.durationDays);
-        if (expiresAt && sessionDateLocal.getTime() > expiresAt.getTime()) {
-          throw new Error(PACK_ERRORS.packExpired);
-        }
-        throw new Error(PACK_ERRORS.packNotStarted);
+      let primaryPackStartedAt = memberRow.packStartedAt;
+      if (selected.isPrimary) {
+        const activation = await activateMemberPackOnSessionDate(tx, {
+          memberId: params.memberId,
+          currentPackStartedAt: memberRow.packStartedAt,
+          sessionDateDb,
+          sessionDateLocal,
+        });
+        primaryPackStartedAt = activation.packStartedAt;
       }
-
-      const expiresAt = packExpiresAtLocal(packStartedAt, pack.durationDays);
-      if (expiresAt && expiresAt.getTime() < today.getTime()) throw new Error(PACK_ERRORS.packExpired);
-
-      const isMixed = pack.courseQuotas.length > 0;
-      const eligibility = getEligibilityForPack({
-        category: pack.category ?? null,
-        courseQuotas: pack.courseQuotas,
-      });
-
-      if (!isCourseAllowedForPack(eligibility, planning.courseSlug)) {
-        throw new Error(
-          eligibility.mode === "single" ? PACK_ERRORS.packCategoryMismatch : PACK_ERRORS.notAllowedCourse,
-        );
-      }
-
-      const targetCourseSlug = isMixed ? planning.courseSlug : null;
 
       const existingBalances = await tx.memberPackBalance.findMany({
         where: { memberId: params.memberId, packId: pack.id },
-        select: { id: true, courseSlug: true, remaining: true },
+        select: { id: true },
       });
-
       if (existingBalances.length === 0) {
-        if (isMixed) {
-          const usedRows = packStartDate
-            ? await tx.reservation.findMany({
-                where: {
-                  memberId: params.memberId,
-                  OR: [{ status: { in: ["BOOKED", "ATTENDED"] } }, { status: "CANCELLED", packRefundedAt: null }],
-                  sessionDate: { gte: packStartDate, ...(expiresAt ? { lte: expiresAt } : {}) },
-                  planning: { courseSlug: { in: pack.courseQuotas.map((q) => q.courseSlug) } },
-                },
-                select: { planning: { select: { courseSlug: true } } },
-              })
-            : [];
-          const usedBySlug = new Map<string, number>();
-          for (const r of usedRows) {
-            usedBySlug.set(r.planning.courseSlug, (usedBySlug.get(r.planning.courseSlug) ?? 0) + 1);
-          }
-          await tx.memberPackBalance.createMany({
-            data: pack.courseQuotas.map((q) => ({
-              memberId: params.memberId,
-              packId: pack.id,
-              courseSlug: q.courseSlug,
-              remaining: Math.max(0, q.sessionCount - (usedBySlug.get(q.courseSlug) ?? 0)),
-            })),
-          });
-        } else if (pack.sessionCount != null) {
-          const used = packStartDate
-            ? await tx.reservation.count({
-                where: {
-                  memberId: params.memberId,
-                  OR: [{ status: { in: ["BOOKED", "ATTENDED"] } }, { status: "CANCELLED", packRefundedAt: null }],
-                  sessionDate: { gte: packStartDate, ...(expiresAt ? { lte: expiresAt } : {}) },
-                },
-              })
-            : 0;
-          await tx.memberPackBalance.create({
-            data: {
-              memberId: params.memberId,
-              packId: pack.id,
-              courseSlug: null,
-              remaining: Math.max(0, pack.sessionCount - used),
-            },
-          });
-        }
+        await resetMemberPackBalancesForPack(tx, { memberId: params.memberId, packId: pack.id });
       }
 
       const existing = await tx.reservation.findUnique({
@@ -240,7 +165,7 @@ export async function createMemberReservation(params: {
 
       if (existing?.status === "CANCELLED") {
         if (status === "BOOKED" && existing.packRefundedAt) {
-          await debitMemberPackSession(tx, {
+          await debitSelectedPackSession(tx, {
             memberId: params.memberId,
             pack,
             courseSlug: planning.courseSlug,
@@ -248,17 +173,22 @@ export async function createMemberReservation(params: {
         }
         const updated = await tx.reservation.update({
           where: { id: existing.id },
-          data: { status, packRefundedAt: null, source, createdByUserId },
+          data: {
+            status,
+            packRefundedAt: null,
+            source,
+            createdByUserId,
+            debitedPackId: status === "BOOKED" ? pack.id : null,
+          },
         });
-        if (!memberWithPack.isActive) {
+        if (!memberRow.isActive) {
           await tx.member.update({ where: { id: params.memberId }, data: { isActive: true } });
         }
-        await tryActivatePendingPackIfCurrentFinished(tx, params.memberId);
         return updated;
       }
 
       if (status === "BOOKED") {
-        await debitMemberPackSession(tx, {
+        await debitSelectedPackSession(tx, {
           memberId: params.memberId,
           pack,
           courseSlug: planning.courseSlug,
@@ -274,13 +204,13 @@ export async function createMemberReservation(params: {
           source,
           createdByUserId,
           packRefundedAt: null,
+          debitedPackId: status === "BOOKED" ? pack.id : null,
         },
       });
 
-      if (!memberWithPack.isActive) {
+      if (!memberRow.isActive) {
         await tx.member.update({ where: { id: params.memberId }, data: { isActive: true } });
       }
-      await tryActivatePendingPackIfCurrentFinished(tx, params.memberId);
 
       return created;
     },
@@ -288,7 +218,7 @@ export async function createMemberReservation(params: {
       isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
       maxWait: 5000,
       timeout: 10000,
-    }
+    },
   );
 
   return {

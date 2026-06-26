@@ -81,5 +81,9 @@ export const updateMemberSchema = z.object({
 
 export const renewMemberPackSchema = z.object({
   packId: z.string().trim().cuid(),
+  personalDiscount: personalDiscountInputSchema,
+  paymentMode: z.enum(["full", "deposit"]).default("full"),
+  depositAmountDinars: z.number().int().positive().optional(),
+  paymentMethod: z.enum(PACK_PAYMENT_METHODS),
 });
 

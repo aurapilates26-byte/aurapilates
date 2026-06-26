@@ -171,6 +171,7 @@ export async function POST(request: Request) {
 
   const duplicate = await findOverlappingPlanningSlot(db, {
     anchorSessionYmd: anchorCheck.anchorDate,
+    courseSlug: data.courseSlug,
     startTime: data.startTime,
     isDraft: scope === "draft",
   });

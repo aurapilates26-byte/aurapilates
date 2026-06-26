@@ -20,15 +20,23 @@ describe("planning-session-slot", () => {
     expect(doPlanningGlobalSlotsOverlap("09:30", "11:30")).toBe(false);
   });
 
-  it("detects overlap in loaded items on the same day", () => {
+  it("detects overlap in loaded items on the same day and same course", () => {
     const items = [
-      { id: "a", anchorSessionYmd: "2026-06-22", startTime: "09:00" },
-      { id: "b", anchorSessionYmd: "2026-06-22", startTime: "11:00" },
+      { id: "a", courseSlug: "pilates-reformer", anchorSessionYmd: "2026-06-22", startTime: "09:00" },
+      { id: "b", courseSlug: "mat-pilates", anchorSessionYmd: "2026-06-22", startTime: "11:00" },
     ];
-    expect(hasPlanningSlotOverlap(items, "2026-06-22", "09:30")).toBe(true);
-    expect(hasPlanningSlotOverlap(items, "2026-06-22", "10:00")).toBe(false);
-    expect(hasPlanningSlotOverlap(items, "2026-06-22", "09:00", "a")).toBe(false);
-    expect(hasPlanningSlotOverlap(items, "2026-06-23", "09:30")).toBe(false);
+    expect(hasPlanningSlotOverlap(items, "2026-06-22", "pilates-reformer", "09:30")).toBe(true);
+    expect(hasPlanningSlotOverlap(items, "2026-06-22", "pilates-reformer", "10:00")).toBe(false);
+    expect(hasPlanningSlotOverlap(items, "2026-06-22", "pilates-reformer", "09:00", "a")).toBe(false);
+    expect(hasPlanningSlotOverlap(items, "2026-06-23", "pilates-reformer", "09:30")).toBe(false);
+  });
+
+  it("allows same time on the same day when course slug differs", () => {
+    const items = [
+      { id: "a", courseSlug: "pilates-reformer", anchorSessionYmd: "2026-06-22", startTime: "09:00" },
+    ];
+    expect(hasPlanningSlotOverlap(items, "2026-06-22", "mat-pilates", "09:00")).toBe(false);
+    expect(hasPlanningSlotOverlap(items, "2026-06-22", "mat-pilates", "09:30")).toBe(false);
   });
 
   it("uses a 60-minute global slot", () => {

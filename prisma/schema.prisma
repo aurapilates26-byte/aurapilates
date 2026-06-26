@@ -219,6 +219,7 @@ model Pack {
   promotionTargets PackPromotionPack[]
   packPayments     PackPayment[]
   pendingForMembers MemberPendingPack[]
+  debitedReservations Reservation[] @relation("ReservationDebitedPack")
 
   @@map("packs")
 }
@@ -446,10 +447,12 @@ model Reservation {
   source      ReservationSource?
   createdByUserId String?
   packRefundedAt DateTime?
+  debitedPackId  String?
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
   member      Member            @relation(fields: [memberId], references: [id], onDelete: Cascade)
   planning    Planning          @relation(fields: [planningId], references: [id], onDelete: Cascade)
+  debitedPack Pack?             @relation("ReservationDebitedPack", fields: [debitedPackId], references: [id], onDelete: SetNull)
   createdByUser User?           @relation("ReservationCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   attendance  Attendance?
   checkIn     CheckIn?

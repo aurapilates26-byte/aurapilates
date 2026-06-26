@@ -189,19 +189,13 @@ export async function activateNextPendingPack(
 }
 
 /**
- * Si le pack actuel est terminé (expiré ou sans séances), active le prochain pack en file d'attente.
+ * Les packs en attente sont désormais activés en parallèle (plus de bascule automatique).
  */
 export async function tryActivatePendingPackIfCurrentFinished(
-  tx: typeof prisma | Prisma.TransactionClient,
-  memberId: string
+  _tx: typeof prisma | Prisma.TransactionClient,
+  _memberId: string,
 ): Promise<boolean> {
-  const state = await loadMemberPackState(tx, memberId);
-  if (!state) return false;
-
-  const decision = decidePackRenewal(state);
-  if (decision.mode === "queued") return false;
-
-  return activateNextPendingPack(tx, memberId);
+  return false;
 }
 
 export async function listMemberPendingPacks(memberId: string) {
@@ -235,5 +229,5 @@ export function packRenewalMessageFr(decision: PackRenewalDecision, queuedPackNa
 
   const sessionsWord = decision.remainingSessions === 1 ? "séance" : "séances";
   const packLabel = queuedPackName ? ` « ${queuedPackName} »` : "";
-  return `Le pack actuel a encore ${decision.remainingSessions} ${sessionsWord}. Le pack${packLabel} a été ajouté en file d'attente et s'activera automatiquement à la fin du pack en cours.`;
+  return `Le pack${packLabel} a été ajouté. L'adhérente dispose maintenant de plusieurs packs utilisables en parallèle (${decision.remainingSessions} ${sessionsWord} restantes sur le pack précédent).`;
 }

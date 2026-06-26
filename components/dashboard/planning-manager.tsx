@@ -536,7 +536,13 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
         : items;
     if (
       resolvedAnchorYmd &&
-      hasPlanningSlotOverlap(sessionItemsForDuplicateCheck, resolvedAnchorYmd, startTime, editingId)
+      hasPlanningSlotOverlap(
+        sessionItemsForDuplicateCheck,
+        resolvedAnchorYmd,
+        courseSlug.trim(),
+        startTime,
+        editingId,
+      )
     ) {
       setFormError(PLANNING_SLOT_OVERLAP_ERROR);
       return;

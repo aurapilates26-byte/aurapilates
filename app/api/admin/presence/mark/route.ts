@@ -6,13 +6,17 @@ import { isStaffRole } from "@/lib/admin/access";
 import {
   formatYmdLocal,
   formatYmdPrismaDate,
+  parseYmdLocal,
   parseYmdToPrismaDate,
   startOfLocalToday,
 } from "@/lib/calendar-day";
 import { ensureReservationAttendanceRecord } from "@/lib/ensure-reservation-attendance";
 import { broadcastMemberBookingRefresh } from "@/lib/member-booking-stream";
 import { PACK_ERRORS } from "@/lib/create-member-reservation";
-import { debitMemberPackSession } from "@/lib/member-pack-session-ledger";
+import {
+  debitSelectedPackSession,
+  resolvePackForMemberBooking,
+} from "@/lib/admin/member-pack-selection";
 import { prisma } from "@/lib/prisma";
 
 const RESERVATION_ELIGIBLE_STATUSES: ReservationStatus[] = [
@@ -85,14 +89,7 @@ export async function POST(request: Request) {
           planning: { select: { startTime: true, endTime: true, courseSlug: true } },
           member: {
             select: {
-              packId: true,
-              pack: {
-                select: {
-                  id: true,
-                  sessionCount: true,
-                  courseQuotas: { select: { courseSlug: true, sessionCount: true } },
-                },
-              },
+              packStartedAt: true,
             },
           },
           attendance: { select: { reservationId: true } },
@@ -125,13 +122,24 @@ export async function POST(request: Request) {
         }
 
         if (current.status === ReservationStatus.WAITLIST) {
-          if (!current.member.packId || !current.member.pack) {
-            throw new Error(PACK_ERRORS.noPack);
-          }
-          await debitMemberPackSession(tx, {
+          const sessionYmdForPack = formatYmdPrismaDate(new Date(current.sessionDate));
+          const sessionDateLocal = parseYmdLocal(sessionYmdForPack);
+          if (!sessionDateLocal) throw new Error(PACK_ERRORS.noPack);
+          const selected = await resolvePackForMemberBooking(tx, {
             memberId: current.memberId,
-            pack: current.member.pack,
             courseSlug: current.planning.courseSlug,
+            sessionDateLocal,
+            preferredPackId: null,
+            primaryPackStartedAt: current.member.packStartedAt,
+          });
+          await debitSelectedPackSession(tx, {
+            memberId: current.memberId,
+            pack: selected.pack,
+            courseSlug: current.planning.courseSlug,
+          });
+          await tx.reservation.update({
+            where: { id: reservationId },
+            data: { debitedPackId: selected.pack.id },
           });
         }
 

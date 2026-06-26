@@ -14,7 +14,6 @@ import { PACK_CATEGORY_OPTIONS, normalizePackCategory } from "@/lib/pack-categor
 import { planningLevelBadgeClass } from "@/lib/planning-level-badge";
 import { planningLevelLabelFr } from "@/lib/planning-public-labels";
 import { PackMetricsGrid } from "@/components/pack-metrics-grid";
-import { PaymentMethodBadge } from "@/components/dashboard/payment-method-badge";
 import {
   comparePacksBySessionAsc,
   formatPackPriceDt,
@@ -28,13 +27,18 @@ import {
 } from "@/lib/pack-payment-method";
 import type { AdminMemberReservationItem } from "@/lib/admin/member-reservations-list";
 import { AdminMemberReservationsPanel } from "@/components/dashboard/reservations/admin-member-reservations-panel";
+import { MemberOwnedPacksPanel } from "@/components/dashboard/member-owned-packs-panel";
 import { useMemberDetailStore } from "@/store/admin/member-detail-store";
 import { displayMemberEmail } from "@/lib/member-display-email";
-import { computePersonalDiscountPreview } from "@/lib/member-personal-discount";
+import {
+  computePersonalDiscountPreview,
+  computePersonalDiscountPreviewFromForm,
+} from "@/lib/member-personal-discount";
 import type { PersonalDiscountType } from "@/types/admin/pack-payment";
 
 type SlotRow = {
   planningId: string;
+  courseSlug: string;
   courseLabel: string;
   startTime: string;
   endTime: string;
@@ -48,11 +52,20 @@ type SlotRow = {
   };
 };
 
-type PackUsageSummary = {
-  totalSessions: number | null;
-  consumedSessions: number;
-  remainingSessions: number | null;
+type BookablePackOption = {
+  packId: string;
+  packName: string;
+  remainingSessions: number;
+  isPrimary: boolean;
 };
+
+type BookPackPickerState = {
+  planningId: string;
+  packId: string;
+  options: BookablePackOption[];
+};
+
+type PanelMode = "view" | "edit" | "book" | "renew";
 
 function formatDateFr(value: Date | string | null | undefined) {
   if (!value) return "—";
@@ -72,11 +85,6 @@ function formatPackDurationLabel(durationDays: string | null | undefined): strin
   const n = Number(durationDays);
   if (!Number.isFinite(n)) return String(durationDays);
   return n === 1 ? "1 jour" : `${n} jours`;
-}
-
-function formatPackSessionsValue(count: number | null): string {
-  if (count === null) return "—";
-  return String(count);
 }
 
 function formatMemberPersonalDiscount(discount: MemberDetailData["personalDiscount"]): string | null {
@@ -108,8 +116,6 @@ function InfoField({ label, children }: { label: string; children: ReactNode }) 
     </div>
   );
 }
-
-type PanelMode = "view" | "edit" | "book";
 
 const iconBtnBase =
   "inline-flex h-8 w-8 items-center justify-center rounded-lg border focus-visible:outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-60";
@@ -213,8 +219,8 @@ export function MemberDetailClient({
   const [isDeleting, setIsDeleting] = useState(false);
   const [isRenewing, setIsRenewing] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [showRenewModal, setShowRenewModal] = useState(false);
   const [reservationsReloadToken, setReservationsReloadToken] = useState(0);
+  const [ownedPacksReloadToken, setOwnedPacksReloadToken] = useState(0);
   const [formError, setFormError] = useState<string | null>(null);
   const [renewModalError, setRenewModalError] = useState<string | null>(null);
 
@@ -240,16 +246,21 @@ export function MemberDetailClient({
 
   const [renewPackCategory, setRenewPackCategory] = useState("");
   const [renewPackId, setRenewPackId] = useState("");
+  const [renewDiscountType, setRenewDiscountType] = useState<"NONE" | PersonalDiscountType>("NONE");
+  const [renewDiscountValue, setRenewDiscountValue] = useState("");
+  const [renewDiscountReason, setRenewDiscountReason] = useState("");
+  const [renewPaymentMode, setRenewPaymentMode] = useState<"full" | "deposit">("full");
+  const [renewDepositAmount, setRenewDepositAmount] = useState("");
+  const [renewPaymentMethod, setRenewPaymentMethod] = useState<PackPaymentMethodValue>("CASH");
 
   const [bookDate, setBookDate] = useState(() => formatYmdLocal(startOfLocalToday()));
   const [slots, setSlots] = useState<SlotRow[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [slotsError, setSlotsError] = useState<string | null>(null);
   const [bookingPlanningId, setBookingPlanningId] = useState<string | null>(null);
+  const [bookPackPicker, setBookPackPicker] = useState<BookPackPickerState | null>(null);
 
   const [upcomingReservations, setUpcomingReservations] = useState<AdminMemberReservationItem[]>([]);
-  const [packUsage, setPackUsage] = useState<PackUsageSummary | null>(null);
-  const [packUsageLoading, setPackUsageLoading] = useState(true);
 
   const displayName = useMemo(() => {
     if (!member) return "Adhérente";
@@ -290,7 +301,17 @@ export function MemberDetailClient({
     [activePacks, renewPackId]
   );
 
-  const renewalDurationHint = selectedRenewPack?.durationDays ?? null;
+  const renewPackListPriceDinars = selectedRenewPack?.priceCents ?? null;
+
+  const renewDiscountPreview = useMemo(
+    () =>
+      computePersonalDiscountPreviewFromForm(
+        renewPackListPriceDinars,
+        renewDiscountType,
+        renewDiscountValue,
+      ),
+    [renewPackListPriceDinars, renewDiscountType, renewDiscountValue],
+  );
 
   const renewPreviewDecision = useMemo((): PackRenewalDecision | null => {
     if (!member?.pack || !renewPackId) return null;
@@ -332,10 +353,6 @@ export function MemberDetailClient({
     if (!member?.pack?.id) return null;
     return packs.find((p) => p.id === member.pack?.id) ?? null;
   }, [member, packs]);
-
-  const memberPackSessions = useMemo(() => {
-    return memberPackCatalog ? resolvePackSessionCount(memberPackCatalog) : null;
-  }, [memberPackCatalog]);
 
   const memberDiscountPreview = useMemo(
     () => computePersonalDiscountPreview(memberPackCatalog?.priceCents ?? null, member?.personalDiscount ?? null),
@@ -387,29 +404,6 @@ export function MemberDetailClient({
     useMemberDetailStore.getState().setPacks(data.items);
     return data.items;
   }, []);
-
-  const loadPackUsage = useCallback(async () => {
-    setPackUsageLoading(true);
-    try {
-      const response = await fetch(`/api/admin/members/${encodeURIComponent(memberId)}/pack-usage`, {
-        cache: "no-store",
-      });
-      if (!response.ok) {
-        const data = (await response.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(data?.error ?? "Impossible de charger l'utilisation des séances.");
-      }
-      const data = (await response.json()) as PackUsageSummary;
-      setPackUsage(data);
-    } catch (e) {
-      toast({
-        variant: "error",
-        title: "Pack",
-        description: e instanceof Error ? e.message : "Erreur",
-      });
-    } finally {
-      setPackUsageLoading(false);
-    }
-  }, [memberId, toast]);
 
   const loadSlots = useCallback(async (date: string) => {
     setSlotsLoading(true);
@@ -482,10 +476,6 @@ export function MemberDetailClient({
   }, [memberId, initialMember, initialPacks, loadMember, loadPacks, populateForm]);
 
   useEffect(() => {
-    void loadPackUsage();
-  }, [memberId, loadPackUsage]);
-
-  useEffect(() => {
     if (panelMode !== "book" || !bookDate) return;
     void loadSlots(bookDate);
   }, [bookDate, loadSlots, panelMode]);
@@ -547,6 +537,23 @@ export function MemberDetailClient({
       setPackId("");
     }
   };
+
+  const openRenewPanel = useCallback(() => {
+    if (!member) return;
+    const memberPack = activePacks.find((p) => p.id === member.pack?.id);
+    setRenewPackCategory(memberPack?.category ? normalizePackCategory(memberPack.category) : "");
+    setRenewPackId(member.pack?.id ?? "");
+    setRenewDiscountType(member.personalDiscount?.type ?? "NONE");
+    setRenewDiscountValue(
+      member.personalDiscount?.value != null ? String(member.personalDiscount.value) : "",
+    );
+    setRenewDiscountReason(member.personalDiscount?.reason ?? "");
+    setRenewPaymentMode("full");
+    setRenewDepositAmount("");
+    setRenewPaymentMethod(member.packPaymentMethod ?? "CASH");
+    setRenewModalError(null);
+    setPanelMode("renew");
+  }, [activePacks, member]);
 
   const handleRenewPackCategoryChange = (value: string) => {
     setRenewPackCategory(value);
@@ -644,6 +651,7 @@ export function MemberDetailClient({
       useMemberDetailStore.getState().setCachedDetail(data.item);
       populateForm(data.item, packs);
       setPanelMode("view");
+      setOwnedPacksReloadToken((t) => t + 1);
       toast({ variant: "success", title: "Adhérente mise à jour" });
     } catch (e) {
       const message = e instanceof Error ? e.message : "Erreur";
@@ -688,6 +696,38 @@ export function MemberDetailClient({
       setRenewModalError("Veuillez choisir un pack.");
       return;
     }
+    if (renewDiscountType !== "NONE") {
+      const parsedDiscount = Number.parseInt(renewDiscountValue, 10);
+      if (!Number.isFinite(parsedDiscount) || parsedDiscount <= 0) {
+        setRenewModalError("La remise personnalisée doit être un entier positif.");
+        return;
+      }
+      if (renewDiscountType === "PERCENT" && parsedDiscount > 100) {
+        setRenewModalError("La remise en pourcentage doit être entre 1 et 100.");
+        return;
+      }
+      if (
+        renewDiscountType === "AMOUNT" &&
+        renewPackListPriceDinars != null &&
+        parsedDiscount > renewPackListPriceDinars
+      ) {
+        setRenewModalError("La remise ne peut pas dépasser le prix du pack.");
+        return;
+      }
+    }
+    if (renewPaymentMode === "deposit") {
+      const deposit = Number.parseInt(renewDepositAmount, 10);
+      const expectedTotal = renewDiscountPreview?.final ?? renewPackListPriceDinars ?? null;
+      if (!Number.isFinite(deposit) || deposit <= 0) {
+        setRenewModalError("Indiquez un montant d'acompte valide.");
+        return;
+      }
+      if (expectedTotal != null && deposit >= expectedTotal) {
+        setRenewModalError("L'acompte doit être inférieur au montant total du pack.");
+        return;
+      }
+    }
+
     setIsRenewing(true);
     setRenewModalError(null);
     try {
@@ -696,7 +736,22 @@ export function MemberDetailClient({
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ packId: renewPackId }),
+          body: JSON.stringify({
+            packId: renewPackId,
+            paymentMode: renewPaymentMode,
+            paymentMethod: renewPaymentMethod,
+            personalDiscount:
+              renewDiscountType === "NONE"
+                ? null
+                : {
+                    type: renewDiscountType,
+                    value: Number.parseInt(renewDiscountValue, 10),
+                    reason: renewDiscountReason.trim() || undefined,
+                  },
+            ...(renewPaymentMode === "deposit"
+              ? { depositAmountDinars: Number.parseInt(renewDepositAmount, 10) }
+              : {}),
+          }),
         }
       );
       if (!response.ok) {
@@ -708,14 +763,14 @@ export function MemberDetailClient({
       };
       const updated = await loadMember();
       populateForm(updated, packs);
-      setShowRenewModal(false);
-      const queued = data.renewal?.mode === "queued";
+      setPanelMode("view");
+      const parallel = data.renewal?.mode === "queued";
       toast({
         variant: "success",
-        title: queued ? "Pack ajouté en file d'attente" : "Pack renouvelé",
+        title: parallel ? "Pack ajouté" : "Pack renouvelé",
         description: data.renewal?.message,
       });
-      await loadPackUsage();
+      setOwnedPacksReloadToken((t) => t + 1);
     } catch (e) {
       setRenewModalError(e instanceof Error ? e.message : "Erreur");
     } finally {
@@ -723,7 +778,7 @@ export function MemberDetailClient({
     }
   };
 
-  const handleBookSlot = async (planningId: string) => {
+  const submitBook = async (planningId: string, packId?: string) => {
     setBookingPlanningId(planningId);
     try {
       const response = await fetch(
@@ -731,7 +786,11 @@ export function MemberDetailClient({
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ planningId, sessionDate: bookDate }),
+          body: JSON.stringify({
+            planningId,
+            sessionDate: bookDate,
+            ...(packId ? { packId } : {}),
+          }),
         }
       );
       if (!response.ok) {
@@ -751,10 +810,10 @@ export function MemberDetailClient({
       const updated = await loadMember();
       populateForm(updated, packs);
       setReservationsReloadToken((t) => t + 1);
-      await Promise.all([
-        loadPackUsage(),
-        panelMode === "book" ? loadSlots(bookDate) : Promise.resolve(),
-      ]);
+      setOwnedPacksReloadToken((t) => t + 1);
+      if (panelMode === "book") {
+        await loadSlots(bookDate);
+      }
       router.refresh();
     } catch (e) {
       toast({
@@ -764,6 +823,40 @@ export function MemberDetailClient({
       });
     } finally {
       setBookingPlanningId(null);
+      setBookPackPicker(null);
+    }
+  };
+
+  const handleBookSlot = async (planningId: string, courseSlug: string) => {
+    try {
+      const response = await fetch(
+        `/api/admin/members/${encodeURIComponent(memberId)}/bookable-packs?courseSlug=${encodeURIComponent(courseSlug)}`,
+        { cache: "no-store" },
+      );
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(data?.error ?? "Impossible de charger les packs.");
+      }
+      const data = (await response.json()) as { items: BookablePackOption[] };
+      const options = data.items ?? [];
+      if (options.length === 0) {
+        throw new Error("Aucun pack avec des séances disponibles pour ce cours.");
+      }
+      if (options.length === 1) {
+        await submitBook(planningId, options[0].packId);
+        return;
+      }
+      setBookPackPicker({
+        planningId,
+        packId: options[0].packId,
+        options,
+      });
+    } catch (e) {
+      toast({
+        variant: "error",
+        title: "Réservation",
+        description: e instanceof Error ? e.message : "Erreur",
+      });
     }
   };
 
@@ -802,11 +895,12 @@ export function MemberDetailClient({
         description="Fiche adhérente, réservations et actions."
         showRoleLine={false}
         actions={
-          panelMode === "edit" ? undefined : panelMode === "book" ? (
+          panelMode === "edit" ? undefined : panelMode === "book" || panelMode === "renew" ? (
             <button
               type="button"
               onClick={() => setPanelMode("view")}
-              className="rounded-full border border-brand-medium/35 bg-white px-4 py-2 text-sm font-medium text-brand-dark transition hover:bg-zinc-50"
+              disabled={panelMode === "renew" && isRenewing}
+              className="rounded-full border border-brand-medium/35 bg-white px-4 py-2 text-sm font-medium text-brand-dark transition hover:bg-zinc-50 disabled:opacity-60"
             >
               Retour aux informations
             </button>
@@ -827,16 +921,24 @@ export function MemberDetailClient({
         }
       />
 
-      <section className="grid gap-6 xl:grid-cols-[minmax(0,1.22fr)_360px]">
+      <section className="grid gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <div className="rounded-2xl border border-brand-medium/20 bg-white p-6 shadow-sm">
           <div className="flex flex-col gap-3 border-b border-brand-medium/15 pb-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="text-lg font-semibold text-brand-dark">
-                {panelMode === "book" ? "Réserver manuellement" : "Informations"}
+                {panelMode === "book"
+                  ? "Réserver manuellement"
+                  : panelMode === "renew"
+                    ? "Renouveler le pack"
+                    : "Informations"}
               </h2>
               {panelMode === "book" ? (
                 <p className="mt-1 text-sm text-brand-dark/65">
                   Choisissez une date puis un créneau pour inscrire l&apos;adhérente.
+                </p>
+              ) : panelMode === "renew" ? (
+                <p className="mt-1 text-sm text-brand-dark/65">
+                  Choisissez le pack, la remise et le mode de paiement.
                 </p>
               ) : null}
             </div>
@@ -852,6 +954,11 @@ export function MemberDetailClient({
                   populateForm(member, packs);
                   setPanelMode("view");
                 }}
+              />
+            ) : panelMode === "renew" ? (
+              <IconCloseButton
+                disabled={isRenewing}
+                onClick={() => setPanelMode("view")}
               />
             ) : null}
           </div>
@@ -912,38 +1019,12 @@ export function MemberDetailClient({
                   <span className="font-normal text-brand-dark/85">{formatDateTimeFr(member.createdAt)}</span>
                 </InfoField>
               </div>
-              <div className="mt-5 rounded-xl border border-brand-medium/15 bg-zinc-50/40 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h4 className="text-sm font-semibold text-brand-dark">Suivi séances pack</h4>
-                  {packUsageLoading ? (
-                    <span className="text-xs text-brand-dark/55">Chargement...</span>
-                  ) : null}
-                </div>
-                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                  <InfoField label="Séances pack">
-                    {packUsage?.totalSessions != null ? packUsage.totalSessions : "—"}
-                  </InfoField>
-                  <InfoField label="Séances consommées">{packUsage?.consumedSessions ?? 0}</InfoField>
-                  <InfoField label="Séances restantes">
-                    {packUsage?.remainingSessions != null ? packUsage.remainingSessions : "—"}
-                  </InfoField>
-                </div>
-                <p className="mt-3 text-xs text-brand-dark/60">
-                  Confirmée/Présente consomme une séance. Annulation avant 6 h : non comptabilisée. Annulation tardive :
-                  séance comptabilisée. Le détail des réservations est dans la section ci-dessous.
-                </p>
-                {member && member.pack && member.packRemainingSessions > 0 ? (
-                  <p className="mt-2 text-xs font-medium text-brand-dark/75">
-                    Séances restantes sur le pack actuel : {member.packRemainingSessions}
-                  </p>
-                ) : null}
-              </div>
 
               <AdminMemberReservationsPanel
                 memberId={memberId}
                 reloadToken={reservationsReloadToken}
                 onUpcomingChange={setUpcomingReservations}
-                onReservationsMutated={() => void loadPackUsage()}
+                onReservationsMutated={() => setOwnedPacksReloadToken((t) => t + 1)}
               />
             </>
           ) : panelMode === "edit" ? (
@@ -1090,6 +1171,209 @@ export function MemberDetailClient({
                 </Button>
               </div>
             </div>
+          ) : panelMode === "renew" ? (
+            <div className="mt-5 space-y-4">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <SelectMenu
+                  id="renew-pack-category"
+                  label="Catégorie du pack"
+                  value={renewPackCategory}
+                  onChange={handleRenewPackCategoryChange}
+                  options={[
+                    { value: "", label: "Choisir une catégorie" },
+                    ...PACK_CATEGORY_OPTIONS.map((opt) => ({ value: opt.value, label: opt.label })),
+                  ]}
+                />
+                <SelectMenu
+                  id="renew-pack"
+                  label="Nouveau pack"
+                  value={renewPackId}
+                  onChange={(v) => {
+                    setRenewPackId(v);
+                    setRenewModalError(null);
+                  }}
+                  options={[
+                    { value: "", label: renewPackCategory ? "Choisir un pack" : "Catégorie d'abord" },
+                    ...renewPacksForSelect.map((p) => ({ value: p.id, label: formatPackSelectOptionLabel(p) })),
+                  ]}
+                />
+              </div>
+              {selectedRenewPack ? (
+                <div className="rounded-xl border border-brand-medium/15 bg-zinc-50/60 px-4 py-3">
+                  <p className="text-sm font-semibold text-brand-dark">{selectedRenewPack.name}</p>
+                  <PackMetricsGrid
+                    className="mt-3"
+                    price={formatPackPriceDt(selectedRenewPack.priceCents) ?? "—"}
+                    sessions={String(resolvePackSessionCount(selectedRenewPack) ?? "—")}
+                    duration={formatPackDurationLabel(selectedRenewPack.durationDays)}
+                  />
+                </div>
+              ) : null}
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <SelectMenu
+                  id="renew-discount-type"
+                  label="Remise personnalisée"
+                  value={renewDiscountType}
+                  onChange={(value) => {
+                    setRenewDiscountType(value as "NONE" | PersonalDiscountType);
+                    setRenewModalError(null);
+                  }}
+                  options={[
+                    { value: "NONE", label: "Aucune remise" },
+                    { value: "PERCENT", label: "Pourcentage (%)" },
+                    { value: "AMOUNT", label: "Montant (DT)" },
+                  ]}
+                />
+                <Input
+                  id="renew-discount-value"
+                  type="number"
+                  min={0}
+                  disabled={renewDiscountType === "NONE"}
+                  label={renewDiscountType === "PERCENT" ? "Valeur (%)" : "Valeur (DT)"}
+                  value={renewDiscountValue}
+                  onChange={(e) => {
+                    setRenewDiscountValue(e.target.value);
+                    setRenewModalError(null);
+                  }}
+                  placeholder={renewDiscountType === "PERCENT" ? "Ex: 10" : "Ex: 50"}
+                />
+                <Input
+                  id="renew-discount-reason"
+                  disabled={renewDiscountType === "NONE"}
+                  label="Motif remise (optionnel)"
+                  value={renewDiscountReason}
+                  onChange={(e) => setRenewDiscountReason(e.target.value)}
+                  placeholder="Ex. : tarif préférentiel"
+                />
+              </div>
+              {renewDiscountPreview ? (
+                <div className="rounded-xl border border-sky-200/80 bg-sky-50/70 px-4 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-sky-900/80">
+                    Aperçu du prix final
+                  </p>
+                  <div className="mt-2 rounded-lg border border-sky-200/70 bg-white/75 px-3 py-2">
+                    <p className="text-xs text-sky-900/80">
+                      Prix catalogue: <span className="font-semibold">{renewDiscountPreview.base} DT</span>
+                    </p>
+                    <p className="text-xs text-sky-900/80">
+                      Remise appliquée: <span className="font-semibold">−{renewDiscountPreview.discount} DT</span>
+                    </p>
+                    <p className="text-xs font-bold text-sky-950">
+                      Prix final: {renewDiscountPreview.final} DT
+                    </p>
+                  </div>
+                  {renewPaymentMode === "deposit" ? (
+                    <p className="mt-2 text-xs text-sky-900/75">
+                      L&apos;acompte s&apos;applique sur ce montant final.
+                    </p>
+                  ) : null}
+                </div>
+              ) : renewPackListPriceDinars != null ? (
+                <div className="rounded-xl border border-brand-medium/15 bg-zinc-50/60 px-4 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-dark/50">
+                    Prix catalogue
+                  </p>
+                  <p className="mt-1 text-sm font-bold text-brand-dark">{renewPackListPriceDinars} DT</p>
+                </div>
+              ) : null}
+              <div>
+                <p className="text-sm font-semibold text-brand-dark">Mode de paiement</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setRenewPaymentMode("full")}
+                    className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                      renewPaymentMode === "full"
+                        ? "bg-brand-dark text-white"
+                        : "border border-brand-medium/30 bg-white text-brand-dark"
+                    }`}
+                  >
+                    Paiement complet
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRenewPaymentMode("deposit")}
+                    className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                      renewPaymentMode === "deposit"
+                        ? "bg-brand-dark text-white"
+                        : "border border-brand-medium/30 bg-white text-brand-dark"
+                    }`}
+                  >
+                    Acompte seulement
+                  </button>
+                </div>
+              </div>
+              {renewPaymentMode === "deposit" ? (
+                <div className="max-w-xs">
+                  <Input
+                    id="renew-deposit-amount"
+                    label="Montant de l'acompte (DT)"
+                    type="number"
+                    min={1}
+                    value={renewDepositAmount}
+                    onChange={(e) => {
+                      setRenewDepositAmount(e.target.value);
+                      setRenewModalError(null);
+                    }}
+                  />
+                </div>
+              ) : null}
+              <div className="rounded-xl border border-brand-medium/15 bg-zinc-50/60 p-4">
+                <p className="text-sm font-semibold text-brand-dark">Moyen de paiement</p>
+                <p className="mt-1 text-xs text-brand-dark/60">
+                  Espèces, chèque ou TPE — visible en caisse et sur la fiche pack.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {PACK_PAYMENT_METHODS.map((method) => (
+                    <button
+                      key={method}
+                      type="button"
+                      onClick={() => setRenewPaymentMethod(method)}
+                      className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                        renewPaymentMethod === method
+                          ? "bg-brand-dark text-white"
+                          : "border border-brand-medium/30 bg-white text-brand-dark"
+                      }`}
+                    >
+                      {PACK_PAYMENT_METHOD_LABELS[method]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {renewPreviewMessage ? (
+                <div
+                  className={`rounded-xl border px-3 py-2 text-xs ${
+                    renewPreviewDecision?.mode === "queued"
+                      ? "border-amber-200 bg-amber-50 text-amber-950"
+                      : "border-sky-200 bg-sky-50 text-sky-950"
+                  }`}
+                >
+                  {renewPreviewMessage}
+                </div>
+              ) : null}
+              {renewModalError ? (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  {renewModalError}
+                </div>
+              ) : null}
+              <div className="flex flex-wrap items-center justify-end gap-2 border-t border-brand-medium/15 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setPanelMode("view")}
+                  disabled={isRenewing}
+                  className="rounded-full border border-brand-medium/35 bg-white px-4 py-2 text-sm font-medium text-brand-dark transition hover:bg-zinc-50 disabled:opacity-60"
+                >
+                  Annuler
+                </button>
+                <Button
+                  type="button"
+                  onClick={() => void handleRenewPack()}
+                  disabled={isRenewing || !renewPackId}
+                >
+                  {isRenewing ? "Validation..." : "Valider le renouvellement"}
+                </Button>
+              </div>
+            </div>
           ) : (
             <div className="mt-5">
           <div className="max-w-xs">
@@ -1160,7 +1444,7 @@ export function MemberDetailClient({
                       <Button
                         type="button"
                         disabled={!canBook || isBooking}
-                        onClick={() => void handleBookSlot(slot.planningId)}
+                        onClick={() => void handleBookSlot(slot.planningId, slot.courseSlug)}
                         className="shrink-0"
                       >
                         {isBooking ? "..." : "Réserver"}
@@ -1177,20 +1461,21 @@ export function MemberDetailClient({
 
         <div className="space-y-4 xl:sticky xl:top-6 xl:self-start">
           <aside className="rounded-2xl border border-brand-medium/20 bg-white p-6 shadow-sm">
-            <h3 className="text-lg font-semibold text-brand-dark">Pack</h3>
-            <p className="mt-1 text-sm text-brand-dark/65">Abonnement et validité du pack actuel.</p>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h3 className="text-lg font-semibold text-brand-dark">Pack</h3>
+              <Button
+                type="button"
+                className="shrink-0"
+                disabled={!member.pack?.id || isRenewing || panelMode === "renew"}
+                onClick={openRenewPanel}
+              >
+                Renouveler
+              </Button>
+            </div>
+            <p className="mt-1 text-sm text-brand-dark/65">
+              Abonnements actifs, suivi des séances et renouvellement.
+            </p>
             <div className="mt-5 space-y-3">
-              <div className="rounded-xl border border-brand-medium/15 bg-zinc-50/60 px-4 py-3">
-                <p className="text-base font-semibold text-brand-dark">{member.pack?.name ?? "—"}</p>
-                {member.pack ? (
-                  <PackMetricsGrid
-                    className="mt-3"
-                    price={formatPackPriceDt(memberPackCatalog?.priceCents ?? null) ?? "—"}
-                    sessions={formatPackSessionsValue(memberPackSessions)}
-                    duration={formatPackDurationLabel(member.pack.durationDays)}
-                  />
-                ) : null}
-              </div>
               {member.personalDiscount ? (
                 <div className="rounded-xl border border-sky-200/80 bg-sky-50/70 px-4 py-3">
                   <div className="flex items-center justify-between gap-2">
@@ -1204,10 +1489,12 @@ export function MemberDetailClient({
                   {memberDiscountPreview ? (
                     <div className="mt-2 rounded-lg border border-sky-200/70 bg-white/75 px-3 py-2">
                       <p className="text-xs text-sky-900/80">
-                        Prix d&apos;origine: <span className="font-semibold">{memberDiscountPreview.base} DT</span>
+                        Prix d&apos;origine:{" "}
+                        <span className="font-semibold">{memberDiscountPreview.base} DT</span>
                       </p>
                       <p className="text-xs text-sky-900/80">
-                        Remise appliquée: <span className="font-semibold">−{memberDiscountPreview.discount} DT</span>
+                        Remise appliquée:{" "}
+                        <span className="font-semibold">−{memberDiscountPreview.discount} DT</span>
                       </p>
                       <p className="text-xs font-bold text-sky-950">
                         Prix final: {memberDiscountPreview.final} DT
@@ -1215,83 +1502,12 @@ export function MemberDetailClient({
                     </div>
                   ) : null}
                   {member.personalDiscount.reason ? (
-                    <p className="mt-1 text-xs text-sky-900/75">
-                      Motif: {member.personalDiscount.reason}
-                    </p>
+                    <p className="mt-1 text-xs text-sky-900/75">Motif: {member.personalDiscount.reason}</p>
                   ) : null}
                 </div>
               ) : null}
-              <div className="grid grid-cols-2 gap-3">
-                <InfoField label="Pack début">
-                  {member.packStartedAt ? formatDateFr(member.packStartedAt) : "À la première réservation"}
-                </InfoField>
-                <InfoField label="Expiration du pack">
-                  {member.packExpiresAt
-                    ? formatDateFr(member.packExpiresAt)
-                    : member.pack?.durationDays
-                      ? "Après la 1ʳᵉ réservation"
-                      : "—"}
-                </InfoField>
-              </div>
-              {member.pack ? (
-                <InfoField label="Paiement">
-                  <PaymentMethodBadge method={member.packPaymentMethod} fallback="Non renseigné" />
-                  {member.depositPaymentMethod &&
-                  member.depositPaymentMethod !== member.packPaymentMethod ? (
-                    <p className="mt-1 text-xs font-normal text-brand-dark/60">
-                      Acompte : <PaymentMethodBadge method={member.depositPaymentMethod} />
-                    </p>
-                  ) : null}
-                </InfoField>
-              ) : null}
-              {member.pack && member.packRemainingSessions > 0 ? (
-                <p className="text-xs text-brand-dark/70">
-                  <span className="font-semibold text-brand-dark">{member.packRemainingSessions}</span>{" "}
-                  {member.packRemainingSessions === 1 ? "séance restante" : "séances restantes"} sur ce pack.
-                </p>
-              ) : null}
-              {(member.pendingPacks ?? []).length > 0 ? (
-                <div className="rounded-xl border border-amber-200/80 bg-amber-50/60 px-4 py-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-900/85">
-                    Packs en file d&apos;attente
-                  </p>
-                  <ul className="mt-2 space-y-2">
-                    {(member.pendingPacks ?? []).map((pending, index) => (
-                      <li key={pending.id} className="text-xs text-amber-950/90">
-                        <span className="font-semibold">
-                          {index + 1}. {pending.packName}
-                        </span>
-                        {pending.durationDays ? (
-                          <span className="text-amber-900/75"> · {pending.durationDays}</span>
-                        ) : null}
-                        <span className="block text-[11px] text-amber-900/65">
-                          Acheté le {formatDateTimeFr(pending.createdAt)}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                  <p className="mt-2 text-[11px] text-amber-900/75">
-                    Activation automatique quand le pack actuel est terminé (séances épuisées ou date expirée).
-                  </p>
-                </div>
-              ) : null}
+              <MemberOwnedPacksPanel memberId={memberId} reloadToken={ownedPacksReloadToken} />
             </div>
-            <Button
-              type="button"
-              className="mt-5 w-full"
-              disabled={!member.pack?.id || isRenewing}
-              onClick={() => {
-                const memberPack = activePacks.find((p) => p.id === member.pack?.id);
-                setRenewPackCategory(
-                  memberPack?.category ? normalizePackCategory(memberPack.category) : "",
-                );
-                setRenewPackId(member.pack?.id ?? "");
-                setRenewModalError(null);
-                setShowRenewModal(true);
-              }}
-            >
-              Renouveler
-            </Button>
           </aside>
         </div>
       </section>
@@ -1309,72 +1525,47 @@ export function MemberDetailClient({
       />
 
       <Modal
-        isOpen={showRenewModal}
-        title="Renouveler le pack"
-        description="Choisissez le nouveau pack."
+        isOpen={bookPackPicker != null}
+        title="Choisir le pack"
+        description="Plusieurs packs peuvent être utilisés pour ce cours."
         onClose={() => {
-          if (!isRenewing) setShowRenewModal(false);
+          if (!bookingPlanningId) setBookPackPicker(null);
         }}
         footer={
           <>
             <button
               type="button"
-              onClick={() => setShowRenewModal(false)}
-              disabled={isRenewing}
+              onClick={() => setBookPackPicker(null)}
+              disabled={Boolean(bookingPlanningId)}
               className="rounded-full border border-brand-medium/35 bg-white px-4 py-2 text-sm font-medium text-brand-dark transition hover:bg-zinc-50 disabled:opacity-60"
             >
               Annuler
             </button>
-            <Button type="button" onClick={() => void handleRenewPack()} disabled={isRenewing || !renewPackId}>
-              {isRenewing ? "Validation..." : "Valider"}
+            <Button
+              type="button"
+              disabled={!bookPackPicker || Boolean(bookingPlanningId)}
+              onClick={() => {
+                if (!bookPackPicker) return;
+                void submitBook(bookPackPicker.planningId, bookPackPicker.packId);
+              }}
+            >
+              {bookingPlanningId ? "Réservation..." : "Réserver"}
             </Button>
           </>
         }
       >
-        <div className="space-y-4">
+        {bookPackPicker ? (
           <SelectMenu
-            id="renew-pack-category"
-            label="Catégorie du pack"
-            value={renewPackCategory}
-            onChange={handleRenewPackCategoryChange}
-            options={[
-              { value: "", label: "Choisir une catégorie" },
-              ...PACK_CATEGORY_OPTIONS.map((opt) => ({ value: opt.value, label: opt.label })),
-            ]}
+            id="book-pack"
+            label="Pack à débiter"
+            value={bookPackPicker.packId}
+            onChange={(packId) => setBookPackPicker((prev) => (prev ? { ...prev, packId } : prev))}
+            options={bookPackPicker.options.map((option) => ({
+              value: option.packId,
+              label: `${option.packName} · ${option.remainingSessions} séance(s) restante(s)`,
+            }))}
           />
-          <SelectMenu
-            id="renew-pack"
-            label="Nouveau pack"
-            value={renewPackId}
-            onChange={(v) => {
-              setRenewPackId(v);
-              setRenewModalError(null);
-            }}
-            options={[
-              { value: "", label: renewPackCategory ? "Choisir un pack" : "Catégorie d'abord" },
-              ...renewPacksForSelect.map((p) => ({ value: p.id, label: formatPackSelectOptionLabel(p) })),
-            ]}
-          />
-          {selectedRenewPack && renewalDurationHint ? (
-            <p className="text-xs text-brand-dark/70">Durée : {renewalDurationHint}.</p>
-          ) : null}
-          {renewPreviewMessage ? (
-            <div
-              className={`rounded-xl border px-3 py-2 text-xs ${
-                renewPreviewDecision?.mode === "queued"
-                  ? "border-amber-200 bg-amber-50 text-amber-950"
-                  : "border-sky-200 bg-sky-50 text-sky-950"
-              }`}
-            >
-              {renewPreviewMessage}
-            </div>
-          ) : null}
-          {renewModalError ? (
-            <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-              {renewModalError}
-            </div>
-          ) : null}
-        </div>
+        ) : null}
       </Modal>
     </>
   );

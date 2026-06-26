@@ -31,6 +31,7 @@ async function requireAdmin() {
 const createSchema = z.object({
   planningId: z.string().trim().cuid(),
   sessionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  packId: z.string().trim().cuid().optional(),
 });
 
 const reservationInclude = {
@@ -136,6 +137,7 @@ export async function POST(request: Request, { params }: Params) {
       memberId,
       planningId: parsed.data.planningId,
       sessionDate: parsed.data.sessionDate,
+      packId: parsed.data.packId,
       source: "ADMIN",
       createdByUserId: session.user.id,
     });

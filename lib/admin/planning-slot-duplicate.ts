@@ -16,6 +16,7 @@ export async function findOverlappingPlanningSlot(
   db: DbClient,
   input: {
     anchorSessionYmd: Date;
+    courseSlug: string;
     startTime: string;
     isDraft: boolean;
     excludeId?: string;
@@ -24,6 +25,7 @@ export async function findOverlappingPlanningSlot(
   const candidates = await db.planning.findMany({
     where: {
       anchorSessionYmd: input.anchorSessionYmd,
+      courseSlug: input.courseSlug,
       isDraft: input.isDraft,
       ...(input.excludeId ? { id: { not: input.excludeId } } : {}),
     },

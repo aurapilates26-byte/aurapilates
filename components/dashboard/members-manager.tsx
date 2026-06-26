@@ -148,6 +148,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"ALL" | "ACTIVE" | "INACTIVE">("ALL");
+  const [packCategoryFilter, setPackCategoryFilter] = useState("");
   const [packFilterId, setPackFilterId] = useState<string>("ALL");
   const [packs, setPacks] = useState<PackItem[]>([]);
 
@@ -175,17 +176,39 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
   const [isCompletingDeposit, setIsCompletingDeposit] = useState(false);
   const [page, setPage] = useState(1);
 
+  const packsForListFilter = useMemo(() => {
+    if (!packCategoryFilter.trim()) return packs;
+    const cat = normalizePackCategory(packCategoryFilter);
+    return packs.filter((p) => p.category && normalizePackCategory(p.category) === cat);
+  }, [packs, packCategoryFilter]);
+
+  const packFilterOptions = useMemo(() => {
+    let list = packsForListFilter;
+    if (packFilterId !== "ALL" && !list.some((p) => p.id === packFilterId)) {
+      const selected = packs.find((p) => p.id === packFilterId);
+      if (selected) list = [selected, ...list];
+    }
+    return sortPacksBySessionAsc(list);
+  }, [packFilterId, packs, packsForListFilter]);
+
   const filteredItems = useMemo(() => {
     return sortMembersByCreatedAtDesc(
       items.filter((m) => {
         if (!memberMatchesSearch(m, search)) return false;
         if (packFilterId !== "ALL" && m.pack?.id !== packFilterId) return false;
+        if (packCategoryFilter.trim()) {
+          const cat = normalizePackCategory(packCategoryFilter);
+          const memberPack = m.pack?.id ? packs.find((p) => p.id === m.pack?.id) : null;
+          if (!memberPack?.category || normalizePackCategory(memberPack.category) !== cat) {
+            return false;
+          }
+        }
         if (statusFilter === "ALL") return true;
         if (statusFilter === "ACTIVE") return m.isActive;
         return !m.isActive;
       }),
     );
-  }, [items, search, statusFilter, packFilterId]);
+  }, [items, search, statusFilter, packFilterId, packCategoryFilter, packs]);
 
   const visibleItems = useMemo(() => {
     const start = (page - 1) * MEMBERS_PAGE_SIZE;
@@ -322,9 +345,20 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     return () => window.clearTimeout(timer);
   }, [listMode]);
 
+  const handlePackCategoryFilterChange = (value: string) => {
+    setPackCategoryFilter(value);
+    if (!value.trim()) return;
+    const cat = normalizePackCategory(value);
+    if (packFilterId === "ALL") return;
+    const selected = packs.find((p) => p.id === packFilterId);
+    if (selected && normalizePackCategory(selected.category ?? "") !== cat) {
+      setPackFilterId("ALL");
+    }
+  };
+
   useEffect(() => {
     setPage(1);
-  }, [listMode, search, packFilterId, statusFilter]);
+  }, [listMode, search, packFilterId, statusFilter, packCategoryFilter]);
 
   useEffect(() => {
     if (page > meta.totalPages) {
@@ -729,30 +763,36 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
         <div className="rounded-2xl border border-brand-medium/20 bg-white">
           <div className="border-b border-brand-medium/20 px-5 py-4">
             <div className="flex flex-col gap-4">
-              <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-                <div>
+              <div className="flex w-full flex-col gap-3 md:flex-row md:items-end md:gap-4">
+                <div className="shrink-0">
                   <p className="text-base font-semibold text-brand-dark">
                     {listMode === "deposits" ? "Avances en attente" : "Liste des adhérentes"}
                   </p>
                   <p className="mt-1 text-xs text-brand-dark/60">
-                    {search.trim() || statusFilter !== "ALL" || packFilterId !== "ALL"
+                    {search.trim() ||
+                    statusFilter !== "ALL" ||
+                    packCategoryFilter.trim() ||
+                    packFilterId !== "ALL"
                       ? `${filteredItems.length} résultat(s) sur ${items.length} adhérente(s)`
                       : `${items.length} adhérente(s) au total`}
                   </p>
                 </div>
 
-                <div className="grid min-w-0 w-full gap-2 md:max-w-3xl md:grid-cols-[minmax(320px,1fr)_160px_190px_140px] md:items-end">
-                  <Input
-                    id="members-search"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Nom, téléphone..."
-                    className="mt-0 py-2.5"
-                  />
+                <div className="grid min-w-0 w-full grid-cols-1 gap-2 sm:grid-cols-2 md:flex md:min-w-0 md:flex-1 md:items-end md:gap-2">
+                  <div className="min-w-0 md:min-w-[10rem] md:flex-1">
+                    <Input
+                      id="members-search"
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      placeholder="Nom, téléphone..."
+                      className="mt-0 py-2.5"
+                    />
+                  </div>
                   <SelectMenu
                     id="members-status"
                     value={statusFilter}
                     onChange={(value) => setStatusFilter(value)}
+                    className="md:w-[7.5rem]"
                     options={[
                       { value: "ALL", label: "Tous" },
                       { value: "ACTIVE", label: "Actives" },
@@ -760,12 +800,26 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                     ]}
                   />
                   <SelectMenu
+                    id="members-pack-category"
+                    value={packCategoryFilter}
+                    onChange={handlePackCategoryFilterChange}
+                    className="md:w-[10.5rem]"
+                    options={[
+                      { value: "", label: "Toutes catégories" },
+                      ...PACK_CATEGORY_OPTIONS.map((opt) => ({ value: opt.value, label: opt.label })),
+                    ]}
+                  />
+                  <SelectMenu
                     id="members-pack"
                     value={packFilterId}
                     onChange={(value) => setPackFilterId(value)}
+                    className="md:w-[11rem]"
                     options={[
-                      { value: "ALL", label: "Tous les packs" },
-                      ...packs.map((pack) => ({ value: pack.id, label: pack.name })),
+                      {
+                        value: "ALL",
+                        label: packCategoryFilter.trim() ? "Tous (catégorie)" : "Tous les packs",
+                      },
+                      ...packFilterOptions.map((pack) => ({ value: pack.id, label: pack.name })),
                     ]}
                   />
                   <button
@@ -773,6 +827,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                     onClick={() => {
                       setSearch("");
                       setStatusFilter("ALL");
+                      setPackCategoryFilter("");
                       setPackFilterId("ALL");
                     }}
                     aria-label="Réinitialiser les filtres"

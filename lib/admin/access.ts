@@ -15,7 +15,7 @@ const STAFF_NAV_ALL = [
   { label: "Caisse", href: "/dashboard/caisse" },
 ] as const;
 
-const ADMIN_HIDDEN_HREFS = new Set(["/dashboard", "/dashboard/caisse"]);
+const ADMIN_HIDDEN_HREFS = new Set(["/dashboard", "/dashboard/caisse", "/dashboard/coachs"]);
 
 export function parseDashboardRole(role: string | undefined): DashboardRole {
   if (role === "SUPER_ADMIN") return "SUPER_ADMIN";
@@ -55,7 +55,9 @@ export function isSuperAdminOnlyPath(pathname: string): boolean {
   return (
     path === "/dashboard" ||
     path === "/dashboard/caisse" ||
-    path.startsWith("/dashboard/caisse/")
+    path.startsWith("/dashboard/caisse/") ||
+    path === "/dashboard/coachs" ||
+    path.startsWith("/dashboard/coachs/")
   );
 }
 

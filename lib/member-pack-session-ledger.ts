@@ -1,5 +1,10 @@
 import type { Prisma } from "@prisma/client";
+import { formatYmdPrismaDate, parseYmdLocal } from "@/lib/calendar-day";
 import { PACK_ERRORS } from "@/lib/create-member-reservation";
+import {
+  debitSelectedPackSession,
+  resolvePackForMemberBooking,
+} from "@/lib/admin/member-pack-selection";
 
 type PackRow = {
   id: string;
@@ -106,32 +111,36 @@ export async function promoteNextWaitlistReservation(
     select: {
       id: true,
       memberId: true,
-      member: {
-        select: {
-          packId: true,
-          pack: {
-            select: {
-              id: true,
-              sessionCount: true,
-              courseQuotas: { select: { courseSlug: true, sessionCount: true } },
-            },
-          },
-        },
-      },
     },
   });
 
   for (const waiter of waiters) {
-    if (!waiter.member.packId || !waiter.member.pack) continue;
+    const memberRow = await tx.member.findUnique({
+      where: { id: waiter.memberId },
+      select: { packStartedAt: true },
+    });
+    if (!memberRow) continue;
+
+    const sessionYmd = formatYmdPrismaDate(new Date(params.sessionDate));
+    const sessionDateLocal = parseYmdLocal(sessionYmd);
+    if (!sessionDateLocal) continue;
+
     try {
-      await debitMemberPackSession(tx, {
+      const selected = await resolvePackForMemberBooking(tx, {
         memberId: waiter.memberId,
-        pack: waiter.member.pack,
+        courseSlug: params.courseSlug,
+        sessionDateLocal,
+        preferredPackId: null,
+        primaryPackStartedAt: memberRow.packStartedAt,
+      });
+      await debitSelectedPackSession(tx, {
+        memberId: waiter.memberId,
+        pack: selected.pack,
         courseSlug: params.courseSlug,
       });
       await tx.reservation.update({
         where: { id: waiter.id },
-        data: { status: "BOOKED" },
+        data: { status: "BOOKED", debitedPackId: selected.pack.id },
       });
       return true;
     } catch (error) {

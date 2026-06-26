@@ -27,11 +27,11 @@ import {
   computeExpectedPackAmountForCreate,
   recordDepositOnMemberCreate,
 } from "@/lib/admin/member-deposit";
+import { addParallelMemberPack } from "@/lib/admin/member-owned-packs";
 import {
   decidePackRenewal,
   loadMemberPackState,
   packRenewalMessageFr,
-  queueMemberPendingPack,
   resetMemberPackBalancesForPack,
 } from "@/lib/admin/member-pack-renewal";
 
@@ -601,7 +601,7 @@ export async function updateAdminMemberById(id: string, request: Request) {
       const decision = packChangeDecision ?? { mode: "immediate" as const };
 
       if (queuePackChange) {
-        await queueMemberPendingPack(tx, { memberId: member.id, packId: data.packId });
+        await addParallelMemberPack(tx, { memberId: member.id, packId: data.packId });
       } else {
         await tx.member.update({
           where: { id: member.id },
@@ -617,7 +617,7 @@ export async function updateAdminMemberById(id: string, request: Request) {
           recordedByUserId: adminUserId,
           precomputed: paymentPrecomputed,
           personalDiscount: effectivePersonalDiscount,
-          note: decision.mode === "queued" ? "Changement de pack (file d'attente)" : "Changement de pack",
+          note: decision.mode === "queued" ? "Changement de pack (pack parallèle)" : "Changement de pack",
           paymentMethod: data.paymentMethod,
         });
       }
@@ -761,7 +761,8 @@ export async function renewAdminMemberPackById(id: string, request: Request) {
     return errorResponse("Invalid request payload", 400);
   }
 
-  const { packId } = parsedBody.data;
+  const { packId, personalDiscount, paymentMode, depositAmountDinars, paymentMethod } = parsedBody.data;
+  const isDepositMode = paymentMode === "deposit";
 
   const selectedPack = await db.pack.findUnique({
     where: { id: packId },
@@ -781,6 +782,37 @@ export async function renewAdminMemberPackById(id: string, request: Request) {
 
   const decision = decidePackRenewal(packStateBefore);
   const paymentPrecomputed = await precomputePackPayment(packId, startOfLocalToday());
+  if (!paymentPrecomputed) {
+    return errorResponse("Ce pack n'a pas de prix catalogue : impossible d'enregistrer un paiement.", 409);
+  }
+
+  const personalDiscountInput =
+    personalDiscount != null ? { type: personalDiscount.type, value: personalDiscount.value } : null;
+
+  if (personalDiscount) {
+    const baseAmount = paymentPrecomputed.resolved.amountDinars;
+    if (personalDiscount.type === "PERCENT" && personalDiscount.value > 100) {
+      return errorResponse("La remise en pourcentage doit être entre 1 et 100.", 400);
+    }
+    if (personalDiscount.type === "AMOUNT" && personalDiscount.value > baseAmount) {
+      return errorResponse("La remise ne peut pas dépasser le montant à encaisser.", 400);
+    }
+  }
+
+  const expectedPackAmountDinars = computeExpectedPackAmountForCreate(
+    paymentPrecomputed,
+    personalDiscountInput,
+  );
+
+  if (isDepositMode) {
+    if (depositAmountDinars == null) {
+      return errorResponse("Indiquez le montant de l'acompte.", 400);
+    }
+    if (depositAmountDinars >= expectedPackAmountDinars) {
+      return errorResponse("L'acompte doit être inférieur au montant total du pack.", 400);
+    }
+  }
+
   const adminUserId = sessionResult.session.user.id;
 
   await db.$transaction(async (tx) => {
@@ -794,7 +826,7 @@ export async function renewAdminMemberPackById(id: string, request: Request) {
     }
 
     if (decision.mode === "queued") {
-      await queueMemberPendingPack(tx, { memberId: id, packId });
+      await addParallelMemberPack(tx, { memberId: id, packId });
     } else {
       await tx.member.update({
         where: { id },
@@ -803,17 +835,52 @@ export async function renewAdminMemberPackById(id: string, request: Request) {
       await resetMemberPackBalancesForPack(tx, { memberId: id, packId });
     }
 
-    if (paymentPrecomputed) {
+    await tx.member.update({
+      where: { id },
+      data: {
+        personalDiscountType: personalDiscount?.type ?? null,
+        personalDiscountValue: personalDiscount?.value ?? null,
+        personalDiscountReason: personalDiscount?.reason?.trim() || null,
+        ...(isDepositMode
+          ? {
+              enrollmentStatus: "DEPOSIT_PENDING",
+              expectedPackAmountDinars,
+              isActive: false,
+            }
+          : {
+              enrollmentStatus: "ACTIVE",
+              expectedPackAmountDinars: null,
+            }),
+      },
+    });
+
+    if (isDepositMode) {
+      await recordDepositOnMemberCreate({
+        tx,
+        memberId: id,
+        packId,
+        depositAmountDinars: depositAmountDinars!,
+        expectedPackAmountDinars,
+        recordedByUserId: adminUserId,
+        precomputed: paymentPrecomputed,
+        paymentMethod,
+      });
+    } else {
+      const noteParts = [
+        decision.mode === "queued" ? "Renouvellement pack (pack parallèle)" : "Renouvellement pack",
+      ];
+      if (personalDiscount?.reason) {
+        noteParts.push(`Remise perso: ${personalDiscount.reason}`);
+      }
       await recordAutoPackPaymentInTransaction(tx, {
         memberId: id,
         packId,
         recordedByUserId: adminUserId,
         precomputed: paymentPrecomputed,
-        personalDiscount:
-          memberCurrent.personalDiscountType && memberCurrent.personalDiscountValue != null
-            ? { type: memberCurrent.personalDiscountType, value: memberCurrent.personalDiscountValue }
-            : null,
-        note: decision.mode === "queued" ? "Renouvellement pack (file d'attente)" : "Renouvellement pack",
+        personalDiscount: personalDiscountInput,
+        note: noteParts.join(" · "),
+        paymentKind: "FULL",
+        paymentMethod,
       });
     }
 
