@@ -145,6 +145,8 @@ model Member {
   enrollmentStatus       MemberEnrollmentStatus @default(ACTIVE)
   /// Montant total attendu pour le pack en cours (acompte + solde).
   expectedPackAmountDinars Int?
+  /// Note interne staff (optionnelle).
+  note            String?
   isActive        Boolean  @default(true)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -157,9 +159,40 @@ model Member {
   packBalances    MemberPackBalance[]
   packPayments    PackPayment[]
   pendingPacks    MemberPendingPack[]
+  packEnrollments MemberPackEnrollment[]
 
   @@index([packId])
   @@map("members")
+}
+
+enum MemberPackEnrollmentStatus {
+  PENDING_START
+  ACTIVE
+  EXPIRED
+  REPLACED
+}
+
+/// Une inscription pack = un achat ou renouvellement distinct (dates début/fin propres).
+model MemberPackEnrollment {
+  id            String                     @id @default(cuid())
+  memberId      String
+  packId        String
+  packPaymentId String?                    @unique
+  purchasedAt   DateTime                   @default(now())
+  packStartedAt DateTime?
+  packExpiresAt DateTime?
+  status        MemberPackEnrollmentStatus   @default(PENDING_START)
+  closedAt      DateTime?
+  createdAt     DateTime                   @default(now())
+  updatedAt     DateTime                   @updatedAt
+
+  member      Member       @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  pack        Pack         @relation(fields: [packId], references: [id], onDelete: Cascade)
+  packPayment PackPayment? @relation(fields: [packPaymentId], references: [id], onDelete: SetNull)
+
+  @@index([memberId, purchasedAt])
+  @@index([memberId, packId])
+  @@map("member_pack_enrollments")
 }
 
 /// Pack acheté en avance : activé automatiquement quand le pack en cours est terminé (séances épuisées ou expiré).
@@ -219,6 +252,7 @@ model Pack {
   promotionTargets PackPromotionPack[]
   packPayments     PackPayment[]
   pendingForMembers MemberPendingPack[]
+  packEnrollments  MemberPackEnrollment[]
   debitedReservations Reservation[] @relation("ReservationDebitedPack")
 
   @@map("packs")
@@ -255,6 +289,7 @@ model PackPayment {
   pack        Pack           @relation(fields: [packId], references: [id], onDelete: Restrict)
   promotion   PackPromotion? @relation(fields: [promotionId], references: [id], onDelete: SetNull)
   recordedBy  User?          @relation("PackPaymentRecordedBy", fields: [recordedByUserId], references: [id], onDelete: SetNull)
+  enrollment  MemberPackEnrollment?
 
   @@index([paidAt])
   @@index([memberId, paidAt])
@@ -424,9 +459,13 @@ model Planning {
   waitlistCapacity Int?
   /// Créneau brouillon (période suivante) — masqué adhérentes / site jusqu'à publication.
   isDraft          Boolean   @default(false)
+  /// Lien vers le créneau publié source (sync publié → brouillon).
+  draftSourceId    String?   @unique
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
   coach            Coach?    @relation(fields: [coachId], references: [id], onDelete: SetNull)
+  draftSource      Planning? @relation("PlanningDraftMirror", fields: [draftSourceId], references: [id], onDelete: Cascade)
+  draftMirrors     Planning[] @relation("PlanningDraftMirror")
   reservations     Reservation[]
   attendance       Attendance[]
 

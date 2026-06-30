@@ -86,6 +86,7 @@ export async function POST(request: Request) {
           memberId: true,
           planningId: true,
           sessionDate: true,
+          debitedPackId: true,
           planning: { select: { startTime: true, endTime: true, courseSlug: true } },
           member: {
             select: {
@@ -129,8 +130,7 @@ export async function POST(request: Request) {
             memberId: current.memberId,
             courseSlug: current.planning.courseSlug,
             sessionDateLocal,
-            preferredPackId: null,
-            primaryPackStartedAt: current.member.packStartedAt,
+            preferredPackId: current.debitedPackId,
           });
           await debitSelectedPackSession(tx, {
             memberId: current.memberId,

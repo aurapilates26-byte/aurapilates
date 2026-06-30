@@ -13,6 +13,7 @@ type ListMemberPreview = {
   packExpiresAt: string | null;
   personalDiscount: { type: "PERCENT" | "AMOUNT"; value: number; reason: string | null } | null;
   isActive: boolean;
+  note?: string | null;
   createdAt: string;
   updatedAt: string;
   qrCode: { qrId: string; qrKey: string | null; status: string; updatedAt: string } | null;
@@ -44,6 +45,7 @@ function listItemToDetail(item: ListMemberPreview): MemberDetailData {
     pendingPacks: [],
     personalDiscount: item.personalDiscount,
     isActive: item.isActive,
+    note: item.note?.trim() || null,
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
     qrCode: item.qrCode,

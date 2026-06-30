@@ -49,8 +49,8 @@ type PlanningPeriodStoreState = {
   windowShortLabel: () => string;
 };
 
-const ADMIN_URL = "/api/admin/planning/window";
-const ADMIN_DRAFT_URL = "/api/admin/planning/window/draft";
+const ADMIN_URL = "/api/admin/planning-window";
+const ADMIN_DRAFT_URL = "/api/admin/planning-window-draft";
 const PUBLIC_URL = "/api/public/planning-period";
 
 function endpointFor(source: "admin" | "public") {

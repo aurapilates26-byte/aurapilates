@@ -163,3 +163,53 @@ export async function recordDepositOnMemberCreate(input: CreateMemberDepositPaym
     note: "Acompte à l'inscription",
   });
 }
+
+export async function updateMemberDepositPaymentInTransaction(
+  tx: Prisma.TransactionClient,
+  input: {
+    memberId: string;
+    packId: string;
+    depositAmountDinars: number;
+    expectedPackAmountDinars: number;
+    paymentMethod?: PackPaymentMethod;
+  },
+) {
+  if (input.depositAmountDinars <= 0) {
+    throw new Error("DEPOSIT_AMOUNT_INVALID");
+  }
+  if (input.depositAmountDinars >= input.expectedPackAmountDinars) {
+    throw new Error("DEPOSIT_AMOUNT_TOO_HIGH");
+  }
+
+  const depositPayment = await tx.packPayment.findFirst({
+    where: {
+      memberId: input.memberId,
+      packId: input.packId,
+      paymentKind: "DEPOSIT",
+    },
+    select: { id: true },
+  });
+  if (!depositPayment) {
+    throw new Error("DEPOSIT_PAYMENT_NOT_FOUND");
+  }
+
+  const balancePayment = await tx.packPayment.findFirst({
+    where: {
+      memberId: input.memberId,
+      packId: input.packId,
+      paymentKind: "BALANCE",
+    },
+    select: { id: true },
+  });
+  if (balancePayment) {
+    throw new Error("DEPOSIT_ALREADY_FINALIZED");
+  }
+
+  await tx.packPayment.update({
+    where: { id: depositPayment.id },
+    data: {
+      amountDinars: input.depositAmountDinars,
+      ...(input.paymentMethod ? { paymentMethod: input.paymentMethod } : {}),
+    },
+  });
+}

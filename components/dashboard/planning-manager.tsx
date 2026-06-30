@@ -3,11 +3,9 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useState } from "react";
 import { useToast } from "@/components/ui/toast-provider";
 import { Button, ConfirmDialog, Input, SelectMenu } from "@/components/ui";
-import { PlanningSessionCard } from "@/components/dashboard/planning-session-card";
-import { PlanningDaysScrollRow } from "@/components/dashboard/planning-days-scroll-row";
+import { PlanningPeriodNavigator } from "@/components/planning/planning-period-navigator";
+import { PlanningWeekGrid } from "@/components/planning/planning-week-grid";
 import { PlanningHistoricalPresenceDialog } from "@/components/planning/planning-historical-presence-dialog";
-import { PlanningDayPill } from "@/components/planning/planning-day-pill";
-import { PlanningPeriodActiveBadge } from "@/components/planning/planning-period-active-badge";
 import { PlanningPeriodSettingsPanel } from "@/components/planning/planning-period-settings-panel";
 import {
   computePlanningCourseEnd,
@@ -19,10 +17,16 @@ import {
   PLANNING_GLOBAL_SLOT_MINUTES,
   PLANNING_SLOT_OVERLAP_ERROR,
 } from "@/lib/planning-session-slot";
-import { badgeClasses } from "@/lib/badge-classes";
 import { planningLevelBadgeClass } from "@/lib/planning-level-badge";
 import { buildPeriodDaySelectOptions, weekdayDateLineForPeriod, weekdaysPresentInPeriod } from "@/lib/planning-period-day-dates";
+import {
+  resolveCalendarCurrentPeriod,
+  resolveNextPlanningPeriod,
+  todayYmdLocal,
+} from "@/lib/admin/planning-admin-calendar-period";
 import { PLANNING_LEVEL_FORM_OPTIONS, planningLevelLabelFr } from "@/lib/planning-public-labels";
+import { planningGridCacheKey, planningGridFetchUrl } from "@/lib/planning-grid-cache-key";
+import { PlanningGridLoadingState } from "@/components/ui/spinner";
 import { usePlanningStore } from "@/store";
 import { usePlanningPeriodStore } from "@/store/planning-period-store";
 import type { AdminCoach } from "@/types/admin/coach";
@@ -31,6 +35,7 @@ import type {
   PlanningAdminScope,
   PlanningArchivedPeriodItem,
   PlanningDayOfWeek,
+  PlanningGridNavSlot,
   PlanningLevel,
   PlanningPeriodConfig,
   PlanningSessionFormSource,
@@ -43,10 +48,6 @@ export type PlanningManagerHandle = {
   refresh: () => void;
 };
 
-type PlanningResponse = {
-  items: AdminPlanningItem[];
-};
-
 type PlanningManagerProps = {
   viewMode: PlanningViewMode;
   onChangeViewMode: (mode: PlanningViewMode) => void;
@@ -54,6 +55,8 @@ type PlanningManagerProps = {
   onPeriodSettingsTabChange?: (tab: PlanningAdminScope) => void;
   sessionFormSource?: PlanningSessionFormSource;
   onSessionFormSourceChange?: (source: PlanningSessionFormSource) => void;
+  sessionFormReturnView?: "list" | "period-form";
+  onSessionFormReturnViewChange?: (view: "list" | "period-form") => void;
 };
 
 const courseOptions = [
@@ -109,7 +112,7 @@ function planningItemApiUrl(
   archivePeriodStartYmd: string,
 ): string {
   const base = itemId
-    ? `/api/admin/planning/items/${encodeURIComponent(itemId)}`
+    ? `/api/admin/planning-items/${encodeURIComponent(itemId)}`
     : "/api/admin/planning";
   if (sessionFormSource === "archive" && archivePeriodStartYmd) {
     const params = new URLSearchParams({
@@ -144,6 +147,8 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     onPeriodSettingsTabChange = () => {},
     sessionFormSource = "list",
     onSessionFormSourceChange = () => {},
+    sessionFormReturnView = "list",
+    onSessionFormReturnViewChange = () => {},
   },
   ref
 ) {
@@ -153,7 +158,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   const fetchPeriodConfig = usePlanningPeriodStore((s) => s.fetchConfig);
   const periodConfig = usePlanningPeriodStore((s) => s.config);
   const draftPeriod = usePlanningPeriodStore((s) => s.draft);
-  const { items, filters, isLoading, error, setItems, setLoading, setError, setSearch, setDayOfWeek, resetFilters } =
+  const { items, filters, setSearch, setDayOfWeek, resetFilters, fetchGridForSlot, hasGridCache, gridCache, gridLoadingKey, gridError, gridErrorKey } =
     usePlanningStore();
 
   const [coaches, setCoaches] = useState<AdminCoach[]>([]);
@@ -178,15 +183,12 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   const [selectedArchiveStartYmd, setSelectedArchiveStartYmd] = useState("");
   const [archivesLoading, setArchivesLoading] = useState(false);
   const [seedingArchives, setSeedingArchives] = useState(false);
-  const [archiveItems, setArchiveItems] = useState<AdminPlanningItem[]>([]);
-  const [archiveLoading, setArchiveLoading] = useState(false);
-  const [archiveError, setArchiveError] = useState<string | null>(null);
-  const [draftItems, setDraftItems] = useState<AdminPlanningItem[]>([]);
-  const [draftLoading, setDraftLoading] = useState(false);
-  const [draftError, setDraftError] = useState<string | null>(null);
   const [draftSelectedDay, setDraftSelectedDay] = useState<PlanningDayOfWeek>(() => todayPlanningDay());
   const [historicalSlot, setHistoricalSlot] = useState<AdminPlanningItem | null>(null);
   const [historicalSessionYmd, setHistoricalSessionYmd] = useState<string | null>(null);
+
+  const [gridNavIndex, setGridNavIndex] = useState<number | null>(null);
+  const [gridNavPinned, setGridNavPinned] = useState(false);
 
   const selectedArchivePeriod = useMemo(
     () => archivedPeriods.find((p) => p.periodStartYmd === selectedArchiveStartYmd) ?? null,
@@ -202,6 +204,121 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
       periodLabel: draftPeriod.periodLabel,
     };
   }, [draftPeriod]);
+
+  const gridNavSlots = useMemo((): PlanningGridNavSlot[] => {
+    const todayYmd = todayYmdLocal();
+    const ascending = [...archivedPeriods].sort((a, b) =>
+      a.periodStartYmd.localeCompare(b.periodStartYmd),
+    );
+
+    const calendarCurrent = resolveCalendarCurrentPeriod(todayYmd, periodConfig, ascending);
+    const nextPeriod = resolveNextPlanningPeriod(calendarCurrent);
+
+    const slots: PlanningGridNavSlot[] = [];
+
+    const currentStartYmd = calendarCurrent?.period.periodStartYmd ?? todayYmd;
+
+    for (const arch of ascending) {
+      if (calendarCurrent?.source === "archive" && arch.periodStartYmd === calendarCurrent.archiveStartYmd) {
+        continue;
+      }
+      if (arch.periodEndYmd < currentStartYmd) {
+        slots.push({
+          kind: "archive",
+          periodStartYmd: arch.periodStartYmd,
+          period: {
+            bookingWindow: arch.bookingWindow,
+            periodStartYmd: arch.periodStartYmd,
+            periodEndYmd: arch.periodEndYmd,
+            periodLabel: arch.periodLabel,
+          },
+        });
+      }
+    }
+
+    if (calendarCurrent) {
+      slots.push({
+        kind: "published",
+        period: calendarCurrent.period,
+        sessionScope: calendarCurrent.source === "archive" ? "archive" : "published",
+        archiveStartYmd: calendarCurrent.archiveStartYmd,
+      });
+    }
+
+    if (nextPeriod) {
+      slots.push({
+        kind: "draft",
+        period: nextPeriod,
+        sessionScope: "draft",
+      });
+    }
+
+    return slots;
+  }, [archivedPeriods, periodConfig, draftPeriodConfig]);
+
+  const defaultGridNavIndex = useMemo(() => {
+    const publishedIdx = gridNavSlots.findIndex((slot) => slot.kind === "published");
+    return publishedIdx >= 0 ? publishedIdx : 0;
+  }, [gridNavSlots]);
+
+  const effectiveGridNavIndex = gridNavPinned && gridNavIndex !== null ? gridNavIndex : defaultGridNavIndex;
+
+  const currentGridSlot = gridNavSlots[effectiveGridNavIndex] ?? null;
+
+  const currentGridCacheKey = useMemo(
+    () => (currentGridSlot ? planningGridCacheKey(currentGridSlot) : null),
+    [currentGridSlot],
+  );
+
+  const gridItems = currentGridCacheKey ? gridCache[currentGridCacheKey] ?? [] : [];
+
+  const showGridSpinner = Boolean(
+    currentGridCacheKey && !hasGridCache(currentGridCacheKey) && gridLoadingKey === currentGridCacheKey,
+  );
+
+  const currentGridError =
+    currentGridCacheKey && gridErrorKey === currentGridCacheKey ? gridError : null;
+
+  const draftGridCacheKey = useMemo(() => {
+    if (!draftPeriodConfig) return null;
+    return planningGridCacheKey({
+      kind: "draft",
+      period: draftPeriodConfig,
+      sessionScope: "draft",
+    });
+  }, [draftPeriodConfig]);
+
+  const archiveGridCacheKey = selectedArchiveStartYmd ? `archive:${selectedArchiveStartYmd}` : null;
+
+  const draftItems = draftGridCacheKey ? gridCache[draftGridCacheKey] ?? [] : [];
+  const archiveItems = archiveGridCacheKey ? gridCache[archiveGridCacheKey] ?? [] : [];
+
+  const draftLoading = Boolean(
+    draftGridCacheKey && !hasGridCache(draftGridCacheKey) && gridLoadingKey === draftGridCacheKey,
+  );
+  const archiveLoading = Boolean(
+    archiveGridCacheKey && !hasGridCache(archiveGridCacheKey) && gridLoadingKey === archiveGridCacheKey,
+  );
+
+  const draftError = draftGridCacheKey && gridErrorKey === draftGridCacheKey ? gridError : null;
+  const archiveError = archiveGridCacheKey && gridErrorKey === archiveGridCacheKey ? gridError : null;
+
+  const loadGridSlot = useCallback(
+    async (slot: PlanningGridNavSlot, options?: { force?: boolean }) => {
+      const key = planningGridCacheKey(slot);
+      const url = planningGridFetchUrl(slot);
+      const hadCache = hasGridCache(key);
+      try {
+        await fetchGridForSlot(key, url, options);
+        if (!hadCache && !options?.force && slot.kind === "draft") {
+          await fetchPeriodConfig({ source: "admin", force: true });
+        }
+      } catch {
+        // Erreur déjà enregistrée dans le store.
+      }
+    },
+    [fetchGridForSlot, hasGridCache, fetchPeriodConfig],
+  );
 
   const sessionPeriodConfig = useMemo((): PlanningPeriodConfig | null => {
     if (sessionFormSource === "archive") return selectedArchivePeriod;
@@ -243,7 +360,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   const loadArchives = useCallback(async () => {
     setArchivesLoading(true);
     try {
-      const res = await fetch("/api/admin/planning/archive", { cache: "no-store" });
+      const res = await fetch("/api/admin/planning-archives", { cache: "no-store" });
       const data = (await res.json()) as { items?: PlanningArchivedPeriodItem[]; error?: string };
       if (!res.ok) throw new Error(data.error ?? "Impossible de charger l'historique.");
       const list = data.items ?? [];
@@ -266,7 +383,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   const seedArchives = useCallback(async () => {
     setSeedingArchives(true);
     try {
-      const res = await fetch("/api/admin/planning/archive", {
+      const res = await fetch("/api/admin/planning-archives", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "seed" }),
@@ -296,42 +413,38 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     }
   }, [toast]);
 
-  const loadArchivePlanning = useCallback(async (periodStartYmd: string) => {
-    if (!periodStartYmd) {
-      setArchiveItems([]);
-      return;
-    }
-    setArchiveLoading(true);
-    setArchiveError(null);
-    try {
-      const res = await fetch(
-        `/api/admin/planning?scope=archive&periodStartYmd=${encodeURIComponent(periodStartYmd)}`,
-        { cache: "no-store" },
-      );
-      const data = (await res.json()) as PlanningResponse & { error?: string };
-      if (!res.ok) throw new Error(data.error ?? "Impossible de charger le planning archivé.");
-      setArchiveItems(data.items);
-    } catch (e) {
-      setArchiveError(e instanceof Error ? e.message : "Une erreur est survenue.");
-    } finally {
-      setArchiveLoading(false);
-    }
-  }, []);
+  const loadArchivePlanning = useCallback(
+    async (periodStartYmd: string, options?: { force?: boolean }) => {
+      if (!periodStartYmd) return;
+      const period = archivedPeriods.find((p) => p.periodStartYmd === periodStartYmd);
+      if (!period) {
+        const key = `archive:${periodStartYmd}`;
+        const url = `/api/admin/planning?scope=archive&periodStartYmd=${encodeURIComponent(periodStartYmd)}`;
+        await fetchGridForSlot(key, url, options);
+        return;
+      }
+      const slot: PlanningGridNavSlot = {
+        kind: "archive",
+        periodStartYmd,
+        period,
+      };
+      await loadGridSlot(slot, options);
+    },
+    [archivedPeriods, loadGridSlot, fetchGridForSlot],
+  );
 
-  const loadDraftPlanning = useCallback(async () => {
-    setDraftLoading(true);
-    setDraftError(null);
-    try {
-      const res = await fetch("/api/admin/planning?scope=draft", { cache: "no-store" });
-      const data = (await res.json()) as PlanningResponse & { error?: string };
-      if (!res.ok) throw new Error(data.error ?? "Impossible de charger le planning brouillon.");
-      setDraftItems(data.items);
-    } catch (e) {
-      setDraftError(e instanceof Error ? e.message : "Une erreur est survenue.");
-    } finally {
-      setDraftLoading(false);
-    }
-  }, []);
+  const loadDraftPlanning = useCallback(
+    async (options?: { force?: boolean }) => {
+      if (!draftPeriodConfig) return;
+      const slot: PlanningGridNavSlot = {
+        kind: "draft",
+        period: draftPeriodConfig,
+        sessionScope: "draft",
+      };
+      await loadGridSlot(slot, options);
+    },
+    [draftPeriodConfig, loadGridSlot],
+  );
 
   const openHistoricalPresence = (item: AdminPlanningItem) => {
     if (!selectedArchivePeriod) return;
@@ -347,6 +460,33 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     setHistoricalSlot(item);
     setHistoricalSessionYmd(ymd);
   };
+
+  useEffect(() => {
+    if (showList) void loadArchives();
+  }, [showList, loadArchives]);
+
+  const periodAnchorKey = `${periodConfig?.periodStartYmd ?? ""}|${periodConfig?.periodEndYmd ?? ""}|${draftPeriod?.periodStartYmd ?? ""}`;
+
+  useEffect(() => {
+    setGridNavPinned(false);
+    setGridNavIndex(null);
+  }, [periodAnchorKey]);
+
+  useEffect(() => {
+    if (!showList || !currentGridSlot) return;
+    void loadGridSlot(currentGridSlot);
+    if (currentGridSlot.kind === "archive") {
+      setSelectedArchiveStartYmd(currentGridSlot.periodStartYmd);
+      onSessionFormSourceChange("archive");
+    } else if (currentGridSlot.kind === "draft") {
+      onSessionFormSourceChange("draft");
+    } else if (currentGridSlot.sessionScope === "archive" && currentGridSlot.archiveStartYmd) {
+      setSelectedArchiveStartYmd(currentGridSlot.archiveStartYmd);
+      onSessionFormSourceChange("archive");
+    } else {
+      onSessionFormSourceChange("list");
+    }
+  }, [showList, currentGridSlot, loadGridSlot, onSessionFormSourceChange]);
 
   useEffect(() => {
     if (viewMode === "period-form" && periodSettingsTab === "archive") {
@@ -373,6 +513,16 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
       setDraftSelectedDay(days[0]!);
     }
   }, [draftPeriodConfig, draftSelectedDay]);
+
+  const visibleGridItems = useMemo(() => {
+    const q = filters.search.trim().toLowerCase();
+    return gridItems.filter((item) => {
+      if (!q) return true;
+      const coachName = item.coach ? `${item.coach.firstName} ${item.coach.lastName}` : "";
+      const haystack = `${item.courseSlug} ${coachName}`.toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [filters.search, gridItems]);
 
   const visibleItems = useMemo(() => {
     const q = filters.search.trim().toLowerCase();
@@ -415,24 +565,6 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     [selectedDay, visibleItems],
   );
 
-  const loadPlanning = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await fetch("/api/admin/planning?scope=published", { cache: "no-store" });
-      if (!response.ok) {
-        const data = (await response.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(data?.error ?? "Impossible de charger le planning.");
-      }
-      const data = (await response.json()) as PlanningResponse;
-      setItems(data.items);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Une erreur est survenue.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const loadCoaches = async () => {
     const response = await fetch("/api/admin/coaches", { cache: "no-store" });
     if (!response.ok) return;
@@ -455,16 +587,9 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   };
 
   useEffect(() => {
-    void loadPlanning();
     void loadCoaches();
-    void fetchPeriodConfig({ source: "admin", force: true });
+    void fetchPeriodConfig({ source: "admin" });
   }, []);
-
-  useEffect(() => {
-    if (viewMode === "list") {
-      void loadPlanning();
-    }
-  }, [periodConfig?.periodStartYmd, periodConfig?.periodEndYmd, viewMode]);
 
   useEffect(() => {
     if (showSessionForm && !editingId) {
@@ -579,14 +704,14 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
         throw new Error(data?.error ?? "Enregistrement impossible.");
       }
       if (isArchiveContext && selectedArchiveStartYmd) {
-        await loadArchivePlanning(selectedArchiveStartYmd);
+        await loadArchivePlanning(selectedArchiveStartYmd, { force: true });
       } else if (isDraftContext) {
-        await loadDraftPlanning();
-      } else {
-        await loadPlanning();
+        await loadDraftPlanning({ force: true });
+      } else if (currentGridSlot) {
+        await loadGridSlot(currentGridSlot, { force: true });
       }
       resetForm();
-      onChangeViewMode(isPeriodPlanningContext ? "period-form" : "list");
+      onChangeViewMode(sessionFormReturnView);
       toast({
         variant: "success",
         title: isEditMode ? "Séance modifiée" : "Séance ajoutée",
@@ -632,6 +757,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     setCapacity(String(item.capacity));
     setWaitlistCapacity(item.waitlistCapacity !== null ? String(item.waitlistCapacity) : "");
     setFormError(null);
+    onSessionFormReturnViewChange(viewMode === "period-form" ? "period-form" : "list");
     onChangeViewMode("session-form");
   };
 
@@ -653,11 +779,11 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
       }
       setItemToDelete(null);
       if (isArchiveContext && selectedArchiveStartYmd) {
-        await loadArchivePlanning(selectedArchiveStartYmd);
+        await loadArchivePlanning(selectedArchiveStartYmd, { force: true });
       } else if (isDraftContext) {
-        await loadDraftPlanning();
-      } else {
-        await loadPlanning();
+        await loadDraftPlanning({ force: true });
+      } else if (currentGridSlot) {
+        await loadGridSlot(currentGridSlot, { force: true });
       }
       toast({ variant: "success", title: "Séance supprimée" });
     } catch (e) {
@@ -668,15 +794,80 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     }
   };
 
+  const openGridHistoricalPresence = (item: AdminPlanningItem) => {
+    const ymd = item.anchorSessionYmd;
+    if (!ymd) {
+      toast({
+        variant: "error",
+        title: "Date introuvable",
+        description: "Impossible de déterminer la date du cours.",
+      });
+      return;
+    }
+    setHistoricalSlot(item);
+    setHistoricalSessionYmd(ymd);
+  };
+
+  const gridActionBtnClass =
+    "inline-flex h-6 w-6 items-center justify-center rounded-md border transition hover:opacity-90";
+
+  const renderGridSessionActions = (item: AdminPlanningItem) => (
+    <>
+      {currentGridSlot?.kind === "archive" ? (
+        <button
+          type="button"
+          onClick={() => openGridHistoricalPresence(item)}
+          aria-label="Présences"
+          title="Présences"
+          className={`${gridActionBtnClass} border-brand-medium/30 bg-white text-brand-dark`}
+        >
+          <svg viewBox="0 0 24 24" className="h-3 w-3 fill-current" aria-hidden="true">
+            <path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z" />
+          </svg>
+        </button>
+      ) : null}
+      <button
+        type="button"
+        onClick={() =>
+          handleStartEdit(item, {
+            fromArchive:
+              currentGridSlot?.kind === "archive" ||
+              (currentGridSlot?.kind === "published" &&
+                currentGridSlot.sessionScope === "archive"),
+            fromDraft: currentGridSlot?.kind === "draft",
+          })
+        }
+        aria-label="Modifier la séance"
+        title="Modifier"
+        className={`${gridActionBtnClass} border-brand-medium/30 bg-white/80 text-brand-dark`}
+      >
+        <svg viewBox="0 0 24 24" className="h-3 w-3 fill-current" aria-hidden="true">
+          <path d="M4 17.25V20h2.75l8.12-8.12-2.75-2.75L4 17.25zm12.71-9.04a1 1 0 000-1.41l-1.5-1.5a1 1 0 00-1.41 0l-1.17 1.17 2.75 2.75 1.33-1.01z" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        onClick={() => setItemToDelete(item)}
+        aria-label="Supprimer la séance"
+        title="Supprimer"
+        className={`${gridActionBtnClass} border-red-200 bg-red-50 text-red-700`}
+      >
+        <svg viewBox="0 0 24 24" className="h-3 w-3 fill-current" aria-hidden="true">
+          <path d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z" />
+        </svg>
+      </button>
+    </>
+  );
+
   useImperativeHandle(ref, () => ({
     refresh() {
       if (viewMode === "period-form" && periodSettingsTab === "archive" && selectedArchiveStartYmd) {
         void loadArchives();
-        void loadArchivePlanning(selectedArchiveStartYmd);
+        void loadArchivePlanning(selectedArchiveStartYmd, { force: true });
       } else if (viewMode === "period-form" && periodSettingsTab === "draft") {
-        void loadDraftPlanning();
-      } else {
-        void loadPlanning();
+        void loadDraftPlanning({ force: true });
+      } else if (currentGridSlot) {
+        void loadGridSlot(currentGridSlot, { force: true });
       }
       void loadCoaches();
       void fetchPeriodConfig({ source: "admin", force: true });
@@ -684,7 +875,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   }));
 
   const backFromSessionForm = () => {
-    onChangeViewMode(sessionFormSource === "list" ? "list" : "period-form");
+    onChangeViewMode(sessionFormReturnView);
   };
 
   return (
@@ -732,131 +923,71 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
           }}
         />
       ) : showList ? (
-        isLoading ? (
-          <div className="rounded-2xl border border-brand-medium/20 bg-white p-6 text-sm text-brand-dark/70">Chargement...</div>
-        ) : error ? (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-sm text-red-700">{error}</div>
-        ) : (
-          <div className="rounded-2xl border border-brand-medium/20 bg-white">
-            <div className="border-b border-brand-medium/20 px-5 py-4">
-              <PlanningPeriodActiveBadge source="admin" align="start" className="mb-4" />
-              <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-                <div>
-                  <p className="text-base font-semibold text-brand-dark">Planning</p>
-                  <p className="mt-1 text-xs text-brand-dark/60">
-                    {visibleItemsByDay.length} résultat(s) — {dayLabels[selectedDay]}
-                    {periodConfig ? ` · ${periodConfig.periodLabel}` : ""}
-                  </p>
-                </div>
-                <div className="grid min-w-0 w-full gap-2 md:max-w-3xl md:grid-cols-[minmax(320px,1fr)_42px] md:items-end">
-                  <Input
-                    id="planning-search"
-                    value={filters.search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Cours, coach..."
-                    className="mt-0 py-2.5"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      resetFilters();
-                      setSelectedDay(todayPlanningDay());
-                    }}
-                    aria-label="Réinitialiser les filtres"
-                    title="Réinitialiser"
-                    className="flex h-[42px] w-[42px] items-center justify-center rounded-xl border border-brand-medium/30 bg-white text-lg font-semibold text-brand-dark/70 transition hover:bg-zinc-50 hover:text-brand-dark"
-                  >
-                    ×
-                  </button>
-                </div>
-              </div>
-              <PlanningDaysScrollRow
-                className="-mx-5 mt-4"
-                scrollClassName="lg:justify-center"
-                scrollKey={`${periodConfig?.periodStartYmd ?? "none"}-${visibleItems.length}`}
-              >
-                <div className="flex w-max flex-nowrap items-center gap-2 px-5 pb-2 pr-1">
-                  {daysForTabs.map((day) => (
-                    <PlanningDayPill
-                      key={day}
-                      dayLabel={dayLabels[day]}
-                      dateLabel={
-                        periodConfig
-                          ? weekdayDateLineForPeriod(
-                              periodConfig.periodStartYmd,
-                              periodConfig.periodEndYmd,
-                              day,
-                            )
-                          : null
-                      }
-                      active={selectedDay === day}
-                      count={sessionCountByDay[day]}
-                      onClick={() => {
-                        setSelectedDay(day);
-                        setDayOfWeek(day);
-                      }}
+        showGridSpinner ? (
+          <PlanningGridLoadingState />
+        ) : currentGridError ? (
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-sm text-red-700">{currentGridError}</div>
+        ) : currentGridSlot ? (
+          <div className="flex max-h-[calc(100dvh-10rem)] min-h-0 flex-col overflow-hidden rounded-2xl border border-brand-medium/20 bg-white">
+            <div className="shrink-0 border-b border-brand-medium/20 px-4 py-3 sm:px-5 sm:py-4">
+              <PlanningPeriodNavigator
+                slot={currentGridSlot}
+                canGoPrevious={effectiveGridNavIndex > 0}
+                canGoNext={effectiveGridNavIndex < gridNavSlots.length - 1}
+                onPrevious={() => {
+                  setGridNavPinned(true);
+                  setGridNavIndex(Math.max(0, effectiveGridNavIndex - 1));
+                }}
+                onNext={() => {
+                  setGridNavPinned(true);
+                  setGridNavIndex(Math.min(gridNavSlots.length - 1, effectiveGridNavIndex + 1));
+                }}
+                center={
+                  <div className="grid w-full min-w-0 max-w-md grid-cols-[1fr_36px] items-center gap-1.5 sm:grid-cols-[1fr_42px] sm:gap-2">
+                    <Input
+                      id="planning-search"
+                      value={filters.search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      placeholder="Cours, coach..."
+                      className="mt-0 py-2 text-sm sm:py-2.5"
                     />
-                  ))}
-                </div>
-              </PlanningDaysScrollRow>
+                    <button
+                      type="button"
+                      onClick={() => resetFilters()}
+                      aria-label="Réinitialiser les filtres"
+                      title="Réinitialiser"
+                      className="flex h-9 w-9 items-center justify-center rounded-xl border border-brand-medium/30 bg-white text-lg font-semibold text-brand-dark/70 transition hover:bg-zinc-50 hover:text-brand-dark sm:h-[42px] sm:w-[42px]"
+                    >
+                      ×
+                    </button>
+                  </div>
+                }
+              />
             </div>
 
-            {visibleItemsByDay.length === 0 ? (
-              <div className="px-5 py-10 text-center text-sm text-brand-dark/60">
+            {visibleGridItems.length === 0 ? (
+              <div className="shrink-0 px-5 py-10 text-center text-sm text-brand-dark/60">
                 Aucune séance pour cette période.
                 <span className="mt-2 block">
-                  Utilisez « Ajouter une séance » pour créer les créneaux du {periodConfig?.periodLabel ?? "calendrier"}.
+                  Utilisez « Ajouter une séance » pour créer les créneaux.
                 </span>
               </div>
             ) : (
-              <div className="grid grid-cols-1 gap-3 p-4 md:grid-cols-2 sm:p-5 lg:grid-cols-3">
-                {visibleItemsByDay.map((item) => (
-                  <PlanningSessionCard
-                    key={item.id}
-                    variant="admin"
-                    courseLabel={courseLabelBySlug[item.courseSlug] ?? item.courseSlug}
-                    startTime={item.startTime}
-                    levelLabel={planningLevelLabelFr(item.level)}
-                    levelToneClass={planningLevelBadgeClass(item.level)}
-                    coachName={item.coach ? `${item.coach.firstName} ${item.coach.lastName}` : null}
-                    coachImageUrl={item.coach?.imageUrl ?? null}
-                    topRightActions={
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => handleStartEdit(item)}
-                          aria-label="Modifier la séance"
-                          title="Modifier"
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-brand-medium/30 bg-brand-light/40 text-brand-dark focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-medium/30 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current" aria-hidden="true">
-                            <path d="M4 17.25V20h2.75l8.12-8.12-2.75-2.75L4 17.25zm12.71-9.04a1 1 0 000-1.41l-1.5-1.5a1 1 0 00-1.41 0l-1.17 1.17 2.75 2.75 1.33-1.01z" />
-                          </svg>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setItemToDelete(item)}
-                          aria-label="Supprimer la séance"
-                          title="Supprimer"
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current" aria-hidden="true">
-                            <path d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z" />
-                          </svg>
-                        </button>
-                      </>
-                    }
-                    statsBadges={
-                      <>
-                        <span className={badgeClasses.availability}>Durée : {item.durationMinutes} min</span>
-                        <span className={badgeClasses.availability}>Places: {item.capacity}</span>
-                        <span className={badgeClasses.waitlist}>Attente: {item.waitlistCapacity ?? "—"}</span>
-                      </>
-                    }
-                  />
-                ))}
+              <div className="flex min-h-0 flex-1 flex-col">
+                <PlanningWeekGrid
+                period={currentGridSlot.period}
+                items={visibleGridItems}
+                courseLabelBySlug={courseLabelBySlug}
+                renderSessionActions={renderGridSessionActions}
+                levelLabelFor={(level) => planningLevelLabelFr(level)}
+                levelToneFor={(level) => planningLevelBadgeClass(level)}
+                />
               </div>
             )}
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-brand-medium/20 bg-white p-6 text-sm text-brand-dark/70">
+            Chargement de la période...
           </div>
         )
       ) : (

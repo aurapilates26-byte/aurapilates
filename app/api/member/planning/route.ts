@@ -15,7 +15,7 @@ import {
   readStaggeredPublicationContext,
 } from "@/lib/admin/planning-staggered-publish";
 import { planningSlotOccurrenceDates } from "@/lib/planning-slot-occurrences";
-import { getEligibilityForPack } from "@/lib/pack-eligibility";
+import { getMemberBookableCourseSlugs } from "@/lib/admin/member-pack-selection";
 import { prisma } from "@/lib/prisma";
 import { requireMemberSession } from "@/lib/require-member";
 import { getStudioBookingRules } from "@/lib/studio-booking-rules-server";
@@ -53,20 +53,11 @@ export async function GET(request: Request) {
     return Response.json({ occurrences: [] as const });
   }
 
-  const memberPack = await prisma.member.findUnique({
-    where: { id: member.id },
-    select: {
-      pack: {
-        select: {
-          category: true,
-          courseQuotas: { select: { courseSlug: true } },
-        },
-      },
-    },
-  });
-  const eligibility = memberPack?.pack
-    ? getEligibilityForPack({ category: memberPack.pack.category ?? null, courseQuotas: memberPack.pack.courseQuotas })
-    : { mode: "unknown" as const, allowedCourseSlugs: [] as string[] };
+  const bookableCourseSlugs = await getMemberBookableCourseSlugs(member.id);
+  const eligibility = {
+    mode: bookableCourseSlugs.length > 1 ? ("mixed" as const) : bookableCourseSlugs.length === 1 ? ("single" as const) : ("unknown" as const),
+    allowedCourseSlugs: bookableCourseSlugs,
+  };
 
   const globalBookingWindow = periodConfig.bookingWindow;
   const sessionBounds = prismaDateInclusiveUtcRange(fromDay, maxToDay);
@@ -184,6 +175,7 @@ export async function GET(request: Request) {
     },
     bookingWindow: globalBookingWindow,
     eligibility,
+    bookableCourseSlugs,
     periodStatus: periodConfig.status,
     periodMeta: {
       status: periodConfig.status,

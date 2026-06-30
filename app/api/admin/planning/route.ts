@@ -14,6 +14,10 @@ import {
 import { parseYmdToPrismaDate } from "@/lib/calendar-day";
 import { mapAdminPlanningItem } from "@/lib/admin/planning-map";
 import { adminPlanningPayloadSchema, planningLevelFromPayload } from "@/lib/admin/planning-payload-schema";
+import {
+  ensureDraftPeriodWithMirrors,
+  syncPublishedCreateToDraft,
+} from "@/lib/admin/planning-draft-sync";
 
 const db = new PrismaClient();
 
@@ -91,6 +95,7 @@ export async function GET(request: Request) {
     periodStart = parseYmdToPrismaDate(period.periodStartYmd);
     periodEnd = parseYmdToPrismaDate(period.periodEndYmd);
   } else if (scope === "draft") {
+    await ensureDraftPeriodWithMirrors();
     const window = await getAdminPlanningPeriodWindow();
     const draft = draftPeriodConfigOrNull(window.draft);
     if (!draft) {
@@ -197,6 +202,10 @@ export async function POST(request: Request) {
       coach: { select: { id: true, firstName: true, lastName: true, imageUrl: true } },
     },
   });
+
+  if (scope === "published") {
+    await syncPublishedCreateToDraft(created);
+  }
 
   return Response.json({ item: mapAdminPlanningItem(created) }, { status: 201 });
 }

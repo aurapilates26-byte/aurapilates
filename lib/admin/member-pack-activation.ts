@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { packExpiresAtLocal, packStartDateLocal } from "@/lib/member-pack-period";
+import { syncActiveEnrollmentDates } from "@/lib/admin/member-pack-enrollment";
 import { resetMemberPackBalancesForPack } from "@/lib/admin/member-pack-renewal";
 
 export type ActivateMemberPackOnSessionResult = {
@@ -14,6 +15,8 @@ export async function activateMemberPackOnSessionDate(
   tx: Prisma.TransactionClient,
   input: {
     memberId: string;
+    packId: string;
+    durationDays: string | null;
     currentPackStartedAt: Date | null;
     sessionDateDb: Date;
     sessionDateLocal: Date;
@@ -49,7 +52,81 @@ export async function activateMemberPackOnSessionDate(
       input.sessionDateLocal.getDate(),
     );
 
+  if (packStartAdjusted) {
+    await syncActiveEnrollmentDates(tx, {
+      memberId: input.memberId,
+      packId: input.packId,
+      packStartedAt,
+      durationDays: input.durationDays,
+    });
+  }
+
   return { packStartedAt, packStartDate, packStartAdjusted };
+}
+
+/** Active le pack choisi à la réservation (pack principal membre ou pack parallèle). */
+export async function activateSelectedPackOnSessionDate(
+  tx: Prisma.TransactionClient,
+  input: {
+    memberId: string;
+    packId: string;
+    memberPackId: string | null;
+    memberPackStartedAt: Date | null;
+    durationDays: string | null;
+    sessionDateDb: Date;
+    sessionDateLocal: Date;
+  },
+): Promise<void> {
+  const isMemberPrimaryPack = input.memberPackId === input.packId;
+  let currentStartedAt = isMemberPrimaryPack ? input.memberPackStartedAt : null;
+
+  if (!isMemberPrimaryPack) {
+    const enrollment = await tx.memberPackEnrollment.findFirst({
+      where: {
+        memberId: input.memberId,
+        packId: input.packId,
+        status: { in: ["PENDING_START", "ACTIVE"] },
+      },
+      orderBy: [{ purchasedAt: "desc" }, { createdAt: "desc" }],
+      select: { packStartedAt: true },
+    });
+    currentStartedAt = enrollment?.packStartedAt ?? null;
+  }
+
+  let packStartedAt = currentStartedAt;
+  let packStartAdjusted = false;
+
+  if (!packStartedAt) {
+    if (isMemberPrimaryPack) {
+      await tx.member.update({
+        where: { id: input.memberId },
+        data: { packStartedAt: input.sessionDateDb, isActive: true },
+      });
+    }
+    packStartedAt = input.sessionDateDb;
+    packStartAdjusted = true;
+  } else {
+    const packStartLocal = packStartDateLocal(packStartedAt);
+    if (packStartLocal && input.sessionDateLocal.getTime() < packStartLocal.getTime()) {
+      if (isMemberPrimaryPack) {
+        await tx.member.update({
+          where: { id: input.memberId },
+          data: { packStartedAt: input.sessionDateDb, isActive: true },
+        });
+      }
+      packStartedAt = input.sessionDateDb;
+      packStartAdjusted = true;
+    }
+  }
+
+  if (packStartAdjusted) {
+    await syncActiveEnrollmentDates(tx, {
+      memberId: input.memberId,
+      packId: input.packId,
+      packStartedAt,
+      durationDays: input.durationDays,
+    });
+  }
 }
 
 type PackForBalanceSync = {

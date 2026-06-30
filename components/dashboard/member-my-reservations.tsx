@@ -237,6 +237,11 @@ export function MemberMyReservations({ limit = 3 }: { limit?: number }) {
                   {tab === "upcoming" ? upcomingStatusLabel(r.status) : historyStatusLabels[r.status] ?? r.status}
                 </span>
               </p>
+              {r.debitedPackName ? (
+                <p className="mt-1 text-[11px] text-brand-dark/70 sm:text-xs lg:text-sm">
+                  <span className="font-semibold">Pack utilisé :</span> {r.debitedPackName}
+                </p>
+              ) : null}
               {tab === "history" && r.status === "CANCELLED" ? (
                 <p className="mt-1 text-[11px] text-brand-dark/70 sm:text-xs lg:text-sm">
                   <span className="font-semibold">Info pack:</span> {cancellationRefundLabel(r)}

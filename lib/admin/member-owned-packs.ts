@@ -1,20 +1,25 @@
 import "server-only";
 
-import type { Prisma } from "@prisma/client";
+import type { MemberPackEnrollmentStatus, Prisma } from "@prisma/client";
 import { startOfLocalToday } from "@/lib/calendar-day";
-import { addPackDurationToStartDate } from "@/lib/pack-duration";
+import {
+  countEnrollmentConsumedSessions,
+  ensureMemberPackEnrollmentsBackfilled,
+  getEnrollmentPaymentTotals,
+} from "@/lib/admin/member-pack-enrollment";
 import {
   getRemainingSessionsForPack,
   resetMemberPackBalancesForPack,
   type MemberPackState,
 } from "@/lib/admin/member-pack-renewal";
-import { sumPackPaymentsForMemberPack } from "@/lib/admin/pack-payment";
 import type { PackPaymentMethodValue } from "@/lib/pack-payment-method";
+import { courseLabel } from "@/lib/course-labels";
 import { prisma } from "@/lib/prisma";
 
-export type MemberOwnedPackStatus = "active" | "expired";
+export type MemberOwnedPackStatus = "active" | "expired" | "pending" | "replaced";
 
 export type MemberOwnedPackDto = {
+  enrollmentId: string;
   packId: string;
   packName: string;
   category: string | null;
@@ -25,6 +30,7 @@ export type MemberOwnedPackDto = {
   purchasedAt: string;
   isPrimary: boolean;
   status: MemberOwnedPackStatus;
+  enrollmentStatus: MemberPackEnrollmentStatus;
   packStartedAt: string | null;
   packExpiresAt: string | null;
   packPaymentMethod: PackPaymentMethodValue | null;
@@ -33,6 +39,7 @@ export type MemberOwnedPackDto = {
   consumedSessions: number;
   remainingSessions: number;
   totalPaidDinars: number;
+  courseQuotaRemaining: { courseLabel: string; remaining: number; total: number }[];
 };
 
 async function migratePendingPacksToParallel(
@@ -90,21 +97,44 @@ function packUsageFromState(
   return { totalSessions, remainingSessions, consumedSessions };
 }
 
-function computeOwnedPackStatus(input: {
-  remainingSessions: number;
-  packExpiresAt: Date | null;
-}): MemberOwnedPackStatus {
-  if (input.remainingSessions <= 0) return "expired";
-  if (input.packExpiresAt) {
+function mapEnrollmentStatusToDisplay(
+  enrollmentStatus: MemberPackEnrollmentStatus,
+  remainingSessions: number,
+  packExpiresAt: Date | null,
+): MemberOwnedPackStatus {
+  if (enrollmentStatus === "REPLACED") return "replaced";
+  if (enrollmentStatus === "EXPIRED") return "expired";
+  if (enrollmentStatus === "PENDING_START") return "pending";
+
+  if (remainingSessions <= 0) return "expired";
+  if (packExpiresAt) {
     const today = startOfLocalToday();
     const expiresDay = new Date(
-      input.packExpiresAt.getFullYear(),
-      input.packExpiresAt.getMonth(),
-      input.packExpiresAt.getDate(),
+      packExpiresAt.getFullYear(),
+      packExpiresAt.getMonth(),
+      packExpiresAt.getDate(),
     );
     if (expiresDay.getTime() < today.getTime()) return "expired";
   }
   return "active";
+}
+
+function courseQuotaRemainingLines(
+  pack: { courseQuotas: { courseSlug: string; sessionCount: number }[] },
+  balances: { courseSlug: string | null; remaining: number }[],
+): { courseLabel: string; remaining: number; total: number }[] {
+  return pack.courseQuotas.map((q) => {
+    const balance = balances.find((b) => b.courseSlug === q.courseSlug);
+    let remaining: number;
+    if (balance) remaining = Math.max(0, balance.remaining);
+    else if (balances.length > 0) remaining = 0;
+    else remaining = q.sessionCount;
+    return {
+      courseLabel: courseLabel(q.courseSlug),
+      remaining,
+      total: q.sessionCount,
+    };
+  });
 }
 
 export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwnedPackDto[]> {
@@ -112,67 +142,93 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
     await migratePendingPacksToParallel(tx, memberId);
   });
 
+  await ensureMemberPackEnrollmentsBackfilled(memberId);
+
   const member = await prisma.member.findUnique({
     where: { id: memberId },
     select: {
       packId: true,
-      packStartedAt: true,
       packBalances: { select: { packId: true, courseSlug: true, remaining: true } },
-      packPayments: {
-        orderBy: [{ paidAt: "desc" }, { createdAt: "desc" }],
-        select: { packId: true, paidAt: true, createdAt: true, amountDinars: true },
-      },
     },
   });
   if (!member) return [];
 
-  const packIds = new Set<string>();
-  if (member.packId) packIds.add(member.packId);
-  for (const balance of member.packBalances) packIds.add(balance.packId);
-  for (const payment of member.packPayments) packIds.add(payment.packId);
-  if (packIds.size === 0) return [];
-
-  const packs = await prisma.pack.findMany({
-    where: { id: { in: [...packIds] } },
-    select: {
-      id: true,
-      name: true,
-      category: true,
-      durationDays: true,
-      priceCents: true,
-      sessionCount: true,
-      courseQuotas: { select: { courseSlug: true, sessionCount: true } },
+  const enrollments = await prisma.memberPackEnrollment.findMany({
+    where: { memberId },
+    orderBy: [{ purchasedAt: "desc" }, { createdAt: "desc" }],
+    include: {
+      pack: {
+        select: {
+          id: true,
+          name: true,
+          category: true,
+          durationDays: true,
+          priceCents: true,
+          sessionCount: true,
+          courseQuotas: { select: { courseSlug: true, sessionCount: true } },
+        },
+      },
     },
   });
 
-  const purchasedAtByPack = new Map<string, Date>();
-  for (const payment of member.packPayments) {
-    const current = purchasedAtByPack.get(payment.packId);
-    const candidate = payment.paidAt ?? payment.createdAt;
-    if (!current || candidate.getTime() > current.getTime()) {
-      purchasedAtByPack.set(payment.packId, candidate);
+  if (enrollments.length === 0) return [];
+
+  const latestOpenEnrollmentIdByPack = new Map<string, string>();
+  for (const enrollment of enrollments) {
+    if (
+      (enrollment.status === "ACTIVE" || enrollment.status === "PENDING_START") &&
+      !latestOpenEnrollmentIdByPack.has(enrollment.packId)
+    ) {
+      latestOpenEnrollmentIdByPack.set(enrollment.packId, enrollment.id);
     }
   }
 
   const items: MemberOwnedPackDto[] = [];
 
-  for (const pack of packs) {
+  for (const enrollment of enrollments) {
+    const pack = enrollment.pack;
+    const isPrimary =
+      member.packId === pack.id && latestOpenEnrollmentIdByPack.get(pack.id) === enrollment.id;
+
+    const paymentTotals = await getEnrollmentPaymentTotals(memberId, enrollment.packPaymentId);
+
+    let totalSessions: number | null;
+    let consumedSessions: number;
+    let remainingSessions: number;
+
+    if (isPrimary && enrollment.status === "ACTIVE") {
+      const balancesForPack = member.packBalances.filter((b) => b.packId === pack.id);
+      const usage = packUsageFromState(pack, balancesForPack);
+      totalSessions = usage.totalSessions;
+      consumedSessions = usage.consumedSessions;
+      remainingSessions = usage.remainingSessions;
+    } else {
+      totalSessions =
+        pack.courseQuotas.length > 0
+          ? pack.courseQuotas.reduce((sum, q) => sum + q.sessionCount, 0)
+          : pack.sessionCount;
+      consumedSessions = await countEnrollmentConsumedSessions({
+        memberId,
+        packId: pack.id,
+        courseQuotas: pack.courseQuotas,
+        sessionCount: pack.sessionCount,
+        packStartedAt: enrollment.packStartedAt,
+        packExpiresAt: enrollment.packExpiresAt,
+      });
+      remainingSessions =
+        totalSessions != null ? Math.max(0, totalSessions - consumedSessions) : 0;
+    }
+
+    const status = mapEnrollmentStatusToDisplay(
+      enrollment.status,
+      remainingSessions,
+      enrollment.packExpiresAt,
+    );
+
     const balancesForPack = member.packBalances.filter((b) => b.packId === pack.id);
-    const usage = packUsageFromState(pack, balancesForPack);
-    const paymentTotals = await sumPackPaymentsForMemberPack(memberId, pack.id);
-    const isPrimary = member.packId === pack.id;
-    const packStartedAt =
-      isPrimary && member.packStartedAt ? member.packStartedAt.toISOString() : null;
-    const packExpiresAt =
-      isPrimary && member.packStartedAt && pack.durationDays
-        ? addPackDurationToStartDate(member.packStartedAt, pack.durationDays) ?? null
-        : null;
-    const status = computeOwnedPackStatus({
-      remainingSessions: usage.remainingSessions,
-      packExpiresAt,
-    });
 
     items.push({
+      enrollmentId: enrollment.id,
       packId: pack.id,
       packName: pack.name,
       category: pack.category,
@@ -180,19 +236,22 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
       priceCents: pack.priceCents,
       sessionCount: pack.sessionCount,
       courseQuotas: pack.courseQuotas,
-      purchasedAt: (purchasedAtByPack.get(pack.id) ?? new Date(0)).toISOString(),
+      purchasedAt: enrollment.purchasedAt.toISOString(),
       isPrimary,
       status,
-      packStartedAt,
-      packExpiresAt: packExpiresAt?.toISOString() ?? null,
+      enrollmentStatus: enrollment.status,
+      packStartedAt: enrollment.packStartedAt?.toISOString() ?? null,
+      packExpiresAt: enrollment.packExpiresAt?.toISOString() ?? null,
       packPaymentMethod: paymentTotals.packPaymentMethod,
       depositPaymentMethod: paymentTotals.depositPaymentMethod,
-      totalSessions: usage.totalSessions,
-      consumedSessions: usage.consumedSessions,
-      remainingSessions: usage.remainingSessions,
-      totalPaidDinars: paymentTotals.totalPaid,
+      totalSessions,
+      consumedSessions,
+      remainingSessions,
+      totalPaidDinars: paymentTotals.totalPaidDinars,
+      courseQuotaRemaining:
+        pack.courseQuotas.length > 0 ? courseQuotaRemainingLines(pack, balancesForPack) : [],
     });
   }
 
-  return items.sort((a, b) => b.purchasedAt.localeCompare(a.purchasedAt));
+  return items;
 }

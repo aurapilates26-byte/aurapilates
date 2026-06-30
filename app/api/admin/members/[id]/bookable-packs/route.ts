@@ -3,6 +3,7 @@ import { z } from "zod";
 import { authOptions } from "@/auth";
 import { isStaffRole } from "@/lib/admin/access";
 import { listBookablePacksForMember } from "@/lib/admin/member-pack-selection";
+import { parseYmdLocal } from "@/lib/calendar-day";
 import { prisma } from "@/lib/prisma";
 
 function errorResponse(message: string, status: number) {
@@ -11,6 +12,7 @@ function errorResponse(message: string, status: number) {
 
 const querySchema = z.object({
   courseSlug: z.string().trim().min(1),
+  sessionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
 type Params = { params: Promise<{ id: string }> };
@@ -22,7 +24,10 @@ export async function GET(request: Request, { params }: Params) {
 
   const { id: memberId } = await params;
   const url = new URL(request.url);
-  const parsed = querySchema.safeParse({ courseSlug: url.searchParams.get("courseSlug") ?? "" });
+  const parsed = querySchema.safeParse({
+    courseSlug: url.searchParams.get("courseSlug") ?? "",
+    sessionDate: url.searchParams.get("sessionDate") ?? undefined,
+  });
   if (!parsed.success) return errorResponse("Paramètres invalides", 400);
 
   const member = await prisma.member.findUnique({
@@ -31,19 +36,8 @@ export async function GET(request: Request, { params }: Params) {
   });
   if (!member) return errorResponse("Adhérente introuvable", 404);
 
-  const candidates = await listBookablePacksForMember(memberId, parsed.data.courseSlug);
-  const packNames = await prisma.pack.findMany({
-    where: { id: { in: candidates.map((c) => c.packId) } },
-    select: { id: true, name: true },
-  });
-  const nameById = new Map(packNames.map((p) => [p.id, p.name]));
+  const sessionDateLocal = parsed.data.sessionDate ? parseYmdLocal(parsed.data.sessionDate) : null;
+  const items = await listBookablePacksForMember(memberId, parsed.data.courseSlug, sessionDateLocal);
 
-  return Response.json({
-    items: candidates.map((c) => ({
-      packId: c.packId,
-      packName: nameById.get(c.packId) ?? "Pack",
-      remainingSessions: c.remainingSessions,
-      isPrimary: c.isPrimary,
-    })),
-  });
+  return Response.json({ items });
 }

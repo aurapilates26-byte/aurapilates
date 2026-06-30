@@ -9,6 +9,8 @@ type ReservationWithPlanning = {
   createdAt: Date;
   packRefundedAt: Date | null;
   source: "ADMIN" | "MEMBER" | null;
+  debitedPackId: string | null;
+  debitedPack: { id: string; name: string } | null;
   planning: {
     id: string;
     courseSlug: string;
@@ -27,6 +29,8 @@ export type AdminMemberReservationItem = {
   reservedAt: string;
   packRefundedAt: string | null;
   source: "ADMIN" | "MEMBER" | null;
+  debitedPackId: string | null;
+  debitedPackName: string | null;
   createdByName: string | null;
   createdByRole: string | null;
   planning: {
@@ -40,6 +44,16 @@ export type AdminMemberReservationItem = {
   };
 };
 
+export const adminMemberReservationInclude = {
+  planning: {
+    include: {
+      coach: { select: { firstName: true, lastName: true, imageUrl: true } },
+    },
+  },
+  createdByUser: { select: { name: true, email: true, role: true } },
+  debitedPack: { select: { id: true, name: true } },
+} as const;
+
 export function serializeAdminMemberReservation(r: ReservationWithPlanning): AdminMemberReservationItem {
   return {
     id: r.id,
@@ -48,6 +62,8 @@ export function serializeAdminMemberReservation(r: ReservationWithPlanning): Adm
     reservedAt: r.createdAt.toISOString(),
     packRefundedAt: r.packRefundedAt ? r.packRefundedAt.toISOString() : null,
     source: r.source,
+    debitedPackId: r.debitedPackId,
+    debitedPackName: r.debitedPack?.name ?? null,
     createdByName: formatUserDisplayName(r.createdByUser),
     createdByRole: r.createdByUser?.role ?? null,
     planning: {

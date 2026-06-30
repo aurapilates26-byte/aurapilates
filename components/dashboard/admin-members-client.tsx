@@ -40,6 +40,10 @@ export function AdminMembersClient() {
         viewMode={viewMode}
         onChangeViewMode={setViewMode}
         onDepositCountChange={setDepositCount}
+        onShowDeposits={() => {
+          setListMode("deposits");
+          setViewMode("list");
+        }}
       />
     </>
   );

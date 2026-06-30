@@ -10,7 +10,7 @@ import type { PlanningPeriodEnriched } from "@/types/admin/planning";
 type PlanningPeriodActiveBadgeProps = {
   /** Données SSR pour affichage immédiat (site public). */
   initialConfig?: PlanningPeriodEnriched | null;
-  /** admin = /api/admin/planning/window ; public = /api/public/planning-period */
+  /** admin = /api/admin/planning-window ; public = /api/public/planning-period */
   source?: "admin" | "public";
   align?: "start" | "center";
   className?: string;

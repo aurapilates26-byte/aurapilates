@@ -9,6 +9,10 @@ import {
 } from "@/lib/admin/planning-slot-duplicate";
 import { mapAdminPlanningItem } from "@/lib/admin/planning-map";
 import { adminPlanningPayloadSchema, planningLevelFromPayload } from "@/lib/admin/planning-payload-schema";
+import {
+  syncPublishedDeleteToDraft,
+  syncPublishedUpdateToDraft,
+} from "@/lib/admin/planning-draft-sync";
 
 const db = new PrismaClient();
 
@@ -34,7 +38,6 @@ export async function PUT(request: Request, { params }: Params) {
   const { id } = await params;
   const existing = await db.planning.findUnique({
     where: { id },
-    select: { isDraft: true },
   });
   if (!existing) return errorResponse("Planning item not found", 404);
 
@@ -107,6 +110,10 @@ export async function PUT(request: Request, { params }: Params) {
       },
     });
 
+    if (!existing.isDraft && scope === "published") {
+      await syncPublishedUpdateToDraft(updated);
+    }
+
     return Response.json({ item: mapAdminPlanningItem(updated) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected error";
@@ -121,8 +128,14 @@ export async function DELETE(_request: Request, { params }: Params) {
 
   const { id } = await params;
 
+  const existing = await db.planning.findUnique({ where: { id } });
+  if (!existing) return errorResponse("Créneau introuvable", 404);
+
   try {
     await db.planning.delete({ where: { id } });
+    if (!existing.isDraft) {
+      await syncPublishedDeleteToDraft(id);
+    }
     return Response.json({ ok: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected error";

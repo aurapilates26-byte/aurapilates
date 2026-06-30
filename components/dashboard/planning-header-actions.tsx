@@ -1,7 +1,5 @@
 "use client";
 
-import { useEffect } from "react";
-import { usePlanningPeriodStore } from "@/store/planning-period-store";
 import type { PlanningViewMode } from "@/types/admin/planning";
 
 type PlanningHeaderActionsProps = {
@@ -26,12 +24,6 @@ export function PlanningHeaderActions({
   onOpenSessionForm,
   onBackFromSessionForm,
 }: PlanningHeaderActionsProps) {
-  const fetchConfig = usePlanningPeriodStore((s) => s.fetchConfig);
-
-  useEffect(() => {
-    void fetchConfig({ source: "admin" });
-  }, [fetchConfig]);
-
   const isList = viewMode === "list";
   const isPeriod = viewMode === "period-form";
   const isSession = viewMode === "session-form";

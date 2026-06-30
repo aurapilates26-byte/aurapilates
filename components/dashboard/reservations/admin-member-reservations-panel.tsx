@@ -47,6 +47,7 @@ function toListItem(
       tab === "history" && r.status === "CANCELLED"
         ? cancellationRefundLabel(r.packRefundedAt)
         : null,
+    debitedPackName: r.debitedPackName,
   };
 }
 

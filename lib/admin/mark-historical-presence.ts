@@ -11,18 +11,17 @@ import {
   startOfLocalToday,
 } from "@/lib/calendar-day";
 import { PACK_ERRORS } from "@/lib/create-member-reservation";
-import { tryActivatePendingPackIfCurrentFinished } from "@/lib/admin/member-pack-renewal";
 import {
-  activateMemberPackOnSessionDate,
-  syncMemberPackBalancesFromReservations,
-} from "@/lib/admin/member-pack-activation";
+  resetMemberPackBalancesForPack,
+  tryActivatePendingPackIfCurrentFinished,
+} from "@/lib/admin/member-pack-renewal";
+import { activateSelectedPackOnSessionDate } from "@/lib/admin/member-pack-activation";
+import {
+  debitSelectedPackSession,
+  resolvePackForMemberBooking,
+  type PackCandidate,
+} from "@/lib/admin/member-pack-selection";
 import { isSessionYmdWithinPlanningPeriod } from "@/lib/planning-period-status";
-import { getEligibilityForPack, isCourseAllowedForPack } from "@/lib/pack-eligibility";
-import {
-  isSessionDateWithinPackPeriod,
-  packExpiresAtLocal,
-  packStartDateLocal,
-} from "@/lib/member-pack-period";
 import { prisma } from "@/lib/prisma";
 import { HISTORICAL_PRESENCE_MARKED_BY } from "@/lib/admin/unmark-historical-presence";
 import type { PlanningPeriodConfig } from "@/types/admin/planning";
@@ -40,7 +39,6 @@ export type MarkHistoricalPresenceResult = {
   memberId: string;
   sessionDateYmd: string;
   alreadyMarked: boolean;
-  /** Pack démarré ou reculé à la date de la séance. */
   packStartAdjusted: boolean;
   packStartedAtYmd: string;
 };
@@ -65,99 +63,13 @@ export function historicalPresenceErrorMessage(code: string): string {
   if (code === PACK_ERRORS.packExpired) return "Pack expiré à cette date";
   if (code === PACK_ERRORS.packNotStarted) return "Pack non démarré à cette date";
   if (code === PACK_ERRORS.notAllowedCourse || code === PACK_ERRORS.packCategoryMismatch) {
-    return "Ce pack ne permet pas ce cours";
+    return "Aucune séance disponible sur vos packs pour ce cours";
   }
-  if (code === PACK_ERRORS.noSessionsLeft) return "Plus de séances disponibles sur le pack";
+  if (code === PACK_ERRORS.noSessionsLeft) return "Plus de séances disponibles pour ce cours";
+  if (code === PACK_ERRORS.packChoiceRequired) {
+    return "Plusieurs packs couvrent ce cours : précisez le pack à débiter.";
+  }
   return "Enregistrement impossible";
-}
-
-async function ensurePackBalances(
-  tx: Prisma.TransactionClient,
-  memberId: string,
-  pack: {
-    id: string;
-    sessionCount: number | null;
-    courseQuotas: { courseSlug: string; sessionCount: number }[];
-  },
-  packStartedAt: Date,
-  packDurationDays: string | null,
-) {
-  const existingBalances = await tx.memberPackBalance.findMany({
-    where: { memberId, packId: pack.id },
-    select: { id: true },
-  });
-  if (existingBalances.length > 0) return;
-
-  const packStartDate = packStartDateLocal(packStartedAt);
-  const expiresAt = packExpiresAtLocal(packStartedAt, packDurationDays);
-  const isMixed = pack.courseQuotas.length > 0;
-
-  if (isMixed) {
-    const usedRows = packStartDate
-      ? await tx.reservation.findMany({
-          where: {
-            memberId,
-            OR: [{ status: { in: ["BOOKED", "ATTENDED"] } }, { status: "CANCELLED", packRefundedAt: null }],
-            sessionDate: { gte: packStartDate, ...(expiresAt ? { lte: expiresAt } : {}) },
-            planning: { courseSlug: { in: pack.courseQuotas.map((q) => q.courseSlug) } },
-          },
-          select: { planning: { select: { courseSlug: true } } },
-        })
-      : [];
-    const usedBySlug = new Map<string, number>();
-    for (const r of usedRows) {
-      usedBySlug.set(r.planning.courseSlug, (usedBySlug.get(r.planning.courseSlug) ?? 0) + 1);
-    }
-    await tx.memberPackBalance.createMany({
-      data: pack.courseQuotas.map((q) => ({
-        memberId,
-        packId: pack.id,
-        courseSlug: q.courseSlug,
-        remaining: Math.max(0, q.sessionCount - (usedBySlug.get(q.courseSlug) ?? 0)),
-      })),
-    });
-  } else if (pack.sessionCount != null) {
-    const used = packStartDate
-      ? await tx.reservation.count({
-          where: {
-            memberId,
-            OR: [{ status: { in: ["BOOKED", "ATTENDED"] } }, { status: "CANCELLED", packRefundedAt: null }],
-            sessionDate: { gte: packStartDate, ...(expiresAt ? { lte: expiresAt } : {}) },
-          },
-        })
-      : 0;
-    await tx.memberPackBalance.create({
-      data: {
-        memberId,
-        packId: pack.id,
-        courseSlug: null,
-        remaining: Math.max(0, pack.sessionCount - used),
-      },
-    });
-  }
-}
-
-async function decrementPackBalance(
-  tx: Prisma.TransactionClient,
-  memberId: string,
-  packId: string,
-  targetCourseSlug: string | null,
-  courseSlug: string,
-  isMixed: boolean,
-) {
-  const updatedBalance = await tx.memberPackBalance.updateMany({
-    where: {
-      memberId,
-      packId,
-      courseSlug: targetCourseSlug,
-      remaining: { gt: 0 },
-    },
-    data: { remaining: { decrement: 1 } },
-  });
-  if (updatedBalance.count === 0) {
-    if (isMixed) throw new Error(PACK_ERRORS.notAllowedCourse);
-    throw new Error(PACK_ERRORS.noSessionsLeft);
-  }
 }
 
 export async function listHistoricalPresenceRoster(
@@ -193,12 +105,55 @@ export async function listHistoricalPresenceRoster(
     }));
 }
 
+async function preparePackForPresenceDebit(
+  tx: Prisma.TransactionClient,
+  input: {
+    memberId: string;
+    memberPackId: string | null;
+    memberPackStartedAt: Date | null;
+    courseSlug: string;
+    sessionDateDb: Date;
+    sessionDateLocal: Date;
+    preferredPackId: string | null;
+  },
+): Promise<PackCandidate> {
+  const selected = await resolvePackForMemberBooking(tx, {
+    memberId: input.memberId,
+    courseSlug: input.courseSlug,
+    sessionDateLocal: input.sessionDateLocal,
+    preferredPackId: input.preferredPackId,
+  });
+
+  if (!selected.pack.isActive) throw new Error(PACK_ERRORS.packInactive);
+
+  await activateSelectedPackOnSessionDate(tx, {
+    memberId: input.memberId,
+    packId: selected.pack.id,
+    memberPackId: input.memberPackId,
+    memberPackStartedAt: input.memberPackStartedAt,
+    durationDays: selected.pack.durationDays,
+    sessionDateDb: input.sessionDateDb,
+    sessionDateLocal: input.sessionDateLocal,
+  });
+
+  const existingBalances = await tx.memberPackBalance.findMany({
+    where: { memberId: input.memberId, packId: selected.pack.id },
+    select: { id: true },
+  });
+  if (existingBalances.length === 0) {
+    await resetMemberPackBalancesForPack(tx, { memberId: input.memberId, packId: selected.pack.id });
+  }
+
+  return selected;
+}
+
 export async function markHistoricalPresence(input: {
   memberId: string;
   planningId: string;
   sessionDateYmd: string;
   periodConfig: PlanningPeriodConfig;
   createdByUserId?: string | null;
+  preferredPackId?: string | null;
 }): Promise<MarkHistoricalPresenceResult> {
   const sessionDateLocal = parseYmdLocal(input.sessionDateYmd);
   const sessionDateDb = parseYmdToPrismaDate(input.sessionDateYmd);
@@ -242,59 +197,9 @@ export async function markHistoricalPresence(input: {
 
       const member = await tx.member.findUnique({
         where: { id: input.memberId },
-        select: {
-          id: true,
-          packStartedAt: true,
-          pack: {
-            select: {
-              id: true,
-              category: true,
-              durationDays: true,
-              sessionCount: true,
-              isActive: true,
-              courseQuotas: { select: { courseSlug: true, sessionCount: true } },
-            },
-          },
-        },
+        select: { id: true, packId: true, packStartedAt: true },
       });
       if (!member) throw new Error("MEMBER_NOT_FOUND");
-      if (!member.pack) throw new Error(PACK_ERRORS.noPack);
-      if (!member.pack.isActive) throw new Error(PACK_ERRORS.packInactive);
-
-      const pack = member.pack;
-      const activation = await activateMemberPackOnSessionDate(tx, {
-        memberId: input.memberId,
-        currentPackStartedAt: member.packStartedAt,
-        sessionDateDb,
-        sessionDateLocal,
-      });
-      const packStartedAt = activation.packStartedAt;
-
-      if (!isSessionDateWithinPackPeriod(sessionDateLocal, packStartedAt, pack.durationDays)) {
-        const expiresAt = packExpiresAtLocal(packStartedAt, pack.durationDays);
-        if (expiresAt && sessionDateLocal.getTime() > expiresAt.getTime()) {
-          throw new Error(PACK_ERRORS.packExpired);
-        }
-        throw new Error(PACK_ERRORS.packNotStarted);
-      }
-
-      const isMixed = pack.courseQuotas.length > 0;
-      const eligibility = getEligibilityForPack({
-        category: pack.category ?? null,
-        courseQuotas: pack.courseQuotas,
-      });
-      if (!isCourseAllowedForPack(eligibility, planning.courseSlug)) {
-        throw new Error(
-          eligibility.mode === "single" ? PACK_ERRORS.packCategoryMismatch : PACK_ERRORS.notAllowedCourse,
-        );
-      }
-
-      const targetCourseSlug = isMixed ? planning.courseSlug : null;
-      if (activation.packStartAdjusted) {
-        await syncMemberPackBalancesFromReservations(tx, input.memberId, pack, packStartedAt);
-      } else {
-        await ensurePackBalances(tx, input.memberId, pack, packStartedAt, pack.durationDays);
-      }
 
       const existing = await tx.reservation.findUnique({
         where: {
@@ -304,15 +209,24 @@ export async function markHistoricalPresence(input: {
             sessionDate: sessionDateDb,
           },
         },
-        select: { id: true, status: true, packRefundedAt: true, attendance: { select: { reservationId: true } } },
+        select: {
+          id: true,
+          status: true,
+          packRefundedAt: true,
+          debitedPackId: true,
+          attendance: { select: { reservationId: true } },
+        },
       });
+
+      const preferredPackId =
+        input.preferredPackId ?? existing?.debitedPackId ?? null;
 
       if (existing?.status === "ATTENDED") {
         if (existing.attendance) {
           return {
             reservationId: existing.id,
             alreadyMarked: true,
-            packStartAdjusted: activation.packStartAdjusted,
+            packStartAdjusted: false,
           };
         }
         await tx.attendance.create({
@@ -327,14 +241,19 @@ export async function markHistoricalPresence(input: {
         return {
           reservationId: existing.id,
           alreadyMarked: false,
-          packStartAdjusted: activation.packStartAdjusted,
+          packStartAdjusted: false,
         };
       }
 
       if (existing?.status === "BOOKED") {
         await tx.reservation.update({
           where: { id: existing.id },
-          data: { status: "ATTENDED", source: "ADMIN", createdByUserId: input.createdByUserId ?? null },
+          data: {
+            status: "ATTENDED",
+            source: "ADMIN",
+            createdByUserId: input.createdByUserId ?? null,
+            debitedPackId: existing.debitedPackId ?? preferredPackId,
+          },
         });
         await tx.attendance.create({
           data: {
@@ -345,11 +264,10 @@ export async function markHistoricalPresence(input: {
             markedBy: HISTORICAL_PRESENCE_MARKED_BY.BOOKED,
           },
         });
-        return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: activation.packStartAdjusted };
+        return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: false };
       }
 
-      if (existing?.status === "WAITLIST") {
-        await decrementPackBalance(tx, input.memberId, pack.id, targetCourseSlug, planning.courseSlug, isMixed);
+      if (existing?.status === "CANCELLED" && !existing.packRefundedAt) {
         await tx.reservation.update({
           where: { id: existing.id },
           data: { status: "ATTENDED", source: "ADMIN", createdByUserId: input.createdByUserId ?? null },
@@ -360,30 +278,55 @@ export async function markHistoricalPresence(input: {
             memberId: input.memberId,
             planningId: input.planningId,
             sessionDate: sessionDateDb,
+            markedBy: HISTORICAL_PRESENCE_MARKED_BY.CANCELLED,
+          },
+        });
+        return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: false };
+      }
+
+      const selected = await preparePackForPresenceDebit(tx, {
+        memberId: input.memberId,
+        memberPackId: member.packId,
+        memberPackStartedAt: member.packStartedAt,
+        courseSlug: planning.courseSlug,
+        sessionDateDb,
+        sessionDateLocal,
+        preferredPackId,
+      });
+
+      if (existing?.status === "WAITLIST") {
+        await debitSelectedPackSession(tx, {
+          memberId: input.memberId,
+          pack: selected.pack,
+          courseSlug: planning.courseSlug,
+        });
+        await tx.reservation.update({
+          where: { id: existing.id },
+          data: {
+            status: "ATTENDED",
+            source: "ADMIN",
+            createdByUserId: input.createdByUserId ?? null,
+            debitedPackId: selected.pack.id,
+          },
+        });
+        await tx.attendance.create({
+          data: {
+            reservationId: existing.id,
+            memberId: input.memberId,
+            planningId: input.planningId,
+            sessionDate: sessionDateDb,
             markedBy: HISTORICAL_PRESENCE_MARKED_BY.WAITLIST,
           },
         });
-        return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: activation.packStartAdjusted };
+        return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: true };
       }
 
-      if (existing?.status === "CANCELLED") {
-        if (!existing.packRefundedAt) {
-          await tx.reservation.update({
-            where: { id: existing.id },
-            data: { status: "ATTENDED", source: "ADMIN", createdByUserId: input.createdByUserId ?? null },
-          });
-          await tx.attendance.create({
-            data: {
-              reservationId: existing.id,
-              memberId: input.memberId,
-              planningId: input.planningId,
-              sessionDate: sessionDateDb,
-              markedBy: HISTORICAL_PRESENCE_MARKED_BY.CANCELLED,
-            },
-          });
-          return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: activation.packStartAdjusted };
-        }
-        await decrementPackBalance(tx, input.memberId, pack.id, targetCourseSlug, planning.courseSlug, isMixed);
+      if (existing?.status === "CANCELLED" && existing.packRefundedAt) {
+        await debitSelectedPackSession(tx, {
+          memberId: input.memberId,
+          pack: selected.pack,
+          courseSlug: planning.courseSlug,
+        });
         await tx.reservation.update({
           where: { id: existing.id },
           data: {
@@ -391,6 +334,7 @@ export async function markHistoricalPresence(input: {
             source: "ADMIN",
             createdByUserId: input.createdByUserId ?? null,
             packRefundedAt: null,
+            debitedPackId: selected.pack.id,
           },
         });
         await tx.attendance.create({
@@ -402,10 +346,14 @@ export async function markHistoricalPresence(input: {
             markedBy: HISTORICAL_PRESENCE_MARKED_BY.CANCELLED_REFUNDED,
           },
         });
-        return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: activation.packStartAdjusted };
+        return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: true };
       }
 
-      await decrementPackBalance(tx, input.memberId, pack.id, targetCourseSlug, planning.courseSlug, isMixed);
+      await debitSelectedPackSession(tx, {
+        memberId: input.memberId,
+        pack: selected.pack,
+        courseSlug: planning.courseSlug,
+      });
       const created = await tx.reservation.create({
         data: {
           memberId: input.memberId,
@@ -415,6 +363,7 @@ export async function markHistoricalPresence(input: {
           source: "ADMIN",
           createdByUserId: input.createdByUserId ?? null,
           packRefundedAt: null,
+          debitedPackId: selected.pack.id,
         },
       });
       await tx.attendance.create({
@@ -426,7 +375,7 @@ export async function markHistoricalPresence(input: {
           markedBy: HISTORICAL_PRESENCE_MARKED_BY.NEW,
         },
       });
-      return { reservationId: created.id, alreadyMarked: false, packStartAdjusted: activation.packStartAdjusted };
+      return { reservationId: created.id, alreadyMarked: false, packStartAdjusted: true };
     },
     {
       isolationLevel: Prisma.TransactionIsolationLevel.Serializable,

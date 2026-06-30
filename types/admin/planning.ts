@@ -84,6 +84,27 @@ export type AdminPlanningPeriodWindow = {
 
 export type PlanningAdminScope = "published" | "draft" | "archive";
 
+/** Navigation grille planning (historique ← en cours → brouillon). */
+export type PlanningGridNavSlot =
+  | {
+      kind: "archive";
+      periodStartYmd: string;
+      period: PlanningPeriodConfig;
+    }
+  | {
+      kind: "published";
+      period: PlanningPeriodConfig;
+      /** Scope API réel (ex. archive si bascule anticipée mais dernier jour de période). */
+      sessionScope?: "published" | "archive";
+      archiveStartYmd?: string;
+    }
+  | {
+      kind: "draft";
+      period: PlanningPeriodConfig;
+      /** Scope API réel (ex. published si prochaine période déjà basculée en base). */
+      sessionScope?: "published" | "draft";
+    };
+
 /** Période archivée (historique admin). */
 export type PlanningArchivedPeriodItem = PlanningPeriodConfig & {
   id: string;

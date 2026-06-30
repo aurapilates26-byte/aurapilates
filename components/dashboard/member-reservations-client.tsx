@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DashboardHeader } from "@/components/dashboard/header";
 import { Button, Modal } from "@/components/ui";
+import { SelectMenu } from "@/components/ui/select-menu";
 import { useToast } from "@/components/ui/toast-provider";
 import { PlanningLevelPill } from "@/components/dashboard/planning-session-card";
 import { badgeClasses } from "@/lib/badge-classes";
@@ -72,16 +73,29 @@ function weekdayFromYmd(ymd: string): number | null {
 
 type BookingOccurrenceLite = {
   courseLabel: string;
+  courseSlug: string;
   coachName: string | null;
   sessionDate: string;
   startTime: string;
   endTime: string;
 };
 
-type PendingMainBooking = {
+type BookablePackOption = {
+  packId: string;
+  packName: string;
+  remainingSessions: number;
+  remainingForCourse: number;
+  courseCoverageLabel: string;
+};
+
+type PendingBooking = {
   planningId: string;
   sessionDate: string;
+  mode: "main" | "wait";
   occurrence: BookingOccurrenceLite;
+  packOptions: BookablePackOption[];
+  selectedPackId: string;
+  packsLoading: boolean;
 };
 
 const TOAST_BOOKING_MS = 10_000;
@@ -99,6 +113,7 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
   const occurrences = useMemberBookingStore((s) => s.occurrences);
   const myReservations = useMemberBookingStore((s) => s.myReservations);
   const eligibility = useMemberBookingStore((s) => s.eligibility);
+  const bookableCourseSlugs = useMemberBookingStore((s) => s.bookableCourseSlugs);
   const planningRange = useMemberBookingStore((s) => s.planningRange);
   const planningWindow = useMemberBookingStore((s) => s.planningWindow);
   const bookingRules = useMemberBookingStore((s) => s.bookingRules);
@@ -118,7 +133,7 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
   const [loading, setLoading] = useState(true);
   const [actionKey, setActionKey] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState<number>(() => new Date().getDay());
-  const [pendingMainReservation, setPendingMainReservation] = useState<PendingMainBooking | null>(null);
+  const [pendingBooking, setPendingBooking] = useState<PendingBooking | null>(null);
   const [confirmationChecked, setConfirmationChecked] = useState(false);
 
   const daysWithMyReservations = useMemo(() => {
@@ -180,6 +195,7 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
     sessionDate: string,
     mode: "main" | "wait",
     occurrence: BookingOccurrenceLite,
+    packId: string,
   ) => {
     const key = `${planningId}-${sessionDate}-${mode}`;
     setActionKey(key);
@@ -187,7 +203,7 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
       const res = await fetch("/api/member/reservations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ planningId, sessionDate }),
+        body: JSON.stringify({ planningId, sessionDate, packId }),
       });
       const data = (await res.json().catch(() => null)) as { error?: string; item?: { status: string } };
       if (!res.ok) {
@@ -215,30 +231,79 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
     }
   };
 
-  const openMainReservationConfirmation = (o: BookingOccurrenceLite & { planningId: string }) => {
-    setPendingMainReservation({
+  const loadBookablePacks = useCallback(
+    async (courseSlug: string, sessionDate: string): Promise<BookablePackOption[]> => {
+      const params = new URLSearchParams({ courseSlug, sessionDate });
+      const response = await fetch(`/api/member/bookable-packs?${params.toString()}`, {
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(data?.error ?? "Impossible de charger les packs.");
+      }
+      const data = (await response.json()) as { items: BookablePackOption[] };
+      return data.items ?? [];
+    },
+    [],
+  );
+
+  const openReservationConfirmation = async (
+    o: BookingOccurrenceLite & { planningId: string },
+    mode: "main" | "wait",
+  ) => {
+    setPendingBooking({
       planningId: o.planningId,
       sessionDate: o.sessionDate,
+      mode,
       occurrence: {
         courseLabel: o.courseLabel,
+        courseSlug: o.courseSlug,
         coachName: o.coachName,
         sessionDate: o.sessionDate,
         startTime: o.startTime,
         endTime: o.endTime,
       },
+      packOptions: [],
+      selectedPackId: "",
+      packsLoading: true,
     });
     setConfirmationChecked(false);
+
+    try {
+      const options = await loadBookablePacks(o.courseSlug, o.sessionDate);
+      if (options.length === 0) {
+        throw new Error("Aucun pack avec des séances disponibles pour ce cours.");
+      }
+      setPendingBooking((prev) =>
+        prev
+          ? {
+              ...prev,
+              packOptions: options,
+              selectedPackId: options[0]!.packId,
+              packsLoading: false,
+            }
+          : prev,
+      );
+    } catch (e) {
+      setPendingBooking(null);
+      toast({
+        variant: "error",
+        title: "Réservation",
+        description: e instanceof Error ? e.message : "Erreur.",
+      });
+    }
   };
 
-  const confirmMainReservation = async () => {
-    if (!pendingMainReservation || !confirmationChecked) return;
+  const confirmReservation = async () => {
+    if (!pendingBooking || !confirmationChecked || !pendingBooking.selectedPackId) return;
     await reserve(
-      pendingMainReservation.planningId,
-      pendingMainReservation.sessionDate,
-      "main",
-      pendingMainReservation.occurrence,
+      pendingBooking.planningId,
+      pendingBooking.sessionDate,
+      pendingBooking.mode,
+      pendingBooking.occurrence,
+      pendingBooking.selectedPackId,
     );
-    setPendingMainReservation(null);
+    setPendingBooking(null);
     setConfirmationChecked(false);
   };
 
@@ -350,9 +415,8 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
                     reservationDeskOpen && !isPast && !o.myReservation && o.spotsRemaining > 0;
                   const categoryBlocked =
                     !isPast &&
-                    eligibility?.mode === "single" &&
-                    eligibility.allowedCourseSlugs.length > 0 &&
-                    !eligibility.allowedCourseSlugs.includes(o.courseSlug);
+                    bookableCourseSlugs.length > 0 &&
+                    !bookableCourseSlugs.includes(o.courseSlug);
                   const canWait =
                     reservationDeskOpen &&
                     !isPast &&
@@ -442,16 +506,21 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
                                   ? toast({
                                       variant: "warning",
                                       title: "Pack incompatible",
-                                      description: "Votre pack ne permet pas de réserver ce type de cours.",
+                                      description:
+                                        "Aucune séance disponible sur vos packs pour ce type de cours.",
                                     })
-                                  : openMainReservationConfirmation({
-                                      planningId: o.planningId,
-                                      courseLabel: o.courseLabel,
-                                      coachName: o.coachName,
-                                      sessionDate: o.sessionDate,
-                                      startTime: o.startTime,
-                                      endTime: o.endTime,
-                                    })
+                                  : void openReservationConfirmation(
+                                      {
+                                        planningId: o.planningId,
+                                        courseLabel: o.courseLabel,
+                                        courseSlug: o.courseSlug,
+                                        coachName: o.coachName,
+                                        sessionDate: o.sessionDate,
+                                        startTime: o.startTime,
+                                        endTime: o.endTime,
+                                      },
+                                      "main",
+                                    )
                               }
                             >
                               Réserver
@@ -466,15 +535,21 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
                                   ? toast({
                                       variant: "warning",
                                       title: "Pack incompatible",
-                                      description: "Votre pack ne permet pas de réserver ce type de cours.",
+                                      description:
+                                        "Aucune séance disponible sur vos packs pour ce type de cours.",
                                     })
-                                  : void reserve(o.planningId, o.sessionDate, "wait", {
-                                      courseLabel: o.courseLabel,
-                                      coachName: o.coachName,
-                                      sessionDate: o.sessionDate,
-                                      startTime: o.startTime,
-                                      endTime: o.endTime,
-                                    })
+                                  : void openReservationConfirmation(
+                                      {
+                                        planningId: o.planningId,
+                                        courseLabel: o.courseLabel,
+                                        courseSlug: o.courseSlug,
+                                        coachName: o.coachName,
+                                        sessionDate: o.sessionDate,
+                                        startTime: o.startTime,
+                                        endTime: o.endTime,
+                                      },
+                                      "wait",
+                                    )
                               }
                             >
                               Liste d&apos;attente
@@ -520,12 +595,18 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
       </section>
 
       <Modal
-        isOpen={Boolean(pendingMainReservation)}
-        title="Confirmer la réservation"
-        description="Veuillez confirmer avant de finaliser votre inscription à cette séance."
+        isOpen={Boolean(pendingBooking)}
+        title={pendingBooking?.mode === "wait" ? "Confirmer la liste d'attente" : "Confirmer la réservation"}
+        description={
+          pendingBooking?.packOptions.length && pendingBooking.packOptions.length > 1
+            ? "Plusieurs packs couvrent ce cours. Choisissez celui à utiliser pour cette séance."
+            : pendingBooking?.mode === "wait"
+              ? "Veuillez confirmer avant de rejoindre la liste d'attente."
+              : "Veuillez confirmer avant de finaliser votre inscription à cette séance."
+        }
         onClose={() => {
           if (actionKey) return;
-          setPendingMainReservation(null);
+          setPendingBooking(null);
           setConfirmationChecked(false);
         }}
         footer={
@@ -533,7 +614,7 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
             <button
               type="button"
               onClick={() => {
-                setPendingMainReservation(null);
+                setPendingBooking(null);
                 setConfirmationChecked(false);
               }}
               disabled={Boolean(actionKey)}
@@ -543,15 +624,49 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
             </button>
             <Button
               type="button"
-              onClick={() => void confirmMainReservation()}
-              disabled={!confirmationChecked || Boolean(actionKey)}
+              onClick={() => void confirmReservation()}
+              disabled={
+                !confirmationChecked ||
+                Boolean(actionKey) ||
+                !pendingBooking?.selectedPackId ||
+                pendingBooking.packsLoading
+              }
             >
-              {actionKey ? "Enregistrement..." : "Confirmer ma réservation"}
+              {actionKey ? "Enregistrement..." : pendingBooking?.mode === "wait" ? "Confirmer" : "Confirmer ma réservation"}
             </Button>
           </>
         }
       >
         <div className="space-y-4">
+          {pendingBooking?.packsLoading ? (
+            <p className="text-sm text-brand-dark/65">Chargement des packs disponibles…</p>
+          ) : null}
+
+          {pendingBooking && !pendingBooking.packsLoading && pendingBooking.packOptions.length > 1 ? (
+            <SelectMenu
+              id="member-book-pack"
+              label="Pack pour cette séance"
+              value={pendingBooking.selectedPackId}
+              onChange={(packId) =>
+                setPendingBooking((prev) => (prev ? { ...prev, selectedPackId: packId } : prev))
+              }
+              options={pendingBooking.packOptions.map((option) => ({
+                value: option.packId,
+                label: `${option.packName} · ${option.remainingForCourse} séance(s) · ${option.courseCoverageLabel}`,
+              }))}
+            />
+          ) : null}
+
+          {pendingBooking && !pendingBooking.packsLoading && pendingBooking.packOptions.length === 1 ? (
+            <div className="rounded-xl border border-brand-medium/15 bg-zinc-50/70 px-4 py-3 text-sm text-brand-dark">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-dark/50">Pack utilisé</p>
+              <p className="mt-1 font-semibold">{pendingBooking.packOptions[0]!.packName}</p>
+              <p className="mt-0.5 text-xs text-brand-dark/65">
+                {pendingBooking.packOptions[0]!.remainingForCourse} séance(s) restante(s) pour ce cours
+              </p>
+            </div>
+          ) : null}
+
           <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
             <div className="flex items-start gap-3">
               <span className="mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-amber-100 text-amber-800">

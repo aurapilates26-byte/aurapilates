@@ -53,7 +53,7 @@ export function PlanningHistoricalPresenceDialog({
     setLoadingRoster(true);
     try {
       const res = await fetch(
-        `/api/admin/planning/historical-presence?planningId=${encodeURIComponent(slot.id)}&sessionDateYmd=${encodeURIComponent(sessionDateYmd)}`,
+        `/api/admin/planning-historical-presence?planningId=${encodeURIComponent(slot.id)}&sessionDateYmd=${encodeURIComponent(sessionDateYmd)}`,
         { cache: "no-store", credentials: "include" },
       );
       const data = (await res.json()) as { items?: RosterItem[]; error?: string };
@@ -146,7 +146,7 @@ export function PlanningHistoricalPresenceDialog({
 
     setMarking(true);
     try {
-      const res = await fetch("/api/admin/planning/historical-presence", {
+      const res = await fetch("/api/admin/planning-historical-presence", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -192,7 +192,7 @@ export function PlanningHistoricalPresenceDialog({
   const removePresence = async (item: RosterItem) => {
     setDeletingId(item.reservationId);
     try {
-      const res = await fetch("/api/admin/planning/historical-presence", {
+      const res = await fetch("/api/admin/planning-historical-presence", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         credentials: "include",

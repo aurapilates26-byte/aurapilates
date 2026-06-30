@@ -26,8 +26,10 @@ import {
   completeMemberDepositEnrollment,
   computeExpectedPackAmountForCreate,
   recordDepositOnMemberCreate,
+  updateMemberDepositPaymentInTransaction,
 } from "@/lib/admin/member-deposit";
 import { addParallelMemberPack } from "@/lib/admin/member-owned-packs";
+import { closeOpenEnrollmentsForPack } from "@/lib/admin/member-pack-enrollment";
 import {
   decidePackRenewal,
   loadMemberPackState,
@@ -412,6 +414,7 @@ export async function createAdminMember(request: Request) {
         enrollmentStatus: isDepositMode ? "DEPOSIT_PENDING" : "ACTIVE",
         expectedPackAmountDinars: isDepositMode ? expectedPackAmountDinars : null,
         isActive: memberData.isActive ?? false,
+        note: memberData.note?.trim() || null,
       },
     });
 
@@ -529,6 +532,8 @@ export async function updateAdminMemberById(id: string, request: Request) {
     where: { id },
     select: {
       packId: true,
+      enrollmentStatus: true,
+      expectedPackAmountDinars: true,
       personalDiscountType: true,
       personalDiscountValue: true,
       personalDiscountReason: true,
@@ -536,6 +541,21 @@ export async function updateAdminMemberById(id: string, request: Request) {
   });
   if (!memberBeforePack) {
     return errorResponse("Member not found", 404);
+  }
+
+  if (data.depositAmountDinars !== undefined) {
+    if (memberBeforePack.enrollmentStatus !== "DEPOSIT_PENDING") {
+      return errorResponse("Le montant d'acompte ne peut être modifié que pour une avance en attente.", 409);
+    }
+    if (data.packId !== undefined && data.packId !== memberBeforePack.packId) {
+      return errorResponse("Impossible de modifier le pack et l'acompte en même temps.", 409);
+    }
+    if (!memberBeforePack.packId || memberBeforePack.expectedPackAmountDinars == null) {
+      return errorResponse("État d'acompte invalide.", 409);
+    }
+    if (data.depositAmountDinars >= memberBeforePack.expectedPackAmountDinars) {
+      return errorResponse("L'acompte doit être inférieur au montant total du pack.", 400);
+    }
   }
 
   const shouldRefreshPackStart =
@@ -594,6 +614,7 @@ export async function updateAdminMemberById(id: string, request: Request) {
               }
           : {}),
         ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
+        ...(data.note !== undefined ? { note: data.note } : {}),
       },
     });
 
@@ -603,6 +624,10 @@ export async function updateAdminMemberById(id: string, request: Request) {
       if (queuePackChange) {
         await addParallelMemberPack(tx, { memberId: member.id, packId: data.packId });
       } else {
+        if (packStateBeforeUpdate?.packId && packStateBeforeUpdate.packId !== data.packId) {
+          await closeOpenEnrollmentsForPack(tx, id, packStateBeforeUpdate.packId, "REPLACED");
+        }
+        await closeOpenEnrollmentsForPack(tx, id, data.packId, "REPLACED");
         await tx.member.update({
           where: { id: member.id },
           data: { packId: data.packId, packStartedAt: null, isActive: false },
@@ -633,6 +658,21 @@ export async function updateAdminMemberById(id: string, request: Request) {
         targetPackIdForPayment,
         data.paymentMethod,
       );
+    }
+
+    if (
+      data.depositAmountDinars !== undefined &&
+      memberBeforePack.enrollmentStatus === "DEPOSIT_PENDING" &&
+      memberBeforePack.packId &&
+      memberBeforePack.expectedPackAmountDinars != null
+    ) {
+      await updateMemberDepositPaymentInTransaction(tx, {
+        memberId: member.id,
+        packId: memberBeforePack.packId,
+        depositAmountDinars: data.depositAmountDinars,
+        expectedPackAmountDinars: memberBeforePack.expectedPackAmountDinars,
+        paymentMethod: data.paymentMethod,
+      });
     }
 
     if (data.email !== undefined || data.firstName !== undefined || data.lastName !== undefined) {
@@ -828,6 +868,10 @@ export async function renewAdminMemberPackById(id: string, request: Request) {
     if (decision.mode === "queued") {
       await addParallelMemberPack(tx, { memberId: id, packId });
     } else {
+      if (packStateBefore.packId && packStateBefore.packId !== packId) {
+        await closeOpenEnrollmentsForPack(tx, id, packStateBefore.packId, "REPLACED");
+      }
+      await closeOpenEnrollmentsForPack(tx, id, packId, "REPLACED");
       await tx.member.update({
         where: { id },
         data: { packId, packStartedAt: null, isActive: false },

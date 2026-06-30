@@ -24,7 +24,7 @@ export function PlanningLateCancellationRuleToggle() {
     async (next: boolean) => {
       setSaving(true);
       try {
-        const res = await fetch("/api/admin/planning/booking-rules", {
+        const res = await fetch("/api/admin/planning-booking-rules", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ lateCancellationRuleEnabled: next }),

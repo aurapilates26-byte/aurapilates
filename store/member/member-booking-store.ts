@@ -16,6 +16,7 @@ type MemberBookingState = {
   planningWindow: MemberPlanningWindow;
   periodMeta: MemberPlanningPeriodMeta | null;
   eligibility: { mode: "mixed" | "single" | "unknown"; allowedCourseSlugs: string[] } | null;
+  bookableCourseSlugs: string[];
   packSummary: MemberPackSummary | null;
   bookingRules: MemberBookingRules | null;
   /** Charge planning + réservations + solde pack (source unique). */
@@ -30,6 +31,7 @@ export const useMemberBookingStore = create<MemberBookingState>((set) => ({
   planningWindow: "WEEKLY",
   periodMeta: null,
   eligibility: null,
+  bookableCourseSlugs: [],
   packSummary: null,
   bookingRules: null,
   loadAll: async () => {
@@ -51,6 +53,7 @@ export const useMemberBookingStore = create<MemberBookingState>((set) => ({
       bookingWindow?: MemberPlanningWindow;
       periodMeta?: MemberPlanningPeriodMeta;
       eligibility?: { mode: "mixed" | "single" | "unknown"; allowedCourseSlugs: string[] };
+      bookableCourseSlugs?: string[];
       bookingRules?: MemberBookingRules;
     };
     const mData = (await mRes.json()) as {
@@ -66,6 +69,7 @@ export const useMemberBookingStore = create<MemberBookingState>((set) => ({
       planningWindow: oData.bookingWindow ?? "WEEKLY",
       periodMeta: oData.periodMeta ?? null,
       eligibility: oData.eligibility ?? null,
+      bookableCourseSlugs: oData.bookableCourseSlugs ?? oData.eligibility?.allowedCourseSlugs ?? [],
       packSummary: mData.packSummary ?? null,
       bookingRules: oData.bookingRules ?? null,
     });

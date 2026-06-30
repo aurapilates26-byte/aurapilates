@@ -2,7 +2,7 @@ import { getServerSession } from "next-auth";
 import { z } from "zod";
 import { authOptions } from "@/auth";
 import { isStaffRole } from "@/lib/admin/access";
-import { serializeAdminMemberReservation } from "@/lib/admin/member-reservations-list";
+import { serializeAdminMemberReservation, adminMemberReservationInclude } from "@/lib/admin/member-reservations-list";
 import {
   createMemberReservation,
   reservationErrorMessage,
@@ -34,14 +34,7 @@ const createSchema = z.object({
   packId: z.string().trim().cuid().optional(),
 });
 
-const reservationInclude = {
-  planning: {
-    include: {
-      coach: { select: { firstName: true, lastName: true, imageUrl: true } },
-    },
-  },
-  createdByUser: { select: { name: true, email: true, role: true } },
-} as const;
+const reservationInclude = adminMemberReservationInclude;
 
 type Params = { params: Promise<{ id: string }> };
 

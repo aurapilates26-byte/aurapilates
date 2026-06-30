@@ -344,10 +344,6 @@ export async function listArchivedPlanningPeriodsForAdmin(): Promise<PlanningArc
   await maybeActivateScheduledDraft();
   await maybeRollForwardExpiredPublishedPeriod();
 
-  if (await planningPeriodArchivesNeedSync()) {
-    await syncKnownPlanningPeriodArchives();
-  }
-
   const [archives, periodRow] = await Promise.all([
     prisma.studioPlanningPeriodArchive.findMany({ orderBy: { periodStartDate: "desc" } }),
     prisma.studioPlanningPeriod.findUnique({ where: { id: SINGLETON_ID } }),
@@ -373,7 +369,7 @@ export async function listArchivedPlanningPeriodsForAdmin(): Promise<PlanningArc
       };
     })
     .filter((p) => !activeStarts.has(p.periodStartYmd))
-    .filter((p) => p.periodEndYmd < todayYmd);
+    .filter((p) => p.periodEndYmd <= todayYmd);
 }
 
 export function prorateMonthlySalaryDinars(

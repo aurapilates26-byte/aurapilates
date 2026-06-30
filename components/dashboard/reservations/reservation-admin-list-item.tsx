@@ -25,6 +25,7 @@ export type ReservationAdminListItemData = {
   statusLabel: string;
   statusBadgeClass: string;
   packRefundNote?: string | null;
+  debitedPackName?: string | null;
 };
 
 type ReservationAdminListItemProps = {
@@ -121,6 +122,12 @@ export function ReservationAdminListItem({
 
       {levelLabel ? (
         <p className="mt-1 text-[11px] text-brand-dark/55">Niveau : {levelLabel}</p>
+      ) : null}
+
+      {item.debitedPackName ? (
+        <p className="mt-1 text-[11px] text-brand-dark/65">
+          <span className="font-semibold">Pack utilisé :</span> {item.debitedPackName}
+        </p>
       ) : null}
 
       {item.packRefundNote ? (

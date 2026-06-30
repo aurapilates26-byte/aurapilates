@@ -53,6 +53,8 @@ export type MemberReservationItem = {
   sessionDate: string;
   reservedAt: string;
   packRefundedAt?: string | null;
+  debitedPackId?: string | null;
+  debitedPackName?: string | null;
   planning: {
     id: string;
     courseLabel: string;

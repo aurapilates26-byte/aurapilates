@@ -11,7 +11,7 @@ import { getStudioBookingRules } from "@/lib/studio-booking-rules-server";
 import { isMemberReservationDeskOpen } from "@/lib/studio-booking-rules";
 import { assertMemberCanBookOccurrence } from "@/lib/admin/planning-staggered-publish";
 import { resetMemberPackBalancesForPack } from "@/lib/admin/member-pack-renewal";
-import { activateMemberPackOnSessionDate } from "@/lib/admin/member-pack-activation";
+import { activateSelectedPackOnSessionDate } from "@/lib/admin/member-pack-activation";
 import {
   debitSelectedPackSession,
   resolvePackForMemberBooking,
@@ -26,6 +26,7 @@ export const PACK_ERRORS = {
   packExpired: "PACK_EXPIRED",
   packNotStarted: "PACK_NOT_STARTED",
   packCategoryMismatch: "PACK_CATEGORY_MISMATCH",
+  packChoiceRequired: "PACK_CHOICE_REQUIRED",
 } as const;
 
 export type CreateMemberReservationResult = {
@@ -39,7 +40,7 @@ export async function createMemberReservation(params: {
   memberId: string;
   planningId: string;
   sessionDate: string;
-  /** Pack à débiter (optionnel : le plus récent éligible est choisi par défaut). */
+  /** Pack à débiter. Obligatoire si plusieurs packs couvrent ce cours. */
   packId?: string;
   source?: "ADMIN" | "MEMBER";
   /** Compte staff (admin/direction) ayant saisi la réservation manuellement. */
@@ -92,6 +93,7 @@ export async function createMemberReservation(params: {
           id: true,
           userId: true,
           isActive: true,
+          packId: true,
           packStartedAt: true,
         },
       });
@@ -102,7 +104,6 @@ export async function createMemberReservation(params: {
         courseSlug: planning.courseSlug,
         sessionDateLocal,
         preferredPackId: params.packId ?? null,
-        primaryPackStartedAt: memberRow.packStartedAt,
       });
 
       const pack = selected.pack;
@@ -111,16 +112,15 @@ export async function createMemberReservation(params: {
       const createdByUserId =
         source === "ADMIN" ? params.createdByUserId ?? null : memberRow.userId ?? null;
 
-      let primaryPackStartedAt = memberRow.packStartedAt;
-      if (selected.isPrimary) {
-        const activation = await activateMemberPackOnSessionDate(tx, {
-          memberId: params.memberId,
-          currentPackStartedAt: memberRow.packStartedAt,
-          sessionDateDb,
-          sessionDateLocal,
-        });
-        primaryPackStartedAt = activation.packStartedAt;
-      }
+      await activateSelectedPackOnSessionDate(tx, {
+        memberId: params.memberId,
+        packId: pack.id,
+        memberPackId: memberRow.packId,
+        memberPackStartedAt: memberRow.packStartedAt,
+        durationDays: pack.durationDays,
+        sessionDateDb,
+        sessionDateLocal,
+      });
 
       const existingBalances = await tx.memberPackBalance.findMany({
         where: { memberId: params.memberId, packId: pack.id },
@@ -178,7 +178,7 @@ export async function createMemberReservation(params: {
             packRefundedAt: null,
             source,
             createdByUserId,
-            debitedPackId: status === "BOOKED" ? pack.id : null,
+            debitedPackId: pack.id,
           },
         });
         if (!memberRow.isActive) {
@@ -204,7 +204,7 @@ export async function createMemberReservation(params: {
           source,
           createdByUserId,
           packRefundedAt: null,
-          debitedPackId: status === "BOOKED" ? pack.id : null,
+          debitedPackId: pack.id,
         },
       });
 
@@ -248,6 +248,9 @@ export function reservationErrorMessage(code: string): string {
   if (code === PACK_ERRORS.packInactive) return "Pack inactif";
   if (code === PACK_ERRORS.packNotStarted) return "Date hors période de validité du pack";
   if (code === PACK_ERRORS.packExpired) return "Pack expiré";
+  if (code === PACK_ERRORS.packChoiceRequired) {
+    return "Plusieurs packs sont disponibles pour ce cours : choisissez le pack à utiliser.";
+  }
   if (code === "OUTSIDE_PLANNING_PERIOD") {
     return "Cette date est en dehors de la période de réservation ouverte.";
   }

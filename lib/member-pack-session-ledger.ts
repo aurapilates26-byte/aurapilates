@@ -111,6 +111,7 @@ export async function promoteNextWaitlistReservation(
     select: {
       id: true,
       memberId: true,
+      debitedPackId: true,
     },
   });
 
@@ -130,8 +131,7 @@ export async function promoteNextWaitlistReservation(
         memberId: waiter.memberId,
         courseSlug: params.courseSlug,
         sessionDateLocal,
-        preferredPackId: null,
-        primaryPackStartedAt: memberRow.packStartedAt,
+        preferredPackId: waiter.debitedPackId,
       });
       await debitSelectedPackSession(tx, {
         memberId: waiter.memberId,

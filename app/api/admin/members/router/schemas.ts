@@ -32,6 +32,19 @@ const personalDiscountInputSchema = z.union([
   z.null(),
 ]).optional();
 
+const optionalNotePreprocessor = z.preprocess((value) => {
+  if (value === null || value === undefined) return undefined;
+  const trimmed = String(value).trim();
+  return trimmed === "" ? undefined : trimmed;
+}, z.string().trim().max(2000).optional());
+
+const memberNoteUpdatePreprocessor = z.preprocess((value) => {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const trimmed = String(value).trim();
+  return trimmed === "" ? null : trimmed;
+}, z.union([z.string().trim().min(1).max(2000), z.null()]).optional());
+
 export const memberEnrollmentFilterSchema = z.enum(["ACTIVE", "DEPOSIT_PENDING", "ALL"]);
 
 export const createMemberSchema = z.object({
@@ -47,6 +60,7 @@ export const createMemberSchema = z.object({
   paymentMode: z.enum(["full", "deposit"]).default("full"),
   depositAmountDinars: z.number().int().positive().optional(),
   paymentMethod: z.enum(PACK_PAYMENT_METHODS),
+  note: optionalNotePreprocessor,
 });
 
 export const completeMemberDepositSchema = z.object({
@@ -77,6 +91,8 @@ export const updateMemberSchema = z.object({
   qrId: z.string().trim().min(10).optional(),
   personalDiscount: personalDiscountInputSchema,
   paymentMethod: z.enum(PACK_PAYMENT_METHODS).optional(),
+  note: memberNoteUpdatePreprocessor,
+  depositAmountDinars: z.number().int().positive().optional(),
 });
 
 export const renewMemberPackSchema = z.object({

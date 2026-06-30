@@ -19,6 +19,7 @@ import { z } from "zod";
 const createSchema = z.object({
   planningId: z.string().trim().cuid(),
   sessionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  packId: z.string().trim().cuid().optional(),
 });
 
 function errorResponse(message: string, status: number) {
@@ -47,6 +48,7 @@ export async function GET() {
           coach: { select: { firstName: true, lastName: true, imageUrl: true } },
         },
       },
+      debitedPack: { select: { id: true, name: true } },
     },
   });
 
@@ -61,6 +63,8 @@ export async function GET() {
     sessionDate: formatYmdPrismaDate(new Date(r.sessionDate)),
     reservedAt: r.createdAt.toISOString(),
     packRefundedAt: r.packRefundedAt ? r.packRefundedAt.toISOString() : null,
+    debitedPackId: r.debitedPackId,
+    debitedPackName: r.debitedPack?.name ?? null,
     planning: {
       id: r.planning.id,
       courseSlug: r.planning.courseSlug,
@@ -94,6 +98,7 @@ export async function GET() {
           coach: { select: { firstName: true, lastName: true, imageUrl: true } },
         },
       },
+      debitedPack: { select: { id: true, name: true } },
     },
   });
 
@@ -148,6 +153,7 @@ export async function POST(request: Request) {
       memberId: member.id,
       planningId,
       sessionDate: sessionDateStr,
+      packId: parsed.data.packId,
       source: "MEMBER",
     });
 

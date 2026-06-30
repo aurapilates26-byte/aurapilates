@@ -3,6 +3,10 @@
  * Réutiliser ici pour places / liste d’attente / statuts similaires.
  */
 
+/** Pastilles compactes pour la grille planning admin (7 colonnes visibles). */
+export const planningSessionGridPillLayout =
+  "inline-flex max-w-full items-center truncate rounded-full border px-1.5 py-0.5 text-[9px] font-semibold leading-none";
+
 /** Même silhouette que « Niveau » et « Durée » sur les cartes planning (hauteur / padding / typo). */
 export const planningSessionPillLayout =
   "inline-flex min-h-7 shrink-0 items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold leading-none sm:text-xs";

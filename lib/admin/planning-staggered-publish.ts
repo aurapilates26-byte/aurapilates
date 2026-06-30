@@ -8,6 +8,7 @@ import {
   formatYmdPrismaDate,
   parseYmdLocal,
   prismaDayOfWeekFromLocalDate,
+  startOfLocalToday,
 } from "@/lib/calendar-day";
 import { prisma } from "@/lib/prisma";
 import type { PlanningBookingWindow, PlanningPeriodConfig } from "@/types/admin/planning";
@@ -211,11 +212,17 @@ export async function maybeRunStaggeredDraftPublication(now: Date = new Date()):
     return false;
   }
 
-  const fullAt = row.draftSundayPublishAt?.getTime();
+  const published = buildPlanningPeriodConfig(
+    toPlanningBookingWindow(row.bookingWindow),
+    periodStartFromRow(row.periodStartDate),
+  );
+  const todayYmd = formatYmdLocal(startOfLocalToday());
+
   const partialAt = row.draftPublishAt?.getTime();
   const nowMs = now.getTime();
 
-  if (fullAt != null && nowMs >= fullAt) {
+  // Bascule complète uniquement après le dernier jour de la période affichée (pas le dimanche 13h).
+  if (todayYmd > published.periodEndYmd) {
     const { publishDraftPeriod } = await import("@/lib/admin/planning-period-draft");
     await publishDraftPeriod(row);
     return true;

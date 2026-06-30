@@ -9,6 +9,7 @@ import type {
   Prisma,
 } from "@prisma/client";
 import { promotionInclude, toPromotionRecord } from "@/lib/admin/pack-promotion-scope";
+import { createPackEnrollmentAfterPayment } from "@/lib/admin/member-pack-enrollment";
 import {
   formatYmdLocal,
   formatYmdPrismaDate,
@@ -292,9 +293,10 @@ export async function insertPackPayment(
   db: PackPaymentWriter,
   input: CreatePackPaymentInput,
   precomputed: PackPaymentPrecomputed,
-): Promise<void> {
+): Promise<string> {
   const data = buildPackPaymentCreateData(input, precomputed.paidAt, precomputed.resolved);
-  await db.packPayment.create({ data });
+  const row = await db.packPayment.create({ data });
+  return row.id;
 }
 
 /**
@@ -346,8 +348,9 @@ export async function recordAutoPackPaymentInTransaction(
     packSaleTotalDinars?: number | null;
     paymentMethod?: PackPaymentMethod;
   },
-): Promise<void> {
-  await insertPackPayment(
+): Promise<string> {
+  const paymentKind: PackPaymentKind = input.paymentKind ?? "FULL";
+  const paymentId = await insertPackPayment(
     tx,
     {
       memberId: input.memberId,
@@ -356,13 +359,24 @@ export async function recordAutoPackPaymentInTransaction(
       recordedByUserId: input.recordedByUserId,
       personalDiscount: input.personalDiscount ?? null,
       note: input.note ?? null,
-      paymentKind: input.paymentKind ?? "FULL",
+      paymentKind,
       amountDinars: input.amountDinars,
       packSaleTotalDinars: input.packSaleTotalDinars,
       paymentMethod: input.paymentMethod,
     },
     input.precomputed,
   );
+
+  if (paymentKind !== "BALANCE") {
+    await createPackEnrollmentAfterPayment(tx, {
+      memberId: input.memberId,
+      packId: input.packId,
+      packPaymentId: paymentId,
+      purchasedAt: input.precomputed.paidAt,
+    });
+  }
+
+  return paymentId;
 }
 
 /** Met à jour le moyen de paiement sur tous les encaissements d'un pack adhérente. */

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { DashboardHeader } from "@/components/dashboard/header";
-import { Button, Checkbox, ConfirmDialog, Input, Modal, SelectMenu } from "@/components/ui";
+import { Button, Checkbox, ConfirmDialog, Input, Modal, SelectMenu, Textarea } from "@/components/ui";
 import { DatePicker } from "@/components/ui/date-picker";
 import { useToast } from "@/components/ui/toast-provider";
 import type { MemberDetailData, PackFormItem } from "@/lib/admin/member-detail-server";
@@ -56,7 +56,8 @@ type BookablePackOption = {
   packId: string;
   packName: string;
   remainingSessions: number;
-  isPrimary: boolean;
+  remainingForCourse: number;
+  courseCoverageLabel: string;
 };
 
 type BookPackPickerState = {
@@ -243,6 +244,7 @@ export function MemberDetailClient({
   const [discountValue, setDiscountValue] = useState("");
   const [discountReason, setDiscountReason] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PackPaymentMethodValue>("CASH");
+  const [memberNote, setMemberNote] = useState("");
 
   const [renewPackCategory, setRenewPackCategory] = useState("");
   const [renewPackId, setRenewPackId] = useState("");
@@ -378,6 +380,7 @@ export function MemberDetailClient({
     setDiscountReason(m.personalDiscount?.reason ?? "");
     setPaymentMethod(m.packPaymentMethod ?? "CASH");
     setIsActive(m.isActive);
+    setMemberNote(m.note ?? "");
     setFormError(null);
   }, []);
 
@@ -634,6 +637,7 @@ export function MemberDetailClient({
     if (packId) {
       body.paymentMethod = paymentMethod;
     }
+    body.note = memberNote.trim() || null;
 
     setIsSubmitting(true);
     try {
@@ -829,8 +833,12 @@ export function MemberDetailClient({
 
   const handleBookSlot = async (planningId: string, courseSlug: string) => {
     try {
+      const params = new URLSearchParams({
+        courseSlug,
+        sessionDate: bookDate,
+      });
       const response = await fetch(
-        `/api/admin/members/${encodeURIComponent(memberId)}/bookable-packs?courseSlug=${encodeURIComponent(courseSlug)}`,
+        `/api/admin/members/${encodeURIComponent(memberId)}/bookable-packs?${params.toString()}`,
         { cache: "no-store" },
       );
       if (!response.ok) {
@@ -1020,6 +1028,13 @@ export function MemberDetailClient({
                 </InfoField>
               </div>
 
+              {member.note ? (
+                <div className="mt-4 rounded-xl border border-brand-medium/15 bg-zinc-50/60 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-brand-dark/55">Note</p>
+                  <p className="mt-1 whitespace-pre-wrap text-sm font-normal text-brand-dark/85">{member.note}</p>
+                </div>
+              ) : null}
+
               <AdminMemberReservationsPanel
                 memberId={memberId}
                 reloadToken={reservationsReloadToken}
@@ -1093,6 +1108,15 @@ export function MemberDetailClient({
                 />
                 <Input id="detail-phone" label="Téléphone" value={phone} onChange={(e) => setPhone(e.target.value)} />
               </div>
+              <Textarea
+                id="detail-note"
+                label="Note (optionnel)"
+                value={memberNote}
+                onChange={(e) => setMemberNote(e.target.value)}
+                placeholder="Ex. : préférences, informations utiles pour le studio…"
+                rows={3}
+                maxLength={2000}
+              />
               <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                 <SelectMenu
                   id="detail-discount-type"
@@ -1527,7 +1551,7 @@ export function MemberDetailClient({
       <Modal
         isOpen={bookPackPicker != null}
         title="Choisir le pack"
-        description="Plusieurs packs peuvent être utilisés pour ce cours."
+        description="Plusieurs packs couvrent ce cours. Sélectionnez celui à débiter pour cette séance."
         onClose={() => {
           if (!bookingPlanningId) setBookPackPicker(null);
         }}
@@ -1562,7 +1586,7 @@ export function MemberDetailClient({
             onChange={(packId) => setBookPackPicker((prev) => (prev ? { ...prev, packId } : prev))}
             options={bookPackPicker.options.map((option) => ({
               value: option.packId,
-              label: `${option.packName} · ${option.remainingSessions} séance(s) restante(s)`,
+              label: `${option.packName} · ${option.remainingForCourse} séance(s) pour ce cours · ${option.courseCoverageLabel}`,
             }))}
           />
         ) : null}

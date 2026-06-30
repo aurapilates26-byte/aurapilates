@@ -4,6 +4,7 @@ import { authOptions } from "@/auth";
 import { isStaffRole } from "@/lib/admin/access";
 import { getAdminPlanningPeriodWindow } from "@/lib/admin/planning-period-draft";
 import { savePlanningPeriodConfig } from "@/lib/admin/planning-period-config";
+import { ensureDraftPeriodWithMirrors } from "@/lib/admin/planning-draft-sync";
 
 const bookingWindowSchema = z.enum(["WEEKLY", "FIFTEEN_DAYS", "ONE_MONTH"]);
 
@@ -22,6 +23,7 @@ export async function GET() {
   const guard = await requireAdmin();
   if ("error" in guard) return guard.error;
 
+  await ensureDraftPeriodWithMirrors();
   const window = await getAdminPlanningPeriodWindow();
   return Response.json(window);
 }

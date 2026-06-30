@@ -13,8 +13,14 @@ export function AdminPlanningClient() {
   const [viewMode, setViewMode] = useState<PlanningViewMode>("list");
   const [periodSettingsTab, setPeriodSettingsTab] = useState<PlanningAdminScope>("published");
   const [sessionFormSource, setSessionFormSource] = useState<PlanningSessionFormSource>("list");
+  const [sessionFormReturnView, setSessionFormReturnView] = useState<"list" | "period-form">("list");
   const ensureDraftSaved = usePlanningPeriodStore((s) => s.ensureDraftSaved);
   const { toast } = useToast();
+
+  const openSessionForm = (returnView: "list" | "period-form") => {
+    setSessionFormReturnView(returnView);
+    setViewMode("session-form");
+  };
 
   const showAddSession =
     viewMode === "list" ||
@@ -23,16 +29,21 @@ export function AdminPlanningClient() {
     (viewMode === "period-form" && periodSettingsTab === "draft");
 
   const handleOpenSessionForm = async () => {
+    const returnView: "list" | "period-form" = viewMode === "period-form" ? "period-form" : "list";
+
     if (viewMode === "period-form" && periodSettingsTab === "archive") {
       setSessionFormSource("archive");
-      setViewMode("session-form");
+      openSessionForm(returnView);
       return;
     }
-    if (viewMode === "period-form" && periodSettingsTab === "draft") {
+    if (
+      (viewMode === "period-form" && periodSettingsTab === "draft") ||
+      (viewMode === "list" && sessionFormSource === "draft")
+    ) {
       try {
         await ensureDraftSaved();
         setSessionFormSource("draft");
-        setViewMode("session-form");
+        openSessionForm(returnView);
       } catch (e) {
         toast({
           variant: "error",
@@ -42,12 +53,16 @@ export function AdminPlanningClient() {
       }
       return;
     }
+    if (viewMode === "list" && sessionFormSource === "archive") {
+      openSessionForm(returnView);
+      return;
+    }
     setSessionFormSource("list");
-    setViewMode("session-form");
+    openSessionForm(returnView);
   };
 
   const handleBackFromSessionForm = () => {
-    setViewMode(sessionFormSource === "list" ? "list" : "period-form");
+    setViewMode(sessionFormReturnView);
   };
 
   return (
@@ -75,6 +90,8 @@ export function AdminPlanningClient() {
         onPeriodSettingsTabChange={setPeriodSettingsTab}
         sessionFormSource={sessionFormSource}
         onSessionFormSourceChange={setSessionFormSource}
+        sessionFormReturnView={sessionFormReturnView}
+        onSessionFormReturnViewChange={setSessionFormReturnView}
       />
     </>
   );

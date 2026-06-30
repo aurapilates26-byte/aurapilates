@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { useToast } from "@/components/ui/toast-provider";
-import { Button, Checkbox, ConfirmDialog, Input, SelectMenu } from "@/components/ui";
+import { Button, Checkbox, ConfirmDialog, Input, SelectMenu, Textarea } from "@/components/ui";
 import { MemberDepositCompleteDialog } from "@/components/dashboard/member-deposit-complete-dialog";
 import { PaymentMethodBadge } from "@/components/dashboard/payment-method-badge";
 import { PACK_CATEGORY_OPTIONS, normalizePackCategory } from "@/lib/pack-categories";
@@ -60,6 +60,135 @@ function formatMemberCreatedAt(iso: string): string {
 const memberDetailLinkClass =
   "inline-flex h-8 w-8 items-center justify-center rounded-lg border border-brand-medium/30 bg-white text-brand-dark/80 transition hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-medium/30";
 
+const iconActionButtonClass =
+  "inline-flex h-8 w-8 items-center justify-center rounded-lg border transition focus-visible:outline-none focus-visible:ring-2";
+
+function EditMemberButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="Modifier l'adhérente"
+      title="Modifier"
+      className={`${iconActionButtonClass} border-brand-medium/30 bg-white text-brand-dark/80 hover:bg-zinc-50 focus-visible:ring-brand-medium/30`}
+    >
+      <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current" aria-hidden="true">
+        <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+      </svg>
+    </button>
+  );
+}
+
+function DeleteMemberButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="Supprimer l'adhérente"
+      title="Supprimer"
+      className={`${iconActionButtonClass} border-red-200 bg-red-50 text-red-700 hover:bg-red-100 focus-visible:ring-red-200`}
+    >
+      <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current" aria-hidden="true">
+        <path d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z" />
+      </svg>
+    </button>
+  );
+}
+
+function FinalizeDepositButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="Finaliser l'acompte"
+      title="Finaliser"
+      className={`${iconActionButtonClass} border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 focus-visible:ring-emerald-200`}
+    >
+      <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current" aria-hidden="true">
+        <path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+      </svg>
+    </button>
+  );
+}
+
+function DepositAmountCell({
+  amount,
+  method,
+  align = "center",
+}: {
+  amount: number;
+  method: "CASH" | "CHECK" | "TPE" | null | undefined;
+  align?: "center" | "start";
+}) {
+  return (
+    <div
+      className={`flex flex-col gap-1.5 ${align === "start" ? "items-start" : "items-center"}`}
+    >
+      <span className="font-semibold tabular-nums text-brand-dark">{amount} DT</span>
+      <PaymentMethodBadge method={method} />
+    </div>
+  );
+}
+
+function PaymentMethodPicker({
+  value,
+  onChange,
+  label = "Moyen de paiement *",
+}: {
+  value: PackPaymentMethodValue;
+  onChange: (method: PackPaymentMethodValue) => void;
+  label?: string;
+}) {
+  return (
+    <div>
+      <p className="text-sm font-semibold text-brand-dark">{label}</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {PACK_PAYMENT_METHODS.map((method) => (
+          <button
+            key={method}
+            type="button"
+            onClick={() => onChange(method)}
+            className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+              value === method
+                ? "bg-brand-dark text-white"
+                : "border border-brand-medium/30 bg-white text-brand-dark"
+            }`}
+          >
+            {PACK_PAYMENT_METHOD_LABELS[method]}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DepositProgressBar({
+  paid,
+  total,
+}: {
+  paid: number;
+  total: number;
+}) {
+  const safeTotal = Math.max(total, 1);
+  const percent = Math.min(100, Math.round((paid / safeTotal) * 100));
+  return (
+    <div className="space-y-1">
+      <svg
+        viewBox="0 0 100 6"
+        className="h-1.5 w-full"
+        preserveAspectRatio="none"
+        aria-hidden="true"
+      >
+        <rect width="100" height="6" rx="3" className="fill-amber-100" />
+        <rect width={percent} height="6" rx="3" className="fill-amber-500" />
+      </svg>
+      <p className="text-[11px] text-brand-dark/60">
+        {paid} / {total} DT encaissés ({percent}%)
+      </p>
+    </div>
+  );
+}
+
 function MemberDetailLink({ memberId }: { memberId: string }) {
   return (
     <Link
@@ -83,6 +212,7 @@ type MembersManagerProps = {
   viewMode: "list" | "form";
   onChangeViewMode: (mode: "list" | "form") => void;
   onDepositCountChange?: (count: number) => void;
+  onShowDeposits?: () => void;
 };
 
 type MemberItem = {
@@ -131,7 +261,7 @@ type PackItem = {
 };
 
 export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerProps>(function MembersManagerWithRef(
-  { listMode = "members", viewMode, onChangeViewMode, onDepositCountChange },
+  { listMode = "members", viewMode, onChangeViewMode, onDepositCountChange, onShowDeposits },
   ref
 ) {
   const { toast } = useToast();
@@ -143,6 +273,10 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
   const [isDeleting, setIsDeleting] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
   const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
+  const [editingEnrollmentStatus, setEditingEnrollmentStatus] = useState<
+    "ACTIVE" | "DEPOSIT_PENDING" | null
+  >(null);
+  const [editingExpectedPackAmount, setEditingExpectedPackAmount] = useState<number | null>(null);
   const [memberToDelete, setMemberToDelete] = useState<MemberItem | null>(null);
   const initialQrPublicIdRef = useRef("");
 
@@ -172,9 +306,18 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
   const [paymentMode, setPaymentMode] = useState<"full" | "deposit">("full");
   const [depositAmountDinars, setDepositAmountDinars] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PackPaymentMethodValue>("CASH");
+  const [note, setNote] = useState("");
   const [depositMember, setDepositMember] = useState<MemberItem | null>(null);
   const [isCompletingDeposit, setIsCompletingDeposit] = useState(false);
   const [page, setPage] = useState(1);
+
+  const isEditingDepositPending = editingEnrollmentStatus === "DEPOSIT_PENDING";
+  const editingDepositRemaining = useMemo(() => {
+    if (editingExpectedPackAmount == null) return null;
+    const deposit = Number.parseInt(depositAmountDinars, 10);
+    if (!Number.isFinite(deposit) || deposit < 0) return editingExpectedPackAmount;
+    return Math.max(0, editingExpectedPackAmount - deposit);
+  }, [depositAmountDinars, editingExpectedPackAmount]);
 
   const packsForListFilter = useMemo(() => {
     if (!packCategoryFilter.trim()) return packs;
@@ -240,7 +383,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     setIsLoading(true);
     setError(null);
     try {
-      const enrollment = listMode === "deposits" ? "DEPOSIT_PENDING" : "ALL";
+      const enrollment = listMode === "deposits" ? "DEPOSIT_PENDING" : "ACTIVE";
       const params = new URLSearchParams({
         page: "1",
         pageSize: String(MEMBERS_FETCH_PAGE_SIZE),
@@ -437,6 +580,9 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     setPaymentMode("full");
     setDepositAmountDinars("");
     setPaymentMethod("CASH");
+    setNote("");
+    setEditingEnrollmentStatus(null);
+    setEditingExpectedPackAmount(null);
     setModalError(null);
     setIsSubmitting(false);
     setIsFetchingQrKey(false);
@@ -445,6 +591,8 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
   useEffect(() => {
     if (viewMode === "list") {
       setEditingMemberId(null);
+      setEditingEnrollmentStatus(null);
+      setEditingExpectedPackAmount(null);
     }
   }, [viewMode]);
 
@@ -458,6 +606,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
   const handleStartEdit = (m: MemberItem) => {
     initialQrPublicIdRef.current = m.qrCode?.qrId ?? "";
     setEditingMemberId(m.id);
+    setEditingEnrollmentStatus(m.enrollmentStatus ?? "ACTIVE");
     setQrId(m.qrCode?.qrId ?? "");
     setQrKey(null);
     setQrStatus(m.qrCode ? "UNKNOWN" : "UNKNOWN");
@@ -471,6 +620,9 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     setPackCategory(memberPack?.category ? normalizePackCategory(memberPack.category) : "");
     setPackId(m.pack?.id ?? "");
     setIsActive(m.isActive);
+    setDepositAmountDinars(String(m.totalPaidDinars ?? ""));
+    setPaymentMethod((m.depositPaymentMethod ?? "CASH") as PackPaymentMethodValue);
+    setEditingExpectedPackAmount(m.expectedPackAmountDinars ?? null);
     setModalError(null);
     onChangeViewMode("form");
   };
@@ -589,6 +741,11 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
           createBody.depositAmountDinars = Number.parseInt(depositAmountDinars, 10);
         }
 
+        const trimmedNote = note.trim();
+        if (trimmedNote) {
+          createBody.note = trimmedNote;
+        }
+
         const response = await fetch("/api/admin/members", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -600,22 +757,32 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
           throw new Error(data?.error ?? "Création impossible.");
         }
 
+        const createdWithDeposit = paymentMode === "deposit";
         await loadMembers();
+        await refreshDepositCount();
         setEditingMemberId(null);
-        onChangeViewMode("list");
+        if (createdWithDeposit) {
+          onShowDeposits?.();
+        } else {
+          onChangeViewMode("list");
+        }
         resetForm();
         toast({
           variant: "success",
-          title: "Adhérente créée",
-          description: "La nouvelle adhérente a été ajoutée et le QR code a été assigné.",
+          title: createdWithDeposit ? "Acompte enregistré" : "Adhérente créée",
+          description: createdWithDeposit
+            ? "L'adhérente apparaît dans Avances. Finalisez le solde pour l'ajouter à la liste principale."
+            : "La nouvelle adhérente a été ajoutée et le QR code a été assigné.",
         });
         return;
       }
 
       const body: Record<string, unknown> = {
         email: email.trim(),
-        isActive,
       };
+      if (!isEditingDepositPending) {
+        body.isActive = isActive;
+      }
       if (firstName.trim().length > 0 && firstName.trim().length < 2) {
         setModalError("Le prenom doit contenir au moins 2 caracteres ou rester vide.");
         return;
@@ -632,9 +799,26 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
       }
       if (phone.trim().length >= 6) body.phone = phone.trim();
       if (birthDate) body.birthDate = birthDate;
-      body.packId = packId;
+      if (!isEditingDepositPending) {
+        body.packId = packId;
+      }
       if (trimmedQr !== initialQrPublicIdRef.current) {
         body.qrId = trimmedQr || undefined;
+      }
+
+      if (isEditingDepositPending) {
+        const deposit = Number.parseInt(depositAmountDinars, 10);
+        if (!Number.isFinite(deposit) || deposit <= 0) {
+          setModalError("Indiquez un montant d'acompte valide.");
+          return;
+        }
+        const expectedTotal = editingExpectedPackAmount;
+        if (expectedTotal != null && deposit >= expectedTotal) {
+          setModalError("L'acompte doit être inférieur au montant total du pack.");
+          return;
+        }
+        body.depositAmountDinars = deposit;
+        body.paymentMethod = paymentMethod;
       }
 
       const response = await fetch(`/api/admin/members/${encodeURIComponent(editingMemberId!)}`, {
@@ -649,13 +833,16 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
       }
 
       await loadMembers();
+      await refreshDepositCount();
       setEditingMemberId(null);
       onChangeViewMode("list");
       resetForm();
       toast({
         variant: "success",
-        title: "Adhérente mise à jour",
-        description: "Les informations ont été enregistrées.",
+        title: isEditingDepositPending ? "Avance mise à jour" : "Adhérente mise à jour",
+        description: isEditingDepositPending
+          ? "Le montant d'acompte et les informations ont été enregistrés."
+          : "Les informations ont été enregistrées.",
       });
     } catch (e) {
       const message = e instanceof Error ? e.message : "Une erreur est survenue.";
@@ -693,6 +880,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
       }
       setMemberToDelete(null);
       await loadMembers();
+      await refreshDepositCount();
       toast({
         variant: "success",
         title: "Adhérente supprimée",
@@ -742,7 +930,20 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     }
   };
 
-  // Expose actions for DashboardHeader buttons (avoid duplication)
+  const renderDepositActions = (m: MemberItem) => (
+    <div className="flex flex-wrap items-center justify-center gap-2">
+      <EditMemberButton onClick={() => handleStartEdit(m)} />
+      <DeleteMemberButton onClick={() => setMemberToDelete(m)} />
+      <FinalizeDepositButton onClick={() => setDepositMember(m)} />
+    </div>
+  );
+
+  const renderMemberActions = (m: MemberItem) => (
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      <MemberDetailLink memberId={m.id} />
+      <DeleteMemberButton onClick={() => setMemberToDelete(m)} />
+    </div>
+  );
   useImperativeHandle(ref, () => {
     return {
       refresh() {
@@ -773,8 +974,12 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                     statusFilter !== "ALL" ||
                     packCategoryFilter.trim() ||
                     packFilterId !== "ALL"
-                      ? `${filteredItems.length} résultat(s) sur ${items.length} adhérente(s)`
-                      : `${items.length} adhérente(s) au total`}
+                      ? `${filteredItems.length} résultat(s) sur ${items.length} ${
+                          listMode === "deposits" ? "avance(s)" : "adhérente(s)"
+                        }`
+                      : listMode === "deposits"
+                        ? `${items.length} avance(s) en attente`
+                        : `${items.length} adhérente(s) au total`}
                   </p>
                 </div>
 
@@ -788,17 +993,19 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                       className="mt-0 py-2.5"
                     />
                   </div>
-                  <SelectMenu
-                    id="members-status"
-                    value={statusFilter}
-                    onChange={(value) => setStatusFilter(value)}
-                    className="md:w-[7.5rem]"
-                    options={[
-                      { value: "ALL", label: "Tous" },
-                      { value: "ACTIVE", label: "Actives" },
-                      { value: "INACTIVE", label: "Inactives" },
-                    ]}
-                  />
+                  {listMode === "members" ? (
+                    <SelectMenu
+                      id="members-status"
+                      value={statusFilter}
+                      onChange={(value) => setStatusFilter(value)}
+                      className="md:w-[7.5rem]"
+                      options={[
+                        { value: "ALL", label: "Tous" },
+                        { value: "ACTIVE", label: "Actives" },
+                        { value: "INACTIVE", label: "Inactives" },
+                      ]}
+                    />
+                  ) : null}
                   <SelectMenu
                     id="members-pack-category"
                     value={packCategoryFilter}
@@ -850,46 +1057,68 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
             <>
               <div className="divide-y divide-brand-medium/15 lg:hidden">
                 {visibleItems.map((m) => (
-                  <article key={m.id} className="space-y-2 px-4 py-3 text-sm">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="font-semibold text-brand-dark">
-                        {listMode === "members" ? (
-                          <Link href={`/dashboard/adherents/${m.id}`} className="hover:underline">
-                            {(m.firstName || m.lastName)
+                  <article
+                    key={m.id}
+                    className={`space-y-3 px-4 py-4 text-sm ${
+                      listMode === "deposits" ? "bg-amber-50/20" : ""
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="font-semibold text-brand-dark">
+                          {listMode === "members" ? (
+                            <Link href={`/dashboard/adherents/${m.id}`} className="hover:underline">
+                              {(m.firstName || m.lastName)
+                                ? `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim()
+                                : "Adhérente"}
+                            </Link>
+                          ) : (
+                            (m.firstName || m.lastName)
                               ? `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim()
-                              : "Adhérente"}
-                          </Link>
-                        ) : (
-                          (m.firstName || m.lastName)
-                            ? `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim()
-                            : "Adhérente"
-                        )}
-                      </p>
-                      <span
-                        className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
-                          m.isActive
-                            ? "border border-emerald-200 bg-emerald-50 text-emerald-900"
-                            : "border border-zinc-200 bg-zinc-50 text-zinc-800"
-                        }`}
-                      >
-                        {m.isActive ? "Active" : "Inactive"}
-                      </span>
+                              : "Adhérente"
+                          )}
+                        </p>
+                        <p className="mt-1 text-xs text-brand-dark/65">
+                          {listMode === "deposits"
+                            ? `Inscrite le ${formatMemberCreatedAt(m.createdAt)}`
+                            : `Ajoutée le ${formatMemberCreatedAt(m.createdAt)}`}
+                        </p>
+                      </div>
+                      {listMode === "members" ? (
+                        <span
+                          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
+                            m.isActive
+                              ? "border border-emerald-200 bg-emerald-50 text-emerald-900"
+                              : "border border-zinc-200 bg-zinc-50 text-zinc-800"
+                          }`}
+                        >
+                          {m.isActive ? "Active" : "Inactive"}
+                        </span>
+                      ) : (
+                        <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-900">
+                          Acompte
+                        </span>
+                      )}
                     </div>
-                    <p className="text-xs text-brand-dark/75">Pack: {m.pack?.name ?? "—"}</p>
-                    {listMode === "members" ? (
-                      <p className="text-xs text-brand-dark/75">
-                        Ajouté le : {formatMemberCreatedAt(m.createdAt)}
-                      </p>
-                    ) : null}
+                    <p className="text-xs text-brand-dark/75">Pack : {m.pack?.name ?? "—"}</p>
                     {listMode === "deposits" ? (
                       <>
-                        <p className="text-xs text-brand-dark/75">
-                          Solde : <span className="font-semibold">{m.remainingDinars ?? 0} DT</span>
-                        </p>
-                        <p className="text-xs text-brand-dark/75">
-                          Acompte : {m.totalPaidDinars ?? 0} DT —{" "}
-                          <PaymentMethodBadge method={m.depositPaymentMethod} />
-                        </p>
+                        <div className="flex flex-col gap-2 text-xs text-brand-dark/75 sm:flex-row sm:items-start sm:justify-between">
+                          <DepositAmountCell
+                            amount={m.totalPaidDinars ?? 0}
+                            method={m.depositPaymentMethod}
+                            align="start"
+                          />
+                          <p className="sm:text-right">
+                            Solde :{" "}
+                            <span className="font-semibold text-brand-dark">{m.remainingDinars ?? 0} DT</span>
+                          </p>
+                        </div>
+                        <p className="text-xs text-brand-dark/75">Téléphone : {m.phone ?? "—"}</p>
+                        <DepositProgressBar
+                          paid={m.totalPaidDinars ?? 0}
+                          total={m.expectedPackAmountDinars ?? (m.totalPaidDinars ?? 0) + (m.remainingDinars ?? 0)}
+                        />
                       </>
                     ) : (
                       <p className="text-xs text-brand-dark/75">
@@ -898,53 +1127,38 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                       </p>
                     )}
                     <div className="flex items-center justify-between gap-2">
-                      <span
-                        className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
-                          m.qrCode?.qrId
-                            ? "border border-emerald-200 bg-emerald-50 text-emerald-900"
-                            : "border border-amber-200 bg-amber-50 text-amber-900"
-                        }`}
-                      >
-                        QR: {m.qrCode?.qrId ? "Assigné" : "Non assigné"}
-                      </span>
-                      <div className="flex flex-wrap items-center justify-end gap-2">
-                        {listMode === "deposits" ? (
-                          <Button type="button" onClick={() => setDepositMember(m)}>
-                            Finaliser
-                          </Button>
-                        ) : (
-                          <>
-                            <MemberDetailLink memberId={m.id} />
-                            <button
-                              type="button"
-                              onClick={() => setMemberToDelete(m)}
-                              aria-label="Supprimer l'adhérente"
-                              title="Supprimer"
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 transition hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200"
-                            >
-                              <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current" aria-hidden="true">
-                                <path d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z" />
-                              </svg>
-                            </button>
-                          </>
-                        )}
-                      </div>
+                      {listMode === "members" ? (
+                        <span
+                          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
+                            m.qrCode?.qrId
+                              ? "border border-emerald-200 bg-emerald-50 text-emerald-900"
+                              : "border border-amber-200 bg-amber-50 text-amber-900"
+                          }`}
+                        >
+                          QR: {m.qrCode?.qrId ? "Assigné" : "Non assigné"}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-brand-dark/60">QR assigné à la finalisation</span>
+                      )}
+                      {listMode === "deposits" ? renderDepositActions(m) : renderMemberActions(m)}
                     </div>
                   </article>
                 ))}
               </div>
 
               <div className="hidden overflow-x-auto lg:block">
-                <table className="w-full min-w-[860px]">
+                <table className="w-full min-w-[980px]">
                   <thead>
                     <tr className="border-b border-brand-medium/15 bg-zinc-50/60 text-xs font-semibold text-brand-dark/70">
                       <th className="px-5 py-3 text-left">Nom</th>
                       {listMode === "deposits" ? (
                         <>
                           <th className="px-4 py-3 text-center">Pack</th>
+                          <th className="px-4 py-3 text-center">Progression</th>
                           <th className="px-4 py-3 text-center">Acompte</th>
                           <th className="px-4 py-3 text-center">Solde</th>
                           <th className="px-4 py-3 text-center">Téléphone</th>
+                          <th className="px-4 py-3 text-center">Date</th>
                         </>
                       ) : (
                         <>
@@ -977,11 +1191,30 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                         {listMode === "deposits" ? (
                           <>
                             <td className="px-4 py-4 text-center text-brand-dark/80">{m.pack?.name ?? "—"}</td>
-                            <td className="px-4 py-4 text-center text-brand-dark/80">
-                              {m.totalPaidDinars ?? 0} DT — <PaymentMethodBadge method={m.depositPaymentMethod} />
+                            <td className="px-4 py-4">
+                              <div className="mx-auto w-28">
+                                <DepositProgressBar
+                                  paid={m.totalPaidDinars ?? 0}
+                                  total={
+                                    m.expectedPackAmountDinars ??
+                                    (m.totalPaidDinars ?? 0) + (m.remainingDinars ?? 0)
+                                  }
+                                />
+                              </div>
                             </td>
-                            <td className="px-4 py-4 text-center font-semibold text-brand-dark">{m.remainingDinars ?? 0} DT</td>
+                            <td className="px-4 py-4">
+                              <DepositAmountCell
+                                amount={m.totalPaidDinars ?? 0}
+                                method={m.depositPaymentMethod}
+                              />
+                            </td>
+                            <td className="px-4 py-4 text-center font-semibold text-brand-dark">
+                              {m.remainingDinars ?? 0} DT
+                            </td>
                             <td className="px-4 py-4 text-center text-brand-dark/80">{m.phone ?? "—"}</td>
+                            <td className="px-4 py-4 text-center tabular-nums text-brand-dark/80">
+                              {formatMemberCreatedAt(m.createdAt)}
+                            </td>
                           </>
                         ) : (
                           <>
@@ -1017,28 +1250,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                           </>
                         )}
                         <td className="px-4 py-4 text-center">
-                          <div className="flex flex-wrap items-center justify-center gap-2">
-                            {listMode === "deposits" ? (
-                              <Button type="button" onClick={() => setDepositMember(m)}>
-                                Finaliser
-                              </Button>
-                            ) : (
-                              <>
-                                <MemberDetailLink memberId={m.id} />
-                                <button
-                                  type="button"
-                                  onClick={() => setMemberToDelete(m)}
-                                  aria-label="Supprimer l'adhérente"
-                                  title="Supprimer"
-                                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 transition hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200"
-                                >
-                                  <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current" aria-hidden="true">
-                                    <path d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z" />
-                                  </svg>
-                                </button>
-                              </>
-                            )}
-                          </div>
+                          {listMode === "deposits" ? renderDepositActions(m) : renderMemberActions(m)}
                         </td>
                       </tr>
                     ))}
@@ -1051,7 +1263,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                   meta={meta}
                   isLoading={isLoading}
                   hasError={Boolean(error)}
-                  itemLabel="adhérentes"
+                  itemLabel={listMode === "deposits" ? "avances" : "adhérentes"}
                 />
                 <ListPagination
                   page={meta.page}
@@ -1066,11 +1278,22 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
       ) : (
         <div className="rounded-2xl border border-brand-medium/20 bg-white p-6 shadow-sm">
           <h3 className="text-xl font-semibold text-brand-dark">
-            {editingMemberId ? "Modifier une adhérente" : "Ajouter une adhérente"}
+            {editingMemberId
+              ? isEditingDepositPending
+                ? "Modifier une avance"
+                : "Modifier une adhérente"
+              : "Ajouter une adhérente"}
           </h3>
           <p className="mt-2 text-sm text-brand-dark/70">
             {editingMemberId ? (
-              <>Mettez à jour les infos, le pack ou le QR code associé si nécessaire.</>
+              isEditingDepositPending ? (
+                <>
+                  Corrigez les informations de l&apos;adhérente. Le QR et l&apos;activation se feront lors de la
+                  finalisation du solde.
+                </>
+              ) : (
+                <>Mettez à jour les infos, le pack ou le QR code associé si nécessaire.</>
+              )
             ) : (
               <>
                 Le QR code est optionnel à la création (assignable plus tard depuis la fiche). Si vous le scannez,
@@ -1079,13 +1302,25 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
             )}
           </p>
 
+          {isEditingDepositPending ? (
+            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-950">
+              Cette adhérente est en attente de finalisation. Elle n&apos;apparaît pas dans la liste principale tant
+              que le solde n&apos;est pas encaissé.
+            </div>
+          ) : null}
+
           <div className="mt-5 space-y-4">
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div>
                   <Input
                     id="member-qrid"
-                    label={`Identifiant QR (${qrIdentifyStatusText}) — optionnel`}
+                    label={
+                      isEditingDepositPending
+                        ? "Identifiant QR — assigné à la finalisation"
+                        : `Identifiant QR (${qrIdentifyStatusText}) — optionnel`
+                    }
                     value={qrId}
+                    disabled={isEditingDepositPending}
                     onChange={(e) => {
                       const next = e.target.value;
                       setQrId(next);
@@ -1154,37 +1389,100 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                <SelectMenu
-                  id="member-pack-category"
-                  label="Catégorie du pack *"
-                  value={packCategory}
-                  onChange={handlePackCategoryChange}
-                  options={[
-                    { value: "", label: "Choisir une catégorie" },
-                    ...PACK_CATEGORY_OPTIONS.map((opt) => ({ value: opt.value, label: opt.label })),
-                  ]}
+              {isEditingDepositPending ? (
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <p className="text-sm font-medium text-brand-dark">Pack</p>
+                    <p className="mt-2 min-h-[42px] rounded-xl border border-brand-medium/35 bg-zinc-50 px-4 py-2.5 text-sm text-brand-dark/80">
+                      {packs.find((p) => p.id === packId)?.name ?? "—"}
+                    </p>
+                  </div>
+                  <Input
+                    id="member-phone"
+                    label="Téléphone *"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                  />
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                  <SelectMenu
+                    id="member-pack-category"
+                    label="Catégorie du pack *"
+                    value={packCategory}
+                    onChange={handlePackCategoryChange}
+                    options={[
+                      { value: "", label: "Choisir une catégorie" },
+                      ...PACK_CATEGORY_OPTIONS.map((opt) => ({ value: opt.value, label: opt.label })),
+                    ]}
+                  />
+                  <SelectMenu
+                    id="member-pack"
+                    value={packId}
+                    onChange={(value) => setPackId(value)}
+                    label="Pack choisi *"
+                    options={[
+                      { value: "" as string, label: packCategory ? "Choisir un pack" : "Catégorie d'abord" },
+                      ...packsForCategory.map((pack) => ({
+                        value: pack.id,
+                        label: formatPackSelectOptionLabel(pack),
+                      })),
+                    ]}
+                  />
+                  <Input
+                    id="member-phone"
+                    label="Téléphone *"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                  />
+                </div>
+              )}
+
+              {isEditingDepositPending ? (
+                <div className="rounded-xl border border-amber-200/80 bg-amber-50/60 px-4 py-4 space-y-4">
+                  <p className="text-sm font-semibold text-brand-dark">Acompte encaissé</p>
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <Input
+                      id="member-deposit-amount-edit"
+                      label="Montant de l'acompte (DT) *"
+                      type="number"
+                      min={1}
+                      value={depositAmountDinars}
+                      onChange={(e) => setDepositAmountDinars(e.target.value)}
+                    />
+                    <PaymentMethodPicker
+                      value={paymentMethod}
+                      onChange={setPaymentMethod}
+                      label="Moyen de paiement de l'acompte *"
+                    />
+                  </div>
+                  {editingExpectedPackAmount != null ? (
+                    <div className="rounded-lg border border-amber-200/70 bg-white/80 px-3 py-2 text-xs text-brand-dark/75">
+                      <p>
+                        Total attendu : <span className="font-semibold">{editingExpectedPackAmount} DT</span>
+                      </p>
+                      <p>
+                        Solde restant :{" "}
+                        <span className="font-semibold text-brand-dark">
+                          {editingDepositRemaining ?? editingExpectedPackAmount} DT
+                        </span>
+                      </p>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {!editingMemberId ? (
+                <Textarea
+                  id="member-note"
+                  label="Note (optionnel)"
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  placeholder="Ex. : préférences, informations utiles pour le studio…"
+                  rows={3}
+                  maxLength={2000}
                 />
-                <SelectMenu
-                  id="member-pack"
-                  value={packId}
-                  onChange={(value) => setPackId(value)}
-                  label="Pack choisi *"
-                  options={[
-                    { value: "" as string, label: packCategory ? "Choisir un pack" : "Catégorie d'abord" },
-                    ...packsForCategory.map((pack) => ({
-                      value: pack.id,
-                      label: formatPackSelectOptionLabel(pack),
-                    })),
-                  ]}
-                />
-                <Input
-                  id="member-phone"
-                  label="Téléphone *"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                />
-              </div>
+              ) : null}
 
               {!editingMemberId ? (
                 <>
@@ -1245,7 +1543,9 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                 </>
               ) : null}
 
-              <Checkbox checked={isActive} onChange={(e) => setIsActive(e.target.checked)} label="Active" />
+              {!isEditingDepositPending ? (
+                <Checkbox checked={isActive} onChange={(e) => setIsActive(e.target.checked)} label="Active" />
+              ) : null}
 
               {!editingMemberId ? (
                 <>
@@ -1288,25 +1588,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                     />
                   ) : null}
 
-                  <div>
-                    <p className="text-sm font-semibold text-brand-dark">Moyen de paiement *</p>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {PACK_PAYMENT_METHODS.map((method) => (
-                        <button
-                          key={method}
-                          type="button"
-                          onClick={() => setPaymentMethod(method)}
-                          className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
-                            paymentMethod === method
-                              ? "bg-brand-dark text-white"
-                              : "border border-brand-medium/30 bg-white text-brand-dark"
-                          }`}
-                        >
-                          {PACK_PAYMENT_METHOD_LABELS[method]}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+                  <PaymentMethodPicker value={paymentMethod} onChange={setPaymentMethod} />
                 </>
               ) : null}
           </div>
@@ -1344,9 +1626,12 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
         title="Supprimer cette adhérente ?"
         description={
           memberToDelete
-            ? `${memberToDelete.firstName ?? ""} ${memberToDelete.lastName ?? ""}`.trim() ||
-              memberToDelete.email ||
-              "Cette fiche sera supprimée ainsi que le compte utilisateur associé."
+            ? memberToDelete.enrollmentStatus === "DEPOSIT_PENDING"
+              ? `${memberToDelete.firstName ?? ""} ${memberToDelete.lastName ?? ""}`.trim() ||
+                "Cette avance sera supprimée définitivement, y compris l'acompte enregistré."
+              : `${memberToDelete.firstName ?? ""} ${memberToDelete.lastName ?? ""}`.trim() ||
+                memberToDelete.email ||
+                "Cette fiche sera supprimée ainsi que le compte utilisateur associé."
             : undefined
         }
         confirmText="Supprimer"

@@ -2,10 +2,10 @@
 
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useState } from "react";
 import { useToast } from "@/components/ui/toast-provider";
-import { Button, Checkbox, ConfirmDialog, Input, Select, Textarea } from "@/components/ui";
+import { Button, Checkbox, ConfirmDialog, Input, Select, SelectMenu, Textarea } from "@/components/ui";
 import { PACK_CATEGORY_OPTIONS, normalizePackCategory, packCategoryMenuLabel } from "@/lib/pack-categories";
 import { formatPackDurationLabel, splitPackDurationForForm, type PackDurationUnit } from "@/lib/pack-duration";
-import { formatPackPriceDt } from "@/lib/public-pack-display";
+import { formatPackPriceDt, resolvePackSessionCount, sortPacksBySessionAsc } from "@/lib/public-pack-display";
 
 const PACK_DURATION_INPUT_CLASS =
   "min-w-0 flex-1 rounded-xl border border-brand-medium/30 bg-white px-4 py-3 text-sm text-brand-dark outline-none transition placeholder:text-brand-dark/45 focus:border-brand-dark/60";
@@ -54,6 +54,7 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
   const [packToDelete, setPackToDelete] = useState<PackItem | null>(null);
 
   const [search, setSearch] = useState("");
+  const [listCategoryFilter, setListCategoryFilter] = useState("");
   const [category, setCategory] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -68,14 +69,28 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
   const isMixedPack = category.trim() === "Pilates reformer + Mat pilates";
 
   const visibleItems = useMemo(() => {
+    let list = items;
+
+    if (listCategoryFilter.trim()) {
+      const cat = normalizePackCategory(listCategoryFilter);
+      list = list.filter((item) => normalizePackCategory(item.category ?? "") === cat);
+      list = sortPacksBySessionAsc(list);
+    }
+
     const q = search.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter((item) => {
+    if (!q) return list;
+    return list.filter((item) => {
+      const sessions = resolvePackSessionCount(item);
       const haystack =
-        `${packCategoryMenuLabel(item.category)} ${item.category ?? ""} ${item.name} ${item.features.join(" ")}`.toLowerCase();
+        `${packCategoryMenuLabel(item.category)} ${item.category ?? ""} ${item.name} ${sessions ?? ""} ${item.features.join(" ")}`.toLowerCase();
       return haystack.includes(q);
     });
-  }, [items, search]);
+  }, [items, search, listCategoryFilter]);
+
+  const formatPackSessions = (item: PackItem) => {
+    const count = resolvePackSessionCount(item);
+    return count !== null ? String(count) : "—";
+  };
 
   const loadPacks = async () => {
     setIsLoading(true);
@@ -267,25 +282,58 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
         ) : (
           <div className="rounded-2xl border border-brand-medium/20 bg-white">
             <div className="border-b border-brand-medium/20 px-5 py-4">
-              <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-                <div>
+              <div className="flex w-full flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                <div className="shrink-0">
                   <p className="text-base font-semibold text-brand-dark">Liste des packs</p>
-                  <p className="mt-1 text-xs text-brand-dark/60">{visibleItems.length} résultat(s)</p>
+                  <p className="mt-1 text-xs text-brand-dark/60">
+                    {search.trim() || listCategoryFilter.trim()
+                      ? `${visibleItems.length} résultat(s) sur ${items.length} pack(s)`
+                      : `${items.length} pack(s) au total`}
+                    {listCategoryFilter.trim()
+                      ? ` · triés par séances (${packCategoryMenuLabel(listCategoryFilter)})`
+                      : null}
+                  </p>
                 </div>
-                <div className="w-full md:max-w-md">
+                <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-end sm:justify-end md:ml-auto md:shrink-0">
+                  <SelectMenu
+                    id="packs-category-filter"
+                    value={listCategoryFilter}
+                    onChange={setListCategoryFilter}
+                    className="w-full sm:w-[11rem]"
+                    options={[
+                      { value: "", label: "Toutes catégories" },
+                      ...PACK_CATEGORY_OPTIONS.map((opt) => ({ value: opt.value, label: opt.label })),
+                    ]}
+                  />
                   <Input
                     id="packs-search"
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
                     placeholder="Nom, catégorie, point..."
-                    className="mt-0 py-2.5"
+                    className="mt-0 w-full py-2.5 sm:w-[14rem]"
                   />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearch("");
+                      setListCategoryFilter("");
+                    }}
+                    aria-label="Réinitialiser les filtres"
+                    title="Réinitialiser"
+                    className="flex h-[42px] w-[42px] shrink-0 items-center justify-center self-end rounded-xl border border-brand-medium/30 bg-white text-lg font-semibold text-brand-dark/70 transition hover:bg-zinc-50 hover:text-brand-dark sm:self-auto"
+                  >
+                    ×
+                  </button>
                 </div>
               </div>
             </div>
 
             {visibleItems.length === 0 ? (
-              <div className="px-5 py-10 text-center text-sm text-brand-dark/60">Aucun pack pour le moment.</div>
+              <div className="px-5 py-10 text-center text-sm text-brand-dark/60">
+                {search.trim() || listCategoryFilter.trim()
+                  ? "Aucun pack ne correspond aux filtres."
+                  : "Aucun pack pour le moment."}
+              </div>
             ) : (
               <>
                 <div className="divide-y divide-brand-medium/15 lg:hidden">
@@ -296,7 +344,7 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
                       </div>
                       <p className="text-xs text-brand-dark/75">Catégorie : {packCategoryMenuLabel(item.category)}</p>
                       <p className="text-xs text-brand-dark/75">
-                        Séances : {item.sessionCount !== null ? item.sessionCount : "—"}
+                        Séances : {formatPackSessions(item)}
                       </p>
                       <p className="text-xs text-brand-dark/75">
                         Duree: {item.durationDays != null && item.durationDays !== "" ? item.durationDays : "—"}
@@ -345,7 +393,7 @@ export const PacksManager = forwardRef<PacksManagerHandle, PacksManagerProps>(fu
                         <tr key={item.id} className="text-sm">
                           <td className="px-5 py-4 text-left text-brand-dark/80">{packCategoryMenuLabel(item.category)}</td>
                           <td className="px-4 py-4 text-center font-semibold text-brand-dark">{item.name}</td>
-                          <td className="px-4 py-4 text-center text-brand-dark/80">{item.sessionCount ?? "—"}</td>
+                          <td className="px-4 py-4 text-center text-brand-dark/80">{formatPackSessions(item)}</td>
                           <td className="px-4 py-4 text-center text-brand-dark/80">
                             {item.priceCents != null ? formatPackPriceDt(item.priceCents) : "—"}
                           </td>

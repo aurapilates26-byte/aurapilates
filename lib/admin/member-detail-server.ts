@@ -34,6 +34,7 @@ export type MemberDetailData = {
   depositPaymentMethod: PackPaymentMethodValue | null;
   pendingPacks: MemberPendingPackItem[];
   personalDiscount: { type: "PERCENT" | "AMOUNT"; value: number; reason: string | null } | null;
+  note: string | null;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -71,6 +72,7 @@ function mapMemberRecord(
     personalDiscountType: "PERCENT" | "AMOUNT" | null;
     personalDiscountValue: number | null;
     personalDiscountReason: string | null;
+    note: string | null;
     isActive: boolean;
     createdAt: Date;
     updatedAt: Date;
@@ -127,6 +129,7 @@ function mapMemberRecord(
             reason: record.personalDiscountReason ?? null,
           }
         : null,
+    note: record.note?.trim() || null,
     isActive: record.isActive,
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
