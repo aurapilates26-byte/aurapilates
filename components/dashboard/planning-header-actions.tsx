@@ -31,7 +31,7 @@ export function PlanningHeaderActions({
   const openPeriod = () => onChangeViewMode("period-form");
   const backToList = () => onChangeViewMode("list");
 
-  const periodLabel = isPeriod ? "Planning" : "Période";
+  const periodLabel = isPeriod ? "Planning" : "Réglages";
   const sessionLabel = isList ? "Ajouter une séance" : isSession ? "Revenir au planning" : "Ajouter une séance";
   const sessionShort = isList ? "Ajouter" : "Planning";
 
@@ -60,7 +60,7 @@ export function PlanningHeaderActions({
           onClick={openPeriod}
           className={periodBtnClass}
           aria-pressed="false"
-          title="Configurer la période"
+          title="Réglages réservation"
         >
           {periodLabel}
         </button>

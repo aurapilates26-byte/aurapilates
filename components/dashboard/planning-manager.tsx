@@ -32,7 +32,6 @@ import { usePlanningPeriodStore } from "@/store/planning-period-store";
 import type { AdminCoach } from "@/types/admin/coach";
 import type {
   AdminPlanningItem,
-  PlanningAdminScope,
   PlanningArchivedPeriodItem,
   PlanningDayOfWeek,
   PlanningGridNavSlot,
@@ -51,8 +50,6 @@ export type PlanningManagerHandle = {
 type PlanningManagerProps = {
   viewMode: PlanningViewMode;
   onChangeViewMode: (mode: PlanningViewMode) => void;
-  periodSettingsTab?: PlanningAdminScope;
-  onPeriodSettingsTabChange?: (tab: PlanningAdminScope) => void;
   sessionFormSource?: PlanningSessionFormSource;
   onSessionFormSourceChange?: (source: PlanningSessionFormSource) => void;
   sessionFormReturnView?: "list" | "period-form";
@@ -84,16 +81,6 @@ const dayLabels: Record<PlanningDayOfWeek, string> = {
 };
 
 const orderedDays: PlanningDayOfWeek[] = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
-
-function sessionYmdForHistoricalSlot(
-  item: AdminPlanningItem,
-  selectedDay: PlanningDayOfWeek,
-  periodConfig: PlanningPeriodConfig,
-): string | null {
-  if (item.anchorSessionYmd) return item.anchorSessionYmd;
-  const options = buildPeriodDaySelectOptions(periodConfig.periodStartYmd, periodConfig.periodEndYmd);
-  return options.find((o) => o.dayOfWeek === selectedDay)?.sessionYmd ?? null;
-}
 
 function todayPlanningDay(): PlanningDayOfWeek {
   const jsDay = new Date().getDay();
@@ -143,8 +130,6 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   {
     viewMode,
     onChangeViewMode,
-    periodSettingsTab = "published",
-    onPeriodSettingsTabChange = () => {},
     sessionFormSource = "list",
     onSessionFormSourceChange = () => {},
     sessionFormReturnView = "list",
@@ -181,8 +166,6 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
 
   const [archivedPeriods, setArchivedPeriods] = useState<PlanningArchivedPeriodItem[]>([]);
   const [selectedArchiveStartYmd, setSelectedArchiveStartYmd] = useState("");
-  const [archivesLoading, setArchivesLoading] = useState(false);
-  const [seedingArchives, setSeedingArchives] = useState(false);
   const [draftSelectedDay, setDraftSelectedDay] = useState<PlanningDayOfWeek>(() => todayPlanningDay());
   const [historicalSlot, setHistoricalSlot] = useState<AdminPlanningItem | null>(null);
   const [historicalSessionYmd, setHistoricalSessionYmd] = useState<string | null>(null);
@@ -293,16 +276,6 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   const draftItems = draftGridCacheKey ? gridCache[draftGridCacheKey] ?? [] : [];
   const archiveItems = archiveGridCacheKey ? gridCache[archiveGridCacheKey] ?? [] : [];
 
-  const draftLoading = Boolean(
-    draftGridCacheKey && !hasGridCache(draftGridCacheKey) && gridLoadingKey === draftGridCacheKey,
-  );
-  const archiveLoading = Boolean(
-    archiveGridCacheKey && !hasGridCache(archiveGridCacheKey) && gridLoadingKey === archiveGridCacheKey,
-  );
-
-  const draftError = draftGridCacheKey && gridErrorKey === draftGridCacheKey ? gridError : null;
-  const archiveError = archiveGridCacheKey && gridErrorKey === archiveGridCacheKey ? gridError : null;
-
   const loadGridSlot = useCallback(
     async (slot: PlanningGridNavSlot, options?: { force?: boolean }) => {
       const key = planningGridCacheKey(slot);
@@ -347,18 +320,10 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     return computePlanningCourseEnd(startTime, duration);
   }, [durationMinutes, startTime]);
 
-  const isDraftContext =
-    sessionFormSource === "draft" ||
-    (viewMode === "period-form" && periodSettingsTab === "draft");
-
-  const isArchiveContext =
-    sessionFormSource === "archive" ||
-    (viewMode === "period-form" && periodSettingsTab === "archive");
-
-  const isPeriodPlanningContext = isArchiveContext || isDraftContext;
+  const isDraftContext = sessionFormSource === "draft";
+  const isArchiveContext = sessionFormSource === "archive";
 
   const loadArchives = useCallback(async () => {
-    setArchivesLoading(true);
     try {
       const res = await fetch("/api/admin/planning-archives", { cache: "no-store" });
       const data = (await res.json()) as { items?: PlanningArchivedPeriodItem[]; error?: string };
@@ -375,41 +340,6 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
         title: "Historique",
         description: e instanceof Error ? e.message : "Chargement impossible.",
       });
-    } finally {
-      setArchivesLoading(false);
-    }
-  }, [toast]);
-
-  const seedArchives = useCallback(async () => {
-    setSeedingArchives(true);
-    try {
-      const res = await fetch("/api/admin/planning-archives", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "seed" }),
-      });
-      const data = (await res.json()) as {
-        items?: PlanningArchivedPeriodItem[];
-        created?: number;
-        error?: string;
-      };
-      if (!res.ok) throw new Error(data.error ?? "Import impossible.");
-      const list = data.items ?? [];
-      setArchivedPeriods(list);
-      setSelectedArchiveStartYmd(list[0]?.periodStartYmd ?? "");
-      toast({
-        variant: "success",
-        title: "Périodes importées",
-        description: `${data.created ?? 0} période(s) ajoutée(s) à l'historique.`,
-      });
-    } catch (e) {
-      toast({
-        variant: "error",
-        title: "Import",
-        description: e instanceof Error ? e.message : "Import impossible.",
-      });
-    } finally {
-      setSeedingArchives(false);
     }
   }, [toast]);
 
@@ -446,21 +376,6 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     [draftPeriodConfig, loadGridSlot],
   );
 
-  const openHistoricalPresence = (item: AdminPlanningItem) => {
-    if (!selectedArchivePeriod) return;
-    const ymd = sessionYmdForHistoricalSlot(item, selectedDay, selectedArchivePeriod);
-    if (!ymd) {
-      toast({
-        variant: "error",
-        title: "Date introuvable",
-        description: "Impossible de déterminer la date du cours.",
-      });
-      return;
-    }
-    setHistoricalSlot(item);
-    setHistoricalSessionYmd(ymd);
-  };
-
   useEffect(() => {
     if (showList) void loadArchives();
   }, [showList, loadArchives]);
@@ -487,24 +402,6 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
       onSessionFormSourceChange("list");
     }
   }, [showList, currentGridSlot, loadGridSlot, onSessionFormSourceChange]);
-
-  useEffect(() => {
-    if (viewMode === "period-form" && periodSettingsTab === "archive") {
-      void loadArchives();
-    }
-  }, [viewMode, periodSettingsTab, loadArchives]);
-
-  useEffect(() => {
-    if (viewMode === "period-form" && periodSettingsTab === "archive" && selectedArchiveStartYmd) {
-      void loadArchivePlanning(selectedArchiveStartYmd);
-    }
-  }, [viewMode, periodSettingsTab, selectedArchiveStartYmd, loadArchivePlanning]);
-
-  useEffect(() => {
-    if (viewMode === "period-form" && periodSettingsTab === "draft" && draftPeriodConfig) {
-      void loadDraftPlanning();
-    }
-  }, [viewMode, periodSettingsTab, draftPeriodConfig, loadDraftPlanning]);
 
   useEffect(() => {
     if (!draftPeriodConfig) return;
@@ -861,11 +758,8 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
 
   useImperativeHandle(ref, () => ({
     refresh() {
-      if (viewMode === "period-form" && periodSettingsTab === "archive" && selectedArchiveStartYmd) {
-        void loadArchives();
-        void loadArchivePlanning(selectedArchiveStartYmd, { force: true });
-      } else if (viewMode === "period-form" && periodSettingsTab === "draft") {
-        void loadDraftPlanning({ force: true });
+      if (viewMode === "period-form") {
+        void fetchPeriodConfig({ source: "admin", force: true });
       } else if (currentGridSlot) {
         void loadGridSlot(currentGridSlot, { force: true });
       }
@@ -881,47 +775,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   return (
     <div className="space-y-6">
       {viewMode === "period-form" ? (
-        <PlanningPeriodSettingsPanel
-          settingsTab={periodSettingsTab}
-          onSettingsTabChange={onPeriodSettingsTabChange}
-          onSaved={() => {
-            void fetchPeriodConfig({ source: "admin", force: true });
-            void loadDraftPlanning();
-          }}
-          archiveProps={{
-            archivedPeriods,
-            selectedArchiveStartYmd,
-            onSelectedArchiveStartYmdChange: setSelectedArchiveStartYmd,
-            archivesLoading,
-            seedingArchives,
-            onSeedArchives: () => void seedArchives(),
-            selectedArchivePeriod,
-            selectedDay,
-            onSelectedDayChange: (day) => {
-              setSelectedDay(day);
-              setDayOfWeek(day);
-            },
-            items: archiveItems,
-            isLoading: archiveLoading,
-            error: archiveError,
-            onEditSession: (item) => handleStartEdit(item, { fromArchive: true }),
-            onDeleteSession: setItemToDelete,
-            onOpenPresence: openHistoricalPresence,
-          }}
-          draftProps={{
-            draftPeriod: draftPeriodConfig,
-            selectedDay: draftSelectedDay,
-            onSelectedDayChange: (day) => {
-              setDraftSelectedDay(day);
-              setDayOfWeek(day);
-            },
-            items: draftItems,
-            isLoading: draftLoading,
-            error: draftError,
-            onEditSession: (item) => handleStartEdit(item, { fromDraft: true }),
-            onDeleteSession: setItemToDelete,
-          }}
-        />
+        <PlanningPeriodSettingsPanel />
       ) : showList ? (
         showGridSpinner ? (
           <PlanningGridLoadingState />
