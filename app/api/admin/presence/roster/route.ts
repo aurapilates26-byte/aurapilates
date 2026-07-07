@@ -8,15 +8,8 @@ import {
   parseYmdToPrismaDate,
   startOfLocalToday,
 } from "@/lib/calendar-day";
-import {
-  getAdminOperationalPlanningSlotsForDate,
-  pickActiveOperationalSlot,
-} from "@/lib/admin/planning-operational-slots";
-import {
-  isPresenceWindowOpen,
-  localNowTimeString,
-  minus15Minutes,
-} from "@/lib/admin/presence-window";
+import { getAdminOperationalPlanningSlotsForDate, type OperationalPlanningSlot } from "@/lib/admin/planning-operational-slots";
+import { localNowTimeString, minus15Minutes } from "@/lib/admin/presence-window";
 import { repairAttendedReservationsWithoutAttendance } from "@/lib/ensure-reservation-attendance";
 import { prisma } from "@/lib/prisma";
 
@@ -67,8 +60,6 @@ function formatDayLabelFr(targetYmd: string, todayYmd: string) {
   if (targetYmd === todayYmd) return "aujourd'hui";
   const [y, m, d] = targetYmd.split("-").map(Number);
   const target = new Date(y, (m ?? 1) - 1, d ?? 1);
-  const tomorrow = new Date(target.getFullYear(), target.getMonth(), target.getDate() - 0);
-  // build tomorrow from "today" for exact compare (avoid DST weirdness)
   const [ty, tm, td] = todayYmd.split("-").map(Number);
   const t = new Date(ty, (tm ?? 1) - 1, td ?? 1);
   const tmr = new Date(t.getFullYear(), t.getMonth(), t.getDate() + 1);
@@ -79,6 +70,156 @@ function formatDayLabelFr(targetYmd: string, todayYmd: string) {
   const weekday = rawWeekday ? `${rawWeekday.slice(0, 1).toUpperCase()}${rawWeekday.slice(1)}` : rawWeekday;
   const dateFr = target.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" });
   return `${weekday} ${dateFr}`;
+}
+
+type ClassRosterPayload = {
+  planningId: string;
+  courseSlug: string;
+  courseLabel: string;
+  startTime: string;
+  endTime: string;
+  level: string | null;
+  capacity: number;
+  waitlistCapacity: number | null;
+  coachName: string | null;
+  coachImageUrl: string | null;
+  scannedReservationId: string | null;
+  scannedReservationStatus: string | null;
+  reservations: {
+    id: string;
+    status: string;
+    member: {
+      id: string;
+      firstName: string | null;
+      lastName: string | null;
+      email: string | null;
+      phone: string | null;
+      qrPublicId: string | null;
+    };
+  }[];
+};
+
+async function loadTodayClassRosters(
+  operationalSlots: OperationalPlanningSlot[],
+  sessionDateDb: Date,
+  memberLookupId: string | null,
+  includeQrOnMembers: boolean,
+): Promise<ClassRosterPayload[]> {
+  const planningIds = operationalSlots.map((s) => s.id);
+  if (planningIds.length === 0) return [];
+
+  const plannings = await prisma.planning.findMany({
+    where: { id: { in: planningIds } },
+    include: {
+      coach: { select: { firstName: true, lastName: true, imageUrl: true } },
+      reservations: {
+        where: {
+          sessionDate: sessionDateDb,
+          status: { in: ["BOOKED", "WAITLIST", "ATTENDED"] },
+        },
+        orderBy: { createdAt: "asc" },
+        include: {
+          member: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              phone: true,
+              user: { select: { email: true } },
+              ...(includeQrOnMembers
+                ? { assignedQrCodes: { take: 1, orderBy: { updatedAt: "desc" as const }, select: { publicId: true } } }
+                : {}),
+            },
+          },
+          attendance: { select: { markedAt: true } },
+        },
+      },
+    },
+    orderBy: { startTime: "asc" },
+  });
+
+  const repairIds = plannings.flatMap((p) =>
+    p.reservations.filter((r) => r.status === "ATTENDED" && !r.attendance).map((r) => r.id),
+  );
+  if (repairIds.length > 0) {
+    await repairAttendedReservationsWithoutAttendance(repairIds);
+    const refreshed = await prisma.planning.findMany({
+      where: { id: { in: planningIds } },
+      include: {
+        coach: { select: { firstName: true, lastName: true, imageUrl: true } },
+        reservations: {
+          where: {
+            sessionDate: sessionDateDb,
+            status: { in: ["BOOKED", "WAITLIST", "ATTENDED"] },
+          },
+          orderBy: { createdAt: "asc" },
+          include: {
+            member: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                phone: true,
+                user: { select: { email: true } },
+                ...(includeQrOnMembers
+                  ? { assignedQrCodes: { take: 1, orderBy: { updatedAt: "desc" as const }, select: { publicId: true } } }
+                  : {}),
+              },
+            },
+            attendance: { select: { markedAt: true } },
+          },
+        },
+      },
+      orderBy: { startTime: "asc" },
+    });
+    for (const refreshedPlanning of refreshed) {
+      const idx = plannings.findIndex((p) => p.id === refreshedPlanning.id);
+      if (idx >= 0) plannings[idx] = refreshedPlanning;
+    }
+  }
+
+  const planningById = new Map(plannings.map((planning) => [planning.id, planning]));
+
+  return operationalSlots.flatMap((slot) => {
+    const planning = planningById.get(slot.id);
+    if (!planning) return [];
+
+    const scannedReservation = memberLookupId
+      ? planning.reservations.find((r) => r.member.id === memberLookupId)
+      : null;
+
+    return [
+      {
+        planningId: planning.id,
+        courseSlug: planning.courseSlug,
+        courseLabel: courseLabel(planning.courseSlug),
+        startTime: planning.startTime,
+        endTime: planning.endTime,
+        level: planning.level,
+        capacity: planning.capacity,
+        waitlistCapacity: planning.waitlistCapacity,
+        coachName: planning.coach ? `${planning.coach.firstName} ${planning.coach.lastName}`.trim() : null,
+        coachImageUrl: planning.coach?.imageUrl ?? null,
+        scannedReservationId: scannedReservation?.id ?? null,
+        scannedReservationStatus: scannedReservation?.status ?? null,
+        reservations: planning.reservations.map((r) => ({
+          id: r.id,
+          status: r.status,
+          member: {
+            id: r.member.id,
+            firstName: r.member.firstName,
+            lastName: r.member.lastName,
+            email: r.member.user?.email ?? null,
+            phone: r.member.phone ?? null,
+            qrPublicId:
+              includeQrOnMembers && "assignedQrCodes" in r.member
+                ? (r.member.assignedQrCodes as { publicId: string }[])[0]?.publicId ?? null
+                : null,
+          },
+        })),
+      },
+    ];
+  });
 }
 
 export async function GET(request: Request) {
@@ -127,10 +268,19 @@ export async function GET(request: Request) {
   const nowTime = localNowTimeString();
 
   const operationalToday = await getAdminOperationalPlanningSlotsForDate(sessionDateYmd);
-  const operationalIds = new Set(operationalToday.map((s) => s.id));
-  const activeSlot = pickActiveOperationalSlot(operationalToday, nowTime);
+  const memberLookupId = qr?.assignedMemberId ?? member?.id ?? null;
+  const includeQrOnMembers = Boolean(memberLookupId);
 
-  const memberIdForNext = (qr?.assignedMemberId ?? member?.id) || null;
+  const classes = await loadTodayClassRosters(
+    operationalToday,
+    sessionDateDb,
+    memberLookupId,
+    includeQrOnMembers,
+  );
+
+  const scannedMember = qr?.assignedMember ?? member ?? null;
+
+  const memberIdForNext = memberLookupId;
   const nextReservedAfterNow =
     memberIdForNext
       ? await prisma.reservation.findFirst({
@@ -138,9 +288,7 @@ export async function GET(request: Request) {
             memberId: memberIdForNext,
             status: { in: ["BOOKED", "WAITLIST"] },
             OR: [
-              // Futur (demain et après)
               { sessionDate: { gt: sessionDateDb } },
-              // Aujourd'hui mais à venir (après maintenant)
               { sessionDate: sessionDateDb, planning: { startTime: { gt: nowTime } } },
             ],
           },
@@ -153,371 +301,44 @@ export async function GET(request: Request) {
 
   const nextUpcomingClass =
     nextReservedAfterNow != null
-      ? (() => {
-          const nextYmd = formatYmdPrismaDate(new Date(nextReservedAfterNow.sessionDate));
-          const opensAt = minus15Minutes(nextReservedAfterNow.planning.startTime);
-          const dayLabel = formatDayLabelFr(nextYmd, sessionDateYmd);
-          const coachName = nextReservedAfterNow.planning.coach
-            ? `${nextReservedAfterNow.planning.coach.firstName} ${nextReservedAfterNow.planning.coach.lastName}`.trim()
-            : null;
-          const coachImageUrl = nextReservedAfterNow.planning.coach?.imageUrl ?? null;
-
-          return {
-            planningId: nextReservedAfterNow.planningId,
-            courseSlug: nextReservedAfterNow.planning.courseSlug,
-            courseLabel: courseLabel(nextReservedAfterNow.planning.courseSlug),
-            sessionDate: nextYmd,
-            dayLabel,
-            opensAt,
-            startTime: nextReservedAfterNow.planning.startTime,
-            endTime: nextReservedAfterNow.planning.endTime,
-            level: nextReservedAfterNow.planning.level,
-            capacity: nextReservedAfterNow.planning.capacity,
-            waitlistCapacity: nextReservedAfterNow.planning.waitlistCapacity,
-            coachName,
-            coachImageUrl,
-          };
-        })()
+      ? buildUpcomingClassPayload(nextReservedAfterNow, sessionDateYmd)
       : null;
 
-  // Mode manuel (sans QR): on affiche la liste du créneau ouvrable actuel (ou prochain dans ≤15min).
-  if (!qrPublicId && !memberId) {
-    if (!activeSlot) {
-      return Response.json({
-        scannedMember: null,
-        sessionDate: sessionDateYmd,
-        nowTime,
-        message: "Aucun cours disponible pour le moment.",
-        class: null,
-        upcomingClass: null,
-        nextUpcomingClass: null,
-      });
-    }
-
-    const planning = await prisma.planning.findUnique({
-      where: { id: activeSlot.id },
-      include: {
-        coach: { select: { firstName: true, lastName: true, imageUrl: true } },
-        reservations: {
+  const nextReservedFutureDay =
+    memberLookupId && classes.every((c) => !c.scannedReservationId)
+      ? await prisma.reservation.findFirst({
           where: {
-            sessionDate: sessionDateDb,
-            status: { in: ["BOOKED", "WAITLIST", "ATTENDED"] },
+            memberId: memberLookupId,
+            status: { in: ["BOOKED", "WAITLIST"] },
+            sessionDate: { gt: sessionDateDb },
           },
-          orderBy: { createdAt: "asc" },
+          orderBy: [{ sessionDate: "asc" }, { planning: { startTime: "asc" } }, { createdAt: "asc" }],
           include: {
-            member: {
-              select: {
-                id: true,
-                firstName: true,
-                lastName: true,
-                phone: true,
-                user: { select: { email: true } },
-              },
-            },
+            planning: { include: { coach: { select: { firstName: true, lastName: true, imageUrl: true } } } },
           },
-        },
-      },
-    });
-
-    if (!planning) return errorResponse("Créneau introuvable", 404);
-
-    return Response.json({
-      scannedMember: null,
-      sessionDate: sessionDateYmd,
-      nowTime,
-      message: null,
-      class: {
-        planningId: planning.id,
-        courseSlug: planning.courseSlug,
-        courseLabel: courseLabel(planning.courseSlug),
-        startTime: planning.startTime,
-        endTime: planning.endTime,
-        level: planning.level,
-        capacity: planning.capacity,
-        waitlistCapacity: planning.waitlistCapacity,
-        coachName: planning.coach ? `${planning.coach.firstName} ${planning.coach.lastName}`.trim() : null,
-        coachImageUrl: planning.coach?.imageUrl ?? null,
-        scannedReservationId: null,
-        scannedReservationStatus: null,
-        reservations: planning.reservations.map((r) => ({
-          id: r.id,
-          status: r.status,
-          member: {
-            id: r.member.id,
-            firstName: r.member.firstName,
-            lastName: r.member.lastName,
-            email: r.member.user?.email ?? null,
-            phone: r.member.phone ?? null,
-          },
-        })),
-      },
-      upcomingClass: null,
-      nextUpcomingClass: null,
-    });
-  }
-
-  const nextReserved = await prisma.reservation.findFirst({
-    where: {
-      memberId: (qr?.assignedMemberId ?? member?.id)!,
-      status: { in: ["BOOKED", "WAITLIST"] },
-      OR: [
-        // Futur (demain et après)
-        { sessionDate: { gt: sessionDateDb } },
-        // Aujourd'hui mais pas terminé
-        { sessionDate: sessionDateDb, planning: { endTime: { gte: nowTime } } },
-      ],
-    },
-    orderBy: [{ sessionDate: "asc" }, { planning: { startTime: "asc" } }, { createdAt: "asc" }],
-    include: {
-      planning: { include: { coach: { select: { firstName: true, lastName: true, imageUrl: true } } } },
-    },
-  });
-
-  // Si aucun cours "ouvrable" maintenant (activeSlot null),
-  // on affiche un message guidant l'admin vers le prochain cours réservé (aujourd'hui/demain/…).
-  if (!activeSlot) {
-    if (!nextReserved) {
-      return Response.json({
-        scannedMember: qr?.assignedMember ?? member,
-        sessionDate: sessionDateYmd,
-        nowTime,
-        message: "Aucun cours réservé pour ce membre (aujourd'hui ou après).",
-        class: null,
-        upcomingClass: null,
-        nextUpcomingClass: null,
-      });
-    }
-
-    // sessionDate est un @db.Date => sérialisé en JS à minuit UTC.
-    // On utilise le format Prisma (UTC) pour éviter un décalage de jour en local.
-    const nextYmd = formatYmdPrismaDate(new Date(nextReserved.sessionDate));
-    const opensAt = minus15Minutes(nextReserved.planning.startTime);
-    const dayLabel = formatDayLabelFr(nextYmd, sessionDateYmd);
-    const coachName = nextReserved.planning.coach
-      ? `${nextReserved.planning.coach.firstName} ${nextReserved.planning.coach.lastName}`.trim()
-      : null;
-    const coachImageUrl = nextReserved.planning.coach?.imageUrl ?? null;
-
-    return Response.json({
-      scannedMember: qr?.assignedMember ?? member,
-      sessionDate: sessionDateYmd,
-      nowTime,
-      message: null,
-      class: null,
-      upcomingClass: {
-        planningId: nextReserved.planningId,
-        courseSlug: nextReserved.planning.courseSlug,
-        courseLabel: courseLabel(nextReserved.planning.courseSlug),
-        sessionDate: nextYmd,
-        dayLabel,
-        opensAt,
-        startTime: nextReserved.planning.startTime,
-        endTime: nextReserved.planning.endTime,
-        level: nextReserved.planning.level,
-        capacity: nextReserved.planning.capacity,
-        waitlistCapacity: nextReserved.planning.waitlistCapacity,
-        coachName,
-        coachImageUrl,
-      },
-      nextUpcomingClass: null,
-    });
-  }
-
-  const memberLookupId = qr?.assignedMemberId ?? member?.id ?? null;
-  let targetSlot = activeSlot;
-
-  // Priorité au créneau du membre dont la fenêtre de présence est ouverte (ex. Mat 13h, pas le Reformer 12h affiché par défaut).
-  if (memberLookupId) {
-    const memberTodayReservations = (
-      await prisma.reservation.findMany({
-        where: {
-          memberId: memberLookupId,
-          sessionDate: sessionDateDb,
-          status: { in: ["BOOKED", "WAITLIST", "ATTENDED"] },
-        },
-        include: {
-          planning: {
-            include: { coach: { select: { firstName: true, lastName: true, imageUrl: true } } },
-          },
-        },
-        orderBy: { planning: { startTime: "asc" } },
-      })
-    ).filter((r) => operationalIds.has(r.planningId));
-
-    const openForMember = memberTodayReservations.find((r) =>
-      isPresenceWindowOpen(r.planning.startTime, r.planning.endTime, nowTime),
-    );
-    if (openForMember) {
-      targetSlot = openForMember.planning;
-    }
-  }
-
-  if (!targetSlot) {
-    if (!nextReserved) {
-      return Response.json({
-        scannedMember: qr?.assignedMember ?? member,
-        sessionDate: sessionDateYmd,
-        nowTime,
-        message: "Aucun cours réservé pour ce membre (aujourd'hui ou après).",
-        class: null,
-        upcomingClass: null,
-        nextUpcomingClass: null,
-      });
-    }
-    return Response.json({
-      scannedMember: qr?.assignedMember ?? member,
-      sessionDate: sessionDateYmd,
-      nowTime,
-      message: null,
-      class: null,
-      upcomingClass: buildUpcomingClassPayload(nextReserved, sessionDateYmd),
-      nextUpcomingClass,
-    });
-  }
-
-  const scannedReservation = await prisma.reservation.findFirst({
-    where: {
-      memberId: memberLookupId!,
-      planningId: targetSlot.id,
-      sessionDate: sessionDateDb,
-      status: { in: ["BOOKED", "WAITLIST", "ATTENDED"] },
-    },
-    select: { id: true, status: true },
-  });
-
-  if (!scannedReservation) {
-    const upcomingFromMember = nextReserved ? buildUpcomingClassPayload(nextReserved, sessionDateYmd) : null;
-    const activeLabel = activeSlot
-      ? `${courseLabel(activeSlot.courseSlug)} (${activeSlot.startTime}–${activeSlot.endTime})`
-      : null;
-    const beforePresenceOpens =
-      upcomingFromMember != null && nowTime < upcomingFromMember.opensAt;
-    const presenceHint = upcomingFromMember
-      ? `Marquage de la présence possible à partir de ${upcomingFromMember.opensAt} (15 min avant ${upcomingFromMember.startTime}).`
+        })
       : null;
 
-    let message: string;
-    if (beforePresenceOpens && presenceHint) {
-      message = activeLabel
-        ? `Ce membre n'est pas sur le cours affiché (${activeLabel}). Prochain cours réservé ci-dessous (consultation uniquement). ${presenceHint}`
-        : `Prochain cours réservé ci-dessous (consultation uniquement). ${presenceHint}`;
-    } else if (activeLabel) {
-      message = `Ce membre n'est pas inscrit au cours actuellement affiché (${activeLabel}). Son prochain cours réservé est ci-dessous.`;
-    } else {
-      message = "Ce membre n'est pas inscrite au cours actuellement disponible. Son prochain cours réservé est ci-dessous.";
-    }
+  const upcomingClass =
+    nextReservedFutureDay != null ? buildUpcomingClassPayload(nextReservedFutureDay, sessionDateYmd) : null;
 
-    return Response.json({
-      scannedMember: qr?.assignedMember ?? member,
-      sessionDate: sessionDateYmd,
-      nowTime,
-      message,
-      class: null,
-      upcomingClass: upcomingFromMember,
-      nextUpcomingClass:
-        upcomingFromMember && nextUpcomingClass?.planningId === upcomingFromMember.planningId
-          ? null
-          : nextUpcomingClass,
-    });
-  }
-
-  const planning = await prisma.planning.findUnique({
-    where: { id: targetSlot.id },
-    include: {
-      coach: { select: { firstName: true, lastName: true, imageUrl: true } },
-      reservations: {
-        where: {
-          sessionDate: sessionDateDb,
-          status: { in: ["BOOKED", "WAITLIST", "ATTENDED"] },
-        },
-        orderBy: { createdAt: "asc" },
-        include: {
-          member: {
-            select: {
-              id: true,
-              firstName: true,
-              lastName: true,
-              phone: true,
-              user: { select: { email: true } },
-              assignedQrCodes: { take: 1, orderBy: { updatedAt: "desc" }, select: { publicId: true } },
-            },
-          },
-          attendance: { select: { markedAt: true } },
-        },
-      },
-    },
-  });
-
-  if (!planning) {
-    return errorResponse("Créneau introuvable", 404);
-  }
-
-  const repairIds = planning.reservations
-    .filter((r) => r.status === "ATTENDED" && !r.attendance)
-    .map((r) => r.id);
-  if (repairIds.length > 0) {
-    await repairAttendedReservationsWithoutAttendance(repairIds);
-    const refreshed = await prisma.planning.findUnique({
-      where: { id: targetSlot.id },
-      include: {
-        coach: { select: { firstName: true, lastName: true, imageUrl: true } },
-        reservations: {
-          where: {
-            sessionDate: sessionDateDb,
-            status: { in: ["BOOKED", "WAITLIST", "ATTENDED"] },
-          },
-          orderBy: { createdAt: "asc" },
-          include: {
-            member: {
-              select: {
-                id: true,
-                firstName: true,
-                lastName: true,
-                phone: true,
-                user: { select: { email: true } },
-                assignedQrCodes: { take: 1, orderBy: { updatedAt: "desc" }, select: { publicId: true } },
-              },
-            },
-            attendance: { select: { markedAt: true } },
-          },
-        },
-      },
-    });
-    if (refreshed) planning.reservations = refreshed.reservations;
+  let message: string | null = null;
+  if (classes.length === 0) {
+    message = "Aucun cours prévu aujourd'hui.";
+  } else if (memberLookupId && classes.every((c) => !c.scannedReservationId) && !upcomingClass) {
+    message = "Ce membre n'est inscrit à aucun cours aujourd'hui ni à venir.";
+  } else if (memberLookupId && classes.every((c) => !c.scannedReservationId) && upcomingClass) {
+    message = `Ce membre n'est pas inscrite aux cours d'aujourd'hui. Prochain cours réservé ci-dessous.`;
   }
 
   return Response.json({
-    scannedMember: qr?.assignedMember ?? member,
+    scannedMember,
     sessionDate: sessionDateYmd,
     nowTime,
-    message: null,
-    class: {
-      planningId: planning.id,
-      courseSlug: planning.courseSlug,
-      courseLabel: courseLabel(planning.courseSlug),
-      startTime: planning.startTime,
-      endTime: planning.endTime,
-      level: planning.level,
-      capacity: planning.capacity,
-      waitlistCapacity: planning.waitlistCapacity,
-      coachName: planning.coach ? `${planning.coach.firstName} ${planning.coach.lastName}`.trim() : null,
-      coachImageUrl: planning.coach?.imageUrl ?? null,
-      scannedReservationId: scannedReservation.id,
-      scannedReservationStatus: scannedReservation.status,
-      reservations: planning.reservations.map((r) => ({
-        id: r.id,
-        status: r.status,
-        member: {
-          id: r.member.id,
-          firstName: r.member.firstName,
-          lastName: r.member.lastName,
-          email: r.member.user?.email ?? null,
-          phone: r.member.phone ?? null,
-          qrPublicId: r.member.assignedQrCodes[0]?.publicId ?? null,
-        },
-      })),
-    },
-    upcomingClass: null,
-    nextUpcomingClass,
+    message,
+    classes,
+    upcomingClass,
+    nextUpcomingClass:
+      upcomingClass && nextUpcomingClass?.planningId === upcomingClass.planningId ? null : nextUpcomingClass,
   });
 }

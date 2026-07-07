@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { DashboardHeader } from "@/components/dashboard/header";
 import { useToast } from "@/components/ui/toast-provider";
 import { planningLevelLabelFr } from "@/lib/planning-public-labels";
@@ -36,25 +36,12 @@ type RosterClass = {
   reservations: RosterRow[];
 };
 
-type CourseCardData = {
-  courseLabel: string;
-  startTime: string;
-  endTime: string;
-  level: string | null;
-  coachName: string | null;
-  coachImageUrl: string | null;
-  capacity: number;
-  waitlistCapacity: number | null;
-  dateLabel: string;
-  opensAt?: string;
-};
-
 type RosterResponse = {
   scannedMember: RosterMember | null;
   sessionDate: string;
   nowTime?: string;
   message?: string | null;
-  class: RosterClass | null;
+  classes: RosterClass[];
   upcomingClass?: {
     planningId: string;
     courseLabel: string;
@@ -116,10 +103,29 @@ function minus15(clock: string) {
   return `${outH}:${outM}`;
 }
 
-function isBeforePresenceOpens(nowTime: string | undefined, opensAt: string | undefined) {
-  if (!nowTime || !opensAt) return false;
-  return nowTime < opensAt;
+function getSessionPhase(
+  startTime: string,
+  endTime: string,
+  nowTime: string | undefined,
+): "upcoming" | "active" | "ended" {
+  if (!nowTime) return "active";
+  const opensAt = minus15(startTime);
+  if (nowTime < opensAt) return "upcoming";
+  if (endTime >= nowTime) return "active";
+  return "ended";
 }
+
+const sessionPhaseLabels: Record<"upcoming" | "active" | "ended", string> = {
+  upcoming: "À venir",
+  active: "En cours",
+  ended: "Terminé",
+};
+
+const sessionPhaseStyles: Record<"upcoming" | "active" | "ended", string> = {
+  upcoming: "border-sky-200 bg-sky-50 text-sky-900",
+  active: "border-emerald-200 bg-emerald-50 text-emerald-900",
+  ended: "border-zinc-200 bg-zinc-100 text-brand-dark/70",
+};
 
 /** Correspondance stricte nom (+ téléphone optionnel) parmi les résultats API. */
 function findExactMemberInResults(
@@ -422,27 +428,19 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
     };
   }, [memberNameFilter, memberPhoneFilter, qrPublicId, runManualSearch]);
 
-  const presenceSlotUi = useMemo(() => {
-    const upcoming = roster?.upcomingClass ?? roster?.nextUpcomingClass ?? null;
-    const mode: "active" | "upcoming" = roster?.class ? "active" : "upcoming";
-    const presenceOpensAt =
-      mode === "active" && roster?.class
-        ? minus15(roster.class.startTime)
-        : upcoming?.opensAt;
-    const markingLocked = isBeforePresenceOpens(roster?.nowTime, presenceOpensAt);
-    return { upcoming, mode, presenceOpensAt, markingLocked };
-  }, [roster]);
+  const presenceOpensAt = useCallback((startTime: string) => minus15(startTime), []);
 
-  const presenceOpensAt = useCallback((startTime: string) => {
-    const [hhRaw, mmRaw] = startTime.split(":");
-    const hh = Number(hhRaw ?? 0);
-    const mm = Number(mmRaw ?? 0);
-    const total = hh * 60 + mm - 15;
-    const clamped = ((total % (24 * 60)) + 24 * 60) % (24 * 60);
-    const outH = Math.floor(clamped / 60);
-    const outM = clamped % 60;
-    return `${String(outH).padStart(2, "0")}:${String(outM).padStart(2, "0")}`;
-  }, []);
+  const todayClasses = roster?.classes ?? [];
+
+  const canMarkInSession = useCallback(
+    (startTime: string, status: RosterRow["status"]) => {
+      if (status !== "BOOKED" && status !== "WAITLIST") return false;
+      const opensAt = presenceOpensAt(startTime);
+      if (roster?.nowTime && roster.nowTime < opensAt) return false;
+      return true;
+    },
+    [presenceOpensAt, roster?.nowTime],
+  );
 
   const markPresent = async (reservationId: string) => {
     setMarkingId(reservationId);
@@ -456,13 +454,13 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
       if (!res.ok) {
         const message = data?.error ?? "Action impossible.";
         if (message.toLowerCase().includes("15 minutes")) {
-          const start = roster?.class?.startTime;
-          const opensAt = start ? presenceOpensAt(start) : null;
+          const opensAt = todayClasses.find((c) => c.reservations.some((r) => r.id === reservationId))?.startTime;
+          const opens = opensAt ? presenceOpensAt(opensAt) : null;
           toast({
             variant: "warning",
             title: "Trop tôt",
-            description: opensAt
-              ? `Revenez à partir de ${opensAt} (15 min avant ${start}).`
+            description: opens && opensAt
+              ? `Revenez à partir de ${opens} (15 min avant ${opensAt}).`
               : "Revenez 15 minutes avant le début du cours.",
           });
           return;
@@ -499,7 +497,7 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
       <DashboardHeader
         role="ADMIN"
         title="Présence aux cours"
-        description="Après scan du QR membre et validation avec la clé staff, la liste des inscrits du créneau s'affiche ici."
+        description="Toutes les séances du jour sont affichées. Le marquage est possible à partir de 15 min avant le cours, y compris après la fin du créneau."
         showRoleLine={false}
       />
 
@@ -599,7 +597,7 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
             </span>
             <div className="space-y-1">
               <p className="leading-5">{roster.message}</p>
-              {!roster.class && !roster.upcomingClass && !roster.nextUpcomingClass && roster.sessionDate ? (
+              {!todayClasses.length && !roster.upcomingClass && !roster.nextUpcomingClass && roster.sessionDate ? (
                 <p className="text-xs font-medium text-amber-900/85">
                   Date : <span className="font-semibold">{formatYmdDisplay(roster.sessionDate)}</span>
                 </p>
@@ -608,7 +606,7 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
           </div>
         ) : null}
 
-        {(roster?.class || roster?.upcomingClass || roster?.nextUpcomingClass) ? (
+        {(todayClasses.length || roster?.upcomingClass || roster?.nextUpcomingClass) ? (
           <div className="mt-8 space-y-6">
             {roster?.scannedMember && roster.message ? (
               <p className="text-sm font-medium text-brand-dark">
@@ -622,143 +620,183 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                 ) : null}
               </p>
             ) : null}
-            <section className="rounded-xl border border-brand-medium/20 bg-zinc-50/50 p-4">
-              {(() => {
-                const { upcoming, mode, presenceOpensAt, markingLocked } = presenceSlotUi;
-                const card: CourseCardData =
-                  mode === "active"
-                    ? {
-                        courseLabel: roster!.class!.courseLabel,
-                        startTime: roster!.class!.startTime,
-                        endTime: roster!.class!.endTime,
-                        level: roster!.class!.level,
-                        coachName: roster!.class!.coachName,
-                        coachImageUrl: roster!.class!.coachImageUrl ?? null,
-                        capacity: roster!.class!.capacity,
-                        waitlistCapacity: roster!.class!.waitlistCapacity,
-                        dateLabel: roster!.sessionDate,
-                      }
-                    : {
-                        courseLabel: upcoming!.courseLabel,
-                        startTime: upcoming!.startTime,
-                        endTime: upcoming!.endTime,
-                        level: upcoming!.level,
-                        coachName: upcoming!.coachName,
-                        coachImageUrl: upcoming!.coachImageUrl,
-                        capacity: upcoming!.capacity,
-                        waitlistCapacity: upcoming!.waitlistCapacity,
-                        dateLabel: `${upcoming!.dayLabel} (${upcoming!.sessionDate})`,
-                        opensAt: upcoming!.opensAt,
-                      };
-                return (
+
+            {todayClasses.length ? (
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-dark/60">
+                Séances du jour ({formatYmdDisplay(roster?.sessionDate)}) — {todayClasses.length} créneau{todayClasses.length > 1 ? "x" : ""}
+              </p>
+            ) : null}
+
+            {todayClasses.map((classItem) => {
+              const phase = getSessionPhase(classItem.startTime, classItem.endTime, roster?.nowTime);
+              const opensAt = presenceOpensAt(classItem.startTime);
+              const markingLocked = Boolean(roster?.nowTime && roster.nowTime < opensAt);
+
+              return (
+                <section
+                  key={classItem.planningId}
+                  className={`rounded-xl border p-4 ${
+                    classItem.scannedReservationId ? "border-brand-medium/40 bg-brand-light/15" : "border-brand-medium/20 bg-zinc-50/50"
+                  }`}
+                >
                   <div className="flex flex-col gap-2">
-                {mode === "upcoming" ? (
-                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-dark/60">
-                    Prochain cours réservé
-                  </p>
-                ) : null}
-                <h2 className="text-lg font-semibold text-brand-dark">
-                  {card.courseLabel} — {card.startTime} - {card.endTime}
-                </h2>
-                <p className="text-xs font-medium text-brand-dark/70">Date : {card.dateLabel}</p>
-                {mode === "active" ? (
-                  <p className="text-xs text-brand-dark/70">
-                    Fenêtre active :{" "}
-                    <span className="font-semibold text-brand-dark">
-                      {presenceOpensAt} → {card.endTime}
-                    </span>
-                  </p>
-                ) : null}
-                {mode === "upcoming" && markingLocked && card.opensAt ? (
-                  <div className="rounded-lg border border-sky-200 bg-sky-50/80 px-3 py-2 text-xs leading-relaxed text-sky-950">
-                    Affichage informatif : la liste et le marquage de présence seront disponibles à partir de{" "}
-                    <span className="font-semibold">{card.opensAt}</span> (15 min avant le début du cours).
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="text-lg font-semibold text-brand-dark">
+                        {classItem.courseLabel} — {classItem.startTime} - {classItem.endTime}
+                      </h2>
+                      <span
+                        className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${sessionPhaseStyles[phase]}`}
+                      >
+                        {sessionPhaseLabels[phase]}
+                      </span>
+                    </div>
+                    <p className="text-xs text-brand-dark/70">
+                      Marquage à partir de{" "}
+                      <span className="font-semibold text-brand-dark">{opensAt}</span>
+                      {phase === "ended" ? (
+                        <span className="text-brand-dark/60"> (créneau terminé — rattrapage possible)</span>
+                      ) : null}
+                    </p>
+                    {markingLocked ? (
+                      <div className="rounded-lg border border-sky-200 bg-sky-50/80 px-3 py-2 text-xs leading-relaxed text-sky-950">
+                        Marquage disponible à partir de{" "}
+                        <span className="font-semibold">{opensAt}</span> (15 min avant le début du cours).
+                      </div>
+                    ) : null}
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-brand-dark/70">
+                      {classItem.level && planningLevelLabelFr(classItem.level) ? (
+                        <span>
+                          Niveau :{" "}
+                          <span className="font-semibold text-brand-dark">{planningLevelLabelFr(classItem.level)}</span>
+                        </span>
+                      ) : null}
+                      <span>
+                        Places: <span className="font-semibold text-brand-dark">{classItem.capacity}</span>
+                      </span>
+                      <span>
+                        Attente max:{" "}
+                        <span className="font-semibold text-brand-dark">{classItem.waitlistCapacity ?? "—"}</span>
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="h-8 w-8 shrink-0 overflow-hidden rounded-full border border-brand-medium/20 bg-white">
+                        {classItem.coachImageUrl ? (
+                          <img src={classItem.coachImageUrl} alt="Coach" className="h-full w-full object-cover" />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center text-[10px] font-semibold text-brand-dark/50">
+                            —
+                          </div>
+                        )}
+                      </div>
+                      <p className="text-xs text-brand-dark/70">
+                        Coach : <span className="font-semibold text-brand-dark">{classItem.coachName ?? "—"}</span>
+                      </p>
+                    </div>
                   </div>
-                ) : null}
-                <div className="flex flex-wrap items-center gap-3 text-xs text-brand-dark/70">
-                  {card.level && planningLevelLabelFr(card.level) ? (
+
+                  {classItem.reservations.length === 0 ? (
+                    <p className="mt-3 text-sm text-brand-dark/60">Aucun inscrit sur ce créneau.</p>
+                  ) : (
+                    <ul className="mt-4 divide-y divide-brand-medium/15 rounded-xl border border-brand-medium/15 bg-white">
+                      {classItem.reservations.map((row) => {
+                        const isScannedMember = roster?.scannedMember?.id === row.member.id;
+                        const canMark = canMarkInSession(classItem.startTime, row.status);
+                        const isPresent = row.status === "ATTENDED";
+
+                        return (
+                          <li
+                            key={row.id}
+                            className={`flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between ${
+                              isScannedMember ? "bg-brand-light/25" : ""
+                            }`}
+                          >
+                            <div className="w-full">
+                              <p className="font-medium text-brand-dark">
+                                {`${row.member.firstName ?? ""} ${row.member.lastName ?? ""}`.trim() || "Membre"}
+                                {isScannedMember ? (
+                                  <span className="ml-2 text-xs font-semibold text-brand-dark/70">(scannée)</span>
+                                ) : null}
+                              </p>
+                              <p className="mt-1 text-xs font-semibold text-brand-dark/70">
+                                Statut :{" "}
+                                <span className="text-brand-dark">{statusLabels[row.status] ?? row.status}</span>
+                              </p>
+                              {!row.member.qrPublicId && row.status !== "ATTENDED" ? (
+                                <p className="mt-0.5 text-xs text-amber-800">
+                                  Aucun QR assigné — présence manuelle possible
+                                </p>
+                              ) : null}
+                            </div>
+
+                            <div className="flex items-center justify-end">
+                              <PresenceMarkButton
+                                isPresent={isPresent}
+                                canMark={canMark}
+                                loading={markingId === row.id}
+                                markingLocked={markingLocked}
+                                opensAt={opensAt}
+                                onMark={() => void markPresent(row.id)}
+                              />
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </section>
+              );
+            })}
+
+            {roster?.upcomingClass ? (
+              <section className="rounded-xl border border-brand-medium/20 bg-white p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-dark/60">
+                  Prochain cours réservé
+                </p>
+                <div className="mt-3 flex flex-col gap-2">
+                  <h3 className="text-base font-semibold text-brand-dark">
+                    {roster.upcomingClass.courseLabel} — {roster.upcomingClass.startTime} - {roster.upcomingClass.endTime}
+                  </h3>
+                  <p className="text-xs font-medium text-brand-dark/70">
+                    Date : {roster.upcomingClass.dayLabel} ({roster.upcomingClass.sessionDate})
+                  </p>
+                  <div className="flex flex-wrap items-center gap-3 text-xs text-brand-dark/70">
+                    {roster.upcomingClass.level && planningLevelLabelFr(roster.upcomingClass.level) ? (
+                      <span>
+                        Niveau :{" "}
+                        <span className="font-semibold text-brand-dark">
+                          {planningLevelLabelFr(roster.upcomingClass.level)}
+                        </span>
+                      </span>
+                    ) : null}
                     <span>
-                      Niveau :{" "}
-                      <span className="font-semibold text-brand-dark">{planningLevelLabelFr(card.level)}</span>
+                      Places: <span className="font-semibold text-brand-dark">{roster.upcomingClass.capacity}</span>
                     </span>
-                  ) : null}
-                  <span>
-                    Places: <span className="font-semibold text-brand-dark">{card.capacity}</span>
-                  </span>
-                  <span>
-                    Attente max: <span className="font-semibold text-brand-dark">{card.waitlistCapacity ?? "—"}</span>
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="h-8 w-8 shrink-0 overflow-hidden rounded-full border border-brand-medium/20 bg-white">
-                    {card.coachImageUrl ? (
-                      <img src={card.coachImageUrl} alt="Coach" className="h-full w-full object-cover" />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-[10px] font-semibold text-brand-dark/50">—</div>
-                    )}
+                    <span>
+                      Attente max:{" "}
+                      <span className="font-semibold text-brand-dark">{roster.upcomingClass.waitlistCapacity ?? "—"}</span>
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="h-8 w-8 shrink-0 overflow-hidden rounded-full border border-brand-medium/20 bg-white">
+                      {roster.upcomingClass.coachImageUrl ? (
+                        <img src={roster.upcomingClass.coachImageUrl} alt="Coach" className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-[10px] font-semibold text-brand-dark/50">
+                          —
+                        </div>
+                      )}
+                    </div>
+                    <p className="text-xs text-brand-dark/70">
+                      Coach : <span className="font-semibold text-brand-dark">{roster.upcomingClass.coachName ?? "—"}</span>
+                    </p>
                   </div>
                   <p className="text-xs text-brand-dark/70">
-                    Coach : <span className="font-semibold text-brand-dark">{card.coachName ?? "—"}</span>
+                    Présence disponible à partir de{" "}
+                    <span className="font-semibold text-brand-dark">{roster.upcomingClass.opensAt}</span>.
                   </p>
                 </div>
-                {mode === "upcoming" && card.opensAt && !markingLocked ? (
-                  <p className="text-xs text-brand-dark/70">
-                    Présence disponible à partir de <span className="font-semibold text-brand-dark">{card.opensAt}</span>.
-                  </p>
-                ) : null}
-              </div>
-                );
-              })()}
-
-              {roster?.class ? (
-                roster.class.reservations.length === 0 ? (
-                  <p className="mt-3 text-sm text-brand-dark/60">Aucun inscrit sur ce créneau.</p>
-                ) : (
-                  <ul className="mt-4 divide-y divide-brand-medium/15 rounded-xl border border-brand-medium/15 bg-white">
-                    {roster.class.reservations.map((row) => {
-                      const isScannedMember = roster.scannedMember?.id === row.member.id;
-                      const canMark =
-                        !presenceSlotUi.markingLocked &&
-                        (row.status === "BOOKED" || row.status === "WAITLIST");
-                      const isPresent = row.status === "ATTENDED";
-
-                      return (
-                        <li
-                          key={row.id}
-                          className={`flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between ${
-                            isScannedMember ? "bg-brand-light/25" : ""
-                          }`}
-                        >
-                          <div className="w-full">
-                            <p className="font-medium text-brand-dark">
-                              {`${row.member.firstName ?? ""} ${row.member.lastName ?? ""}`.trim() || "Membre"}
-                              {isScannedMember ? <span className="ml-2 text-xs font-semibold text-brand-dark/70">(scannée)</span> : null}
-                            </p>
-                            <p className="mt-1 text-xs font-semibold text-brand-dark/70">
-                              Statut : <span className="text-brand-dark">{statusLabels[row.status] ?? row.status}</span>
-                            </p>
-                            {!row.member.qrPublicId && row.status !== "ATTENDED" ? (
-                              <p className="mt-0.5 text-xs text-amber-800">Aucun QR assigné — présence manuelle possible</p>
-                            ) : null}
-                          </div>
-
-                          <div className="flex items-center justify-end">
-                            <PresenceMarkButton
-                              isPresent={isPresent}
-                              canMark={canMark}
-                              loading={markingId === row.id}
-                              markingLocked={presenceSlotUi.markingLocked}
-                              opensAt={presenceSlotUi.presenceOpensAt}
-                              onMark={() => void markPresent(row.id)}
-                            />
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )
-              ) : null}
-            </section>
+              </section>
+            ) : null}
 
             {roster?.nextUpcomingClass && roster?.upcomingClass ? (
               <section className="rounded-xl border border-brand-medium/20 bg-white p-4">

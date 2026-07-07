@@ -29,6 +29,8 @@ import { planningGridCacheKey, planningGridFetchUrl } from "@/lib/planning-grid-
 import { PlanningGridLoadingState } from "@/components/ui/spinner";
 import { usePlanningStore } from "@/store";
 import { usePlanningPeriodStore } from "@/store/planning-period-store";
+import { useDashboardRole } from "@/components/dashboard/dashboard-role-context";
+import { isStaffRole } from "@/lib/admin/access";
 import type { AdminCoach } from "@/types/admin/coach";
 import type {
   AdminPlanningItem,
@@ -140,6 +142,8 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   const showList = viewMode === "list";
   const showSessionForm = viewMode === "session-form";
   const { toast } = useToast();
+  const dashboardRole = useDashboardRole();
+  const canManagePresence = isStaffRole(dashboardRole);
   const fetchPeriodConfig = usePlanningPeriodStore((s) => s.fetchConfig);
   const periodConfig = usePlanningPeriodStore((s) => s.config);
   const draftPeriod = usePlanningPeriodStore((s) => s.draft);
@@ -705,12 +709,21 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     setHistoricalSessionYmd(ymd);
   };
 
+  const showHistoricalPresenceAction = (item: AdminPlanningItem) => {
+    if (!canManagePresence) return false;
+    const sessionYmd = item.anchorSessionYmd;
+    if (!sessionYmd) return false;
+    if (currentGridSlot?.kind === "archive") return true;
+    if (currentGridSlot?.kind !== "published") return false;
+    return sessionYmd < todayYmdLocal();
+  };
+
   const gridActionBtnClass =
     "inline-flex h-6 w-6 items-center justify-center rounded-md border transition hover:opacity-90";
 
   const renderGridSessionActions = (item: AdminPlanningItem) => (
     <>
-      {currentGridSlot?.kind === "archive" ? (
+      {showHistoricalPresenceAction(item) ? (
         <button
           type="button"
           onClick={() => openGridHistoricalPresence(item)}

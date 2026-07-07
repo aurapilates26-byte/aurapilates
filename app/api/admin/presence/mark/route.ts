@@ -12,10 +12,11 @@ import {
 } from "@/lib/calendar-day";
 import { ensureReservationAttendanceRecord } from "@/lib/ensure-reservation-attendance";
 import { broadcastMemberBookingRefresh } from "@/lib/member-booking-stream";
+import { isPresenceMarkingAllowed } from "@/lib/admin/presence-window";
 import { PACK_ERRORS } from "@/lib/create-member-reservation";
 import {
   debitSelectedPackSession,
-  resolvePackForMemberBooking,
+  preparePackForAdminPresenceDebit,
 } from "@/lib/admin/member-pack-selection";
 import { prisma } from "@/lib/prisma";
 
@@ -90,6 +91,7 @@ export async function POST(request: Request) {
           planning: { select: { startTime: true, endTime: true, courseSlug: true } },
           member: {
             select: {
+              packId: true,
               packStartedAt: true,
             },
           },
@@ -101,10 +103,9 @@ export async function POST(request: Request) {
       if (current.status === "CANCELLED") return "cancelled" as const;
 
       const sessionYmd = formatYmdPrismaDate(new Date(current.sessionDate));
-      const inActiveWindow =
+      const canMarkToday =
         sessionYmd === todayYmd &&
-        current.planning.startTime <= nowPlus15 &&
-        current.planning.endTime >= nowTime;
+        isPresenceMarkingAllowed(current.planning.startTime, nowTime);
 
       if (current.status === "ATTENDED") {
         const repaired = await ensureReservationAttendanceRecord(tx, reservationId);
@@ -115,7 +116,7 @@ export async function POST(request: Request) {
         if (!RESERVATION_ELIGIBLE_STATUSES.includes(current.status)) {
           return "conflict" as const;
         }
-        if (!inActiveWindow) {
+        if (!canMarkToday) {
           if (sessionYmd === todayYmd && current.planning.startTime > nowPlus15) {
             return "too_early" as const;
           }
@@ -126,9 +127,12 @@ export async function POST(request: Request) {
           const sessionYmdForPack = formatYmdPrismaDate(new Date(current.sessionDate));
           const sessionDateLocal = parseYmdLocal(sessionYmdForPack);
           if (!sessionDateLocal) throw new Error(PACK_ERRORS.noPack);
-          const selected = await resolvePackForMemberBooking(tx, {
+          const selected = await preparePackForAdminPresenceDebit(tx, {
             memberId: current.memberId,
+            memberPackId: current.member.packId,
+            memberPackStartedAt: current.member.packStartedAt,
             courseSlug: current.planning.courseSlug,
+            sessionDateDb: todayDb,
             sessionDateLocal,
             preferredPackId: current.debitedPackId,
           });
@@ -150,7 +154,6 @@ export async function POST(request: Request) {
             status: { in: RESERVATION_ELIGIBLE_STATUSES },
             planning: {
               startTime: { lte: nowPlus15 },
-              endTime: { gte: nowTime },
             },
           },
           data: { status: ReservationStatus.ATTENDED },
@@ -169,6 +172,12 @@ export async function POST(request: Request) {
       }
       if (error.message === PACK_ERRORS.noPack) {
         return errorResponse(ERRORS.NO_PACK, 409);
+      }
+      if (error.message === PACK_ERRORS.packExpired) {
+        return errorResponse("Pack expiré à cette date", 409);
+      }
+      if (error.message === PACK_ERRORS.packInactive) {
+        return errorResponse("Pack inactif", 409);
       }
       if (error.message === PACK_ERRORS.notAllowedCourse || error.message === PACK_ERRORS.packCategoryMismatch) {
         return errorResponse("Ce pack ne permet pas ce cours", 409);

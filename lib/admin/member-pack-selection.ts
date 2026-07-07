@@ -12,9 +12,18 @@ import {
 import {
   isSessionDateWithinPackPeriod,
   packExpiresAtLocal,
+  packStartDateLocal,
 } from "@/lib/member-pack-period";
 import { debitMemberPackSession } from "@/lib/member-pack-session-ledger";
+import { activateSelectedPackOnSessionDate } from "@/lib/admin/member-pack-activation";
+import { resetMemberPackBalancesForPack } from "@/lib/admin/member-pack-renewal";
 import { prisma } from "@/lib/prisma";
+
+type ResolvePackOptions = {
+  preferredPackId?: string | null;
+  /** Présence admin : autorise une séance avant packStartedAt (recul à l'activation). */
+  allowSessionBeforePackStart?: boolean;
+};
 
 export type BookablePackOptionDto = {
   packId: string;
@@ -122,8 +131,27 @@ function resolvePackPeriod(input: {
 function isCandidateValidForSessionDate(
   candidate: PackCandidate,
   sessionDateLocal: Date,
+  options?: Pick<ResolvePackOptions, "allowSessionBeforePackStart">,
 ): boolean {
   if (!candidate.packStartedAt) return true;
+
+  const expiresAt = packExpiresAtLocal(candidate.packStartedAt, candidate.pack.durationDays);
+  if (expiresAt && sessionDateLocal.getTime() > expiresAt.getTime()) {
+    return false;
+  }
+
+  const start = packStartDateLocal(candidate.packStartedAt);
+  if (start && sessionDateLocal.getTime() < start.getTime()) {
+    return options?.allowSessionBeforePackStart === true;
+  }
+
+  if (options?.allowSessionBeforePackStart) {
+    return isSessionDateWithinPackPeriod(
+      sessionDateLocal,
+      candidate.packStartedAt,
+      candidate.pack.durationDays,
+    );
+  }
 
   if (
     !isSessionDateWithinPackPeriod(
@@ -132,14 +160,9 @@ function isCandidateValidForSessionDate(
       candidate.pack.durationDays,
     )
   ) {
-    const expiresAt = packExpiresAtLocal(candidate.packStartedAt, candidate.pack.durationDays);
-    if (expiresAt && sessionDateLocal.getTime() > expiresAt.getTime()) {
-      return false;
-    }
     return false;
   }
 
-  const expiresAt = packExpiresAtLocal(candidate.packStartedAt, candidate.pack.durationDays);
   const today = startOfLocalToday();
   if (expiresAt && expiresAt.getTime() < today.getTime()) {
     return false;
@@ -335,10 +358,15 @@ export async function resolvePackForMemberBooking(
     courseSlug: string;
     sessionDateLocal: Date;
     preferredPackId?: string | null;
+    allowSessionBeforePackStart?: boolean;
   },
 ): Promise<PackCandidate> {
   const candidates = await loadPackCandidates(tx, input.memberId, input.courseSlug);
-  const valid = candidates.filter((c) => isCandidateValidForSessionDate(c, input.sessionDateLocal));
+  const valid = candidates.filter((c) =>
+    isCandidateValidForSessionDate(c, input.sessionDateLocal, {
+      allowSessionBeforePackStart: input.allowSessionBeforePackStart,
+    }),
+  );
 
   if (valid.length === 0) {
     if (candidates.length > 0) throw new Error(PACK_ERRORS.packExpired);
@@ -354,6 +382,53 @@ export async function resolvePackForMemberBooking(
   if (valid.length === 1) return valid[0]!;
 
   throw new Error(PACK_ERRORS.packChoiceRequired);
+}
+
+/**
+ * Résout le pack à débiter pour une présence admin, puis recule packStartedAt si la séance
+ * est antérieure à la date d'ajout / renouvellement / première consommation.
+ */
+export async function preparePackForAdminPresenceDebit(
+  tx: Prisma.TransactionClient,
+  input: {
+    memberId: string;
+    memberPackId: string | null;
+    memberPackStartedAt: Date | null;
+    courseSlug: string;
+    sessionDateDb: Date;
+    sessionDateLocal: Date;
+    preferredPackId?: string | null;
+  },
+): Promise<PackCandidate> {
+  const selected = await resolvePackForMemberBooking(tx, {
+    memberId: input.memberId,
+    courseSlug: input.courseSlug,
+    sessionDateLocal: input.sessionDateLocal,
+    preferredPackId: input.preferredPackId,
+    allowSessionBeforePackStart: true,
+  });
+
+  if (!selected.pack.isActive) throw new Error(PACK_ERRORS.packInactive);
+
+  await activateSelectedPackOnSessionDate(tx, {
+    memberId: input.memberId,
+    packId: selected.pack.id,
+    memberPackId: input.memberPackId,
+    memberPackStartedAt: input.memberPackStartedAt,
+    durationDays: selected.pack.durationDays,
+    sessionDateDb: input.sessionDateDb,
+    sessionDateLocal: input.sessionDateLocal,
+  });
+
+  const existingBalances = await tx.memberPackBalance.findMany({
+    where: { memberId: input.memberId, packId: selected.pack.id },
+    select: { id: true },
+  });
+  if (existingBalances.length === 0) {
+    await resetMemberPackBalancesForPack(tx, { memberId: input.memberId, packId: selected.pack.id });
+  }
+
+  return selected;
 }
 
 export async function debitSelectedPackSession(

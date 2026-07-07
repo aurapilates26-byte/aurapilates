@@ -20,10 +20,33 @@ export function localNowTimeString(offsetMinutes: number = 0): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-/** Présence ouverte : de (début − 15 min) jusqu'à la fin du cours. */
+/** Créneau en cours : de (début − 15 min) jusqu'à la fin du cours. */
 export function isPresenceWindowOpen(startTime: string, endTime: string, nowTime: string): boolean {
   const opensAt = minus15Minutes(startTime);
   return opensAt <= nowTime && endTime >= nowTime;
+}
+
+/** Marquage autorisé : à partir de (début − 15 min), sans limite après la fin du cours (même jour). */
+export function isPresenceMarkingAllowed(startTime: string, nowTime: string, leadMinutes = 15): boolean {
+  const [h, m] = nowTime.split(":").map(Number);
+  const now = new Date(2000, 0, 1, h ?? 0, m ?? 0);
+  const open = new Date(now.getTime() + leadMinutes * 60_000);
+  const openHm = `${String(open.getHours()).padStart(2, "0")}:${String(open.getMinutes()).padStart(2, "0")}`;
+  return startTime <= openHm;
+}
+
+export type PresenceSessionPhase = "upcoming" | "active" | "ended";
+
+/** Phase d'un créneau du jour par rapport à l'heure actuelle. */
+export function getPresenceSessionPhase(
+  startTime: string,
+  endTime: string,
+  nowTime: string,
+): PresenceSessionPhase {
+  const opensAt = minus15Minutes(startTime);
+  if (nowTime < opensAt) return "upcoming";
+  if (endTime >= nowTime) return "active";
+  return "ended";
 }
 
 export function compareClock(a: string, b: string): number {

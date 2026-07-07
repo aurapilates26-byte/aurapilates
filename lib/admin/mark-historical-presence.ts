@@ -11,15 +11,10 @@ import {
   startOfLocalToday,
 } from "@/lib/calendar-day";
 import { PACK_ERRORS } from "@/lib/create-member-reservation";
-import {
-  resetMemberPackBalancesForPack,
-  tryActivatePendingPackIfCurrentFinished,
-} from "@/lib/admin/member-pack-renewal";
-import { activateSelectedPackOnSessionDate } from "@/lib/admin/member-pack-activation";
+import { tryActivatePendingPackIfCurrentFinished } from "@/lib/admin/member-pack-renewal";
 import {
   debitSelectedPackSession,
-  resolvePackForMemberBooking,
-  type PackCandidate,
+  preparePackForAdminPresenceDebit,
 } from "@/lib/admin/member-pack-selection";
 import { isSessionYmdWithinPlanningPeriod } from "@/lib/planning-period-status";
 import { prisma } from "@/lib/prisma";
@@ -103,48 +98,6 @@ export async function listHistoricalPresenceRoster(
       phone: r.member.phone,
       markedAt: r.attendance!.markedAt.toISOString(),
     }));
-}
-
-async function preparePackForPresenceDebit(
-  tx: Prisma.TransactionClient,
-  input: {
-    memberId: string;
-    memberPackId: string | null;
-    memberPackStartedAt: Date | null;
-    courseSlug: string;
-    sessionDateDb: Date;
-    sessionDateLocal: Date;
-    preferredPackId: string | null;
-  },
-): Promise<PackCandidate> {
-  const selected = await resolvePackForMemberBooking(tx, {
-    memberId: input.memberId,
-    courseSlug: input.courseSlug,
-    sessionDateLocal: input.sessionDateLocal,
-    preferredPackId: input.preferredPackId,
-  });
-
-  if (!selected.pack.isActive) throw new Error(PACK_ERRORS.packInactive);
-
-  await activateSelectedPackOnSessionDate(tx, {
-    memberId: input.memberId,
-    packId: selected.pack.id,
-    memberPackId: input.memberPackId,
-    memberPackStartedAt: input.memberPackStartedAt,
-    durationDays: selected.pack.durationDays,
-    sessionDateDb: input.sessionDateDb,
-    sessionDateLocal: input.sessionDateLocal,
-  });
-
-  const existingBalances = await tx.memberPackBalance.findMany({
-    where: { memberId: input.memberId, packId: selected.pack.id },
-    select: { id: true },
-  });
-  if (existingBalances.length === 0) {
-    await resetMemberPackBalancesForPack(tx, { memberId: input.memberId, packId: selected.pack.id });
-  }
-
-  return selected;
 }
 
 export async function markHistoricalPresence(input: {
@@ -284,7 +237,7 @@ export async function markHistoricalPresence(input: {
         return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: false };
       }
 
-      const selected = await preparePackForPresenceDebit(tx, {
+      const selected = await preparePackForAdminPresenceDebit(tx, {
         memberId: input.memberId,
         memberPackId: member.packId,
         memberPackStartedAt: member.packStartedAt,
