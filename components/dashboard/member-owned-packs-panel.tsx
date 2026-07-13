@@ -64,8 +64,11 @@ function packBadgeLabel(kind: PackBadgeKind): string {
 }
 
 function packStatusHint(pack: MemberOwnedPackDto, kind: PackBadgeKind): string | null {
-  if (kind === "active" && pack.status === "replaced") {
+  if (kind === "active" && pack.status === "replaced" && pack.consumedSessions <= 0) {
     return "Aucune séance consommée — pack conservé dans l'historique après renouvellement.";
+  }
+  if (pack.status === "replaced" && pack.consumedSessions > 0) {
+    return "Pack précédent — séances comptées sur la période avant le renouvellement.";
   }
   if (kind === "closed") {
     return "Renouvellement effectué avant épuisement — séances restantes non utilisées.";

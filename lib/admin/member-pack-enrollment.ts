@@ -1,9 +1,17 @@
 import "server-only";
 
 import type { MemberPackEnrollmentStatus, Prisma } from "@prisma/client";
+import { formatYmdLocal, parseYmdToPrismaDate } from "@/lib/calendar-day";
 import { addPackDurationToStartDate } from "@/lib/pack-duration";
 import { packExpiresAtLocal, packStartDateLocal } from "@/lib/member-pack-period";
 import { prisma } from "@/lib/prisma";
+
+const CONSUMING_RESERVATION_STATUSES = {
+  OR: [
+    { status: { in: ["BOOKED", "ATTENDED"] as const } },
+    { status: "CANCELLED" as const, packRefundedAt: null },
+  ],
+} satisfies Pick<Prisma.ReservationWhereInput, "OR">;
 
 export async function closeOpenEnrollmentsForPack(
   tx: Prisma.TransactionClient,
@@ -244,7 +252,7 @@ export async function countEnrollmentConsumedSessions(input: {
     const rows = await prisma.reservation.findMany({
       where: {
         memberId: input.memberId,
-        OR: [{ status: { in: ["BOOKED", "ATTENDED"] } }, { status: "CANCELLED", packRefundedAt: null }],
+        ...CONSUMING_RESERVATION_STATUSES,
         sessionDate: dateFilter,
         planning: { courseSlug: { in: input.courseQuotas.map((q) => q.courseSlug) } },
       },
@@ -257,10 +265,51 @@ export async function countEnrollmentConsumedSessions(input: {
     return prisma.reservation.count({
       where: {
         memberId: input.memberId,
-        OR: [{ status: { in: ["BOOKED", "ATTENDED"] } }, { status: "CANCELLED", packRefundedAt: null }],
+        ...CONSUMING_RESERVATION_STATUSES,
         sessionDate: dateFilter,
       },
     });
+  }
+
+  return 0;
+}
+
+/**
+ * Compte les séances consommées sur la période d'une inscription pack
+ * (achat → renouvellement suivant), indépendamment de packStartedAt.
+ */
+export async function countEnrollmentConsumedSessionsInPeriod(input: {
+  memberId: string;
+  packId: string;
+  courseQuotas: { courseSlug: string; sessionCount: number }[];
+  sessionCount: number | null;
+  periodStart: Date;
+  periodEndExclusive: Date | null;
+}): Promise<number> {
+  const sessionDateFilter: Prisma.DateTimeFilter = {
+    gte: input.periodStart,
+    ...(input.periodEndExclusive ? { lt: input.periodEndExclusive } : {}),
+  };
+
+  const baseWhere: Prisma.ReservationWhereInput = {
+    memberId: input.memberId,
+    sessionDate: sessionDateFilter,
+    AND: [CONSUMING_RESERVATION_STATUSES, { OR: [{ debitedPackId: input.packId }, { debitedPackId: null }] }],
+  };
+
+  if (input.courseQuotas.length > 0) {
+    const rows = await prisma.reservation.findMany({
+      where: {
+        ...baseWhere,
+        planning: { courseSlug: { in: input.courseQuotas.map((q) => q.courseSlug) } },
+      },
+      select: { id: true },
+    });
+    return rows.length;
+  }
+
+  if (input.sessionCount != null) {
+    return prisma.reservation.count({ where: baseWhere });
   }
 
   return 0;

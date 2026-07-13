@@ -1,16 +1,14 @@
 import "server-only";
 
 import type { MemberPackEnrollmentStatus, Prisma } from "@prisma/client";
-import { startOfLocalToday } from "@/lib/calendar-day";
+import { startOfLocalToday, formatYmdLocal, parseYmdToPrismaDate } from "@/lib/calendar-day";
 import {
-  countEnrollmentConsumedSessions,
+  countEnrollmentConsumedSessionsInPeriod,
   ensureMemberPackEnrollmentsBackfilled,
   getEnrollmentPaymentTotals,
 } from "@/lib/admin/member-pack-enrollment";
 import {
-  getRemainingSessionsForPack,
   resetMemberPackBalancesForPack,
-  type MemberPackState,
 } from "@/lib/admin/member-pack-renewal";
 import type { PackPaymentMethodValue } from "@/lib/pack-payment-method";
 import { courseLabel } from "@/lib/course-labels";
@@ -73,32 +71,6 @@ export async function addParallelMemberPack(
   });
 }
 
-function packUsageFromState(
-  pack: {
-    id: string;
-    sessionCount: number | null;
-    courseQuotas: { courseSlug: string; sessionCount: number }[];
-  },
-  balances: { packId: string; courseSlug: string | null; remaining: number }[],
-): { totalSessions: number | null; remainingSessions: number; consumedSessions: number } {
-  const state: MemberPackState = {
-    packId: pack.id,
-    packStartedAt: null,
-    durationDays: null,
-    sessionCount: pack.sessionCount,
-    courseQuotas: pack.courseQuotas,
-    balances,
-  };
-  const remainingSessions = getRemainingSessionsForPack(state);
-  const totalSessions =
-    pack.courseQuotas.length > 0
-      ? pack.courseQuotas.reduce((sum, q) => sum + q.sessionCount, 0)
-      : pack.sessionCount;
-  const consumedSessions =
-    totalSessions != null ? Math.max(0, totalSessions - remainingSessions) : 0;
-  return { totalSessions, remainingSessions, consumedSessions };
-}
-
 function mapEnrollmentStatusToDisplay(
   enrollmentStatus: MemberPackEnrollmentStatus,
   remainingSessions: number,
@@ -137,6 +109,28 @@ function courseQuotaRemainingLines(
       total: q.sessionCount,
     };
   });
+}
+
+function toPrismaDateLocal(d: Date): Date {
+  return parseYmdToPrismaDate(formatYmdLocal(d))!;
+}
+
+function getEnrollmentPeriodBounds(
+  enrollment: { id: string; packId: string; purchasedAt: Date; closedAt: Date | null },
+  enrollmentsAsc: { id: string; packId: string; purchasedAt: Date; closedAt: Date | null }[],
+): { periodStart: Date; periodEndExclusive: Date | null } {
+  const periodStart = toPrismaDateLocal(enrollment.purchasedAt);
+  const index = enrollmentsAsc.findIndex((row) => row.id === enrollment.id);
+  for (let i = index + 1; i < enrollmentsAsc.length; i++) {
+    const next = enrollmentsAsc[i]!;
+    if (next.packId === enrollment.packId) {
+      return { periodStart, periodEndExclusive: toPrismaDateLocal(next.purchasedAt) };
+    }
+  }
+  if (enrollment.closedAt) {
+    return { periodStart, periodEndExclusive: toPrismaDateLocal(enrollment.closedAt) };
+  }
+  return { periodStart, periodEndExclusive: null };
 }
 
 export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwnedPackDto[]> {
@@ -196,6 +190,12 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
     }
   }
 
+  const enrollmentsAsc = [...enrollments].sort(
+    (a, b) =>
+      a.purchasedAt.getTime() - b.purchasedAt.getTime() ||
+      a.createdAt.getTime() - b.createdAt.getTime(),
+  );
+
   const items: MemberOwnedPackDto[] = [];
 
   for (const enrollment of enrollments) {
@@ -206,32 +206,22 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
 
     const paymentTotals = await getEnrollmentPaymentTotals(memberId, enrollment.packPaymentId);
 
-    let totalSessions: number | null;
-    let consumedSessions: number;
-    let remainingSessions: number;
+    const totalSessions =
+      pack.courseQuotas.length > 0
+        ? pack.courseQuotas.reduce((sum, q) => sum + q.sessionCount, 0)
+        : pack.sessionCount;
 
-    if (isPrimary && enrollment.status === "ACTIVE") {
-      const balancesForPack = member.packBalances.filter((b) => b.packId === pack.id);
-      const usage = packUsageFromState(pack, balancesForPack);
-      totalSessions = usage.totalSessions;
-      consumedSessions = usage.consumedSessions;
-      remainingSessions = usage.remainingSessions;
-    } else {
-      totalSessions =
-        pack.courseQuotas.length > 0
-          ? pack.courseQuotas.reduce((sum, q) => sum + q.sessionCount, 0)
-          : pack.sessionCount;
-      consumedSessions = await countEnrollmentConsumedSessions({
-        memberId,
-        packId: pack.id,
-        courseQuotas: pack.courseQuotas,
-        sessionCount: pack.sessionCount,
-        packStartedAt: enrollment.packStartedAt,
-        packExpiresAt: enrollment.packExpiresAt,
-      });
-      remainingSessions =
-        totalSessions != null ? Math.max(0, totalSessions - consumedSessions) : 0;
-    }
+    const { periodStart, periodEndExclusive } = getEnrollmentPeriodBounds(enrollment, enrollmentsAsc);
+    const consumedSessions = await countEnrollmentConsumedSessionsInPeriod({
+      memberId,
+      packId: pack.id,
+      courseQuotas: pack.courseQuotas,
+      sessionCount: pack.sessionCount,
+      periodStart,
+      periodEndExclusive,
+    });
+    const remainingSessions =
+      totalSessions != null ? Math.max(0, totalSessions - consumedSessions) : 0;
 
     const status = mapEnrollmentStatusToDisplay(
       enrollment.status,
