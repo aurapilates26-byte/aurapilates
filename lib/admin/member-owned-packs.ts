@@ -212,7 +212,7 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
         : pack.sessionCount;
 
     const { periodStart, periodEndExclusive } = getEnrollmentPeriodBounds(enrollment, enrollmentsAsc);
-    const consumedSessions = await countEnrollmentConsumedSessionsInPeriod({
+    const consumedRaw = await countEnrollmentConsumedSessionsInPeriod({
       memberId,
       packId: pack.id,
       courseQuotas: pack.courseQuotas,
@@ -220,6 +220,8 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
       periodStart,
       periodEndExclusive,
     });
+    const consumedSessions =
+      totalSessions != null ? Math.min(consumedRaw, totalSessions) : consumedRaw;
     const remainingSessions =
       totalSessions != null ? Math.max(0, totalSessions - consumedSessions) : 0;
 

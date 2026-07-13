@@ -13,6 +13,14 @@ const CONSUMING_RESERVATION_STATUSES = {
   ],
 } satisfies Pick<Prisma.ReservationWhereInput, "OR">;
 
+/** Présence réelle ou annulation tardive — pour l'affichage « séances consommées ». */
+const DISPLAY_CONSUMED_RESERVATION_STATUSES = {
+  OR: [
+    { status: "ATTENDED" as const },
+    { status: "CANCELLED" as const, packRefundedAt: null },
+  ],
+} satisfies Pick<Prisma.ReservationWhereInput, "OR">;
+
 export async function closeOpenEnrollmentsForPack(
   tx: Prisma.TransactionClient,
   memberId: string,
@@ -291,26 +299,39 @@ export async function countEnrollmentConsumedSessionsInPeriod(input: {
     ...(input.periodEndExclusive ? { lt: input.periodEndExclusive } : {}),
   };
 
+  const totalCap =
+    input.courseQuotas.length > 0
+      ? input.courseQuotas.reduce((sum, q) => sum + q.sessionCount, 0)
+      : input.sessionCount;
+
   const baseWhere: Prisma.ReservationWhereInput = {
     memberId: input.memberId,
     sessionDate: sessionDateFilter,
-    AND: [CONSUMING_RESERVATION_STATUSES, { OR: [{ debitedPackId: input.packId }, { debitedPackId: null }] }],
+    AND: [
+      DISPLAY_CONSUMED_RESERVATION_STATUSES,
+      {
+        OR: [
+          { debitedPackId: input.packId },
+          { debitedPackId: null, status: "ATTENDED" },
+        ],
+      },
+    ],
   };
 
-  if (input.courseQuotas.length > 0) {
-    const rows = await prisma.reservation.findMany({
-      where: {
-        ...baseWhere,
-        planning: { courseSlug: { in: input.courseQuotas.map((q) => q.courseSlug) } },
-      },
-      select: { id: true },
-    });
-    return rows.length;
+  const courseSlugFilter =
+    input.courseQuotas.length > 0
+      ? { planning: { courseSlug: { in: input.courseQuotas.map((q) => q.courseSlug) } } }
+      : {};
+
+  if (totalCap == null) {
+    return prisma.reservation.count({ where: { ...baseWhere, ...courseSlugFilter } });
   }
 
-  if (input.sessionCount != null) {
-    return prisma.reservation.count({ where: baseWhere });
-  }
-
-  return 0;
+  const rows = await prisma.reservation.findMany({
+    where: { ...baseWhere, ...courseSlugFilter },
+    orderBy: [{ sessionDate: "asc" }, { createdAt: "asc" }],
+    take: totalCap,
+    select: { id: true },
+  });
+  return rows.length;
 }
