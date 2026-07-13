@@ -23,6 +23,11 @@ type ResolvePackOptions = {
   preferredPackId?: string | null;
   /** Présence admin : autorise une séance avant packStartedAt (recul à l'activation). */
   allowSessionBeforePackStart?: boolean;
+  /**
+   * Présence admin : si plusieurs packs valides et pas de preferredPackId,
+   * choisit automatiquement (plus consommé, puis plus ancien).
+   */
+  autoPickWhenAmbiguous?: boolean;
 };
 
 export type BookablePackOptionDto = {
@@ -267,6 +272,28 @@ async function loadPackCandidates(
   return candidates.sort((a, b) => b.purchasedAt.getTime() - a.purchasedAt.getTime());
 }
 
+function totalSessionsForPack(pack: PackCandidate["pack"]): number | null {
+  if (pack.courseQuotas.length > 0) {
+    return pack.courseQuotas.reduce((sum, q) => sum + q.sessionCount, 0);
+  }
+  return pack.sessionCount;
+}
+
+function consumedSessionsForCandidate(candidate: PackCandidate): number {
+  const total = totalSessionsForPack(candidate.pack);
+  if (total == null) return 0;
+  return Math.max(0, total - candidate.remainingSessions);
+}
+
+/** Plus de séances consommées d'abord ; à égalité, pack acheté le plus tôt (FIFO). */
+function pickDefaultPackCandidate(candidates: PackCandidate[]): PackCandidate {
+  return [...candidates].sort((a, b) => {
+    const consumedDiff = consumedSessionsForCandidate(b) - consumedSessionsForCandidate(a);
+    if (consumedDiff !== 0) return consumedDiff;
+    return a.purchasedAt.getTime() - b.purchasedAt.getTime();
+  })[0]!;
+}
+
 function toBookablePackOptionDto(candidate: PackCandidate): BookablePackOptionDto {
   return {
     packId: candidate.packId,
@@ -359,6 +386,7 @@ export async function resolvePackForMemberBooking(
     sessionDateLocal: Date;
     preferredPackId?: string | null;
     allowSessionBeforePackStart?: boolean;
+    autoPickWhenAmbiguous?: boolean;
   },
 ): Promise<PackCandidate> {
   const candidates = await loadPackCandidates(tx, input.memberId, input.courseSlug);
@@ -380,6 +408,10 @@ export async function resolvePackForMemberBooking(
   }
 
   if (valid.length === 1) return valid[0]!;
+
+  if (input.autoPickWhenAmbiguous) {
+    return pickDefaultPackCandidate(valid);
+  }
 
   throw new Error(PACK_ERRORS.packChoiceRequired);
 }
@@ -406,6 +438,7 @@ export async function preparePackForAdminPresenceDebit(
     sessionDateLocal: input.sessionDateLocal,
     preferredPackId: input.preferredPackId,
     allowSessionBeforePackStart: true,
+    autoPickWhenAmbiguous: true,
   });
 
   if (!selected.pack.isActive) throw new Error(PACK_ERRORS.packInactive);

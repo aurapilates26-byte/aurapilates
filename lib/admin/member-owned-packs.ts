@@ -29,6 +29,8 @@ export type MemberOwnedPackDto = {
   courseQuotas: { courseSlug: string; sessionCount: number }[];
   purchasedAt: string;
   isPrimary: boolean;
+  /** Inscription suivant un achat précédent du même pack catalogue. */
+  isRenewal: boolean;
   status: MemberOwnedPackStatus;
   enrollmentStatus: MemberPackEnrollmentStatus;
   packStartedAt: string | null;
@@ -183,12 +185,24 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
     }
   }
 
+  const firstEnrollmentIdByPack = new Map<string, string>();
+  for (const enrollment of [...enrollments].sort(
+    (a, b) =>
+      a.purchasedAt.getTime() - b.purchasedAt.getTime() ||
+      a.createdAt.getTime() - b.createdAt.getTime(),
+  )) {
+    if (!firstEnrollmentIdByPack.has(enrollment.packId)) {
+      firstEnrollmentIdByPack.set(enrollment.packId, enrollment.id);
+    }
+  }
+
   const items: MemberOwnedPackDto[] = [];
 
   for (const enrollment of enrollments) {
     const pack = enrollment.pack;
     const isPrimary =
       member.packId === pack.id && latestOpenEnrollmentIdByPack.get(pack.id) === enrollment.id;
+    const isRenewal = firstEnrollmentIdByPack.get(pack.id) !== enrollment.id;
 
     const paymentTotals = await getEnrollmentPaymentTotals(memberId, enrollment.packPaymentId);
 
@@ -238,6 +252,7 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
       courseQuotas: pack.courseQuotas,
       purchasedAt: enrollment.purchasedAt.toISOString(),
       isPrimary,
+      isRenewal,
       status,
       enrollmentStatus: enrollment.status,
       packStartedAt: enrollment.packStartedAt?.toISOString() ?? null,

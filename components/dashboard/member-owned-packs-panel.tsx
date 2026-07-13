@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { PaymentMethodBadge } from "@/components/dashboard/payment-method-badge";
 import { PackMetricsGrid } from "@/components/pack-metrics-grid";
-import type { MemberOwnedPackDto, MemberOwnedPackStatus } from "@/lib/admin/member-owned-packs";
+import type { MemberOwnedPackDto } from "@/lib/admin/member-owned-packs";
 import { formatPackPriceDt } from "@/lib/public-pack-display";
 
 function formatDateFr(value: string | null | undefined) {
@@ -25,24 +25,37 @@ function formatPackSessionsValue(count: number | null): string {
   return String(count);
 }
 
-function packStatusBadgeClass(status: MemberOwnedPackStatus): string {
-  if (status === "active") {
+type PackBadgeKind = "active" | "consuming" | "finished" | "expired";
+
+function getPackBadgeKind(pack: MemberOwnedPackDto): PackBadgeKind {
+  if (pack.status === "expired") return "expired";
+  if (pack.status === "replaced") return "finished";
+  if (pack.consumedSessions > 0 || pack.packStartedAt) return "consuming";
+  return "active";
+}
+
+function packBadgeClass(kind: PackBadgeKind): string {
+  if (kind === "active") {
     return "border-emerald-200 bg-emerald-50 text-emerald-900";
   }
-  if (status === "pending") {
-    return "border-sky-200 bg-sky-50 text-sky-900";
+  if (kind === "consuming") {
+    return "border-indigo-200 bg-indigo-50 text-indigo-900";
   }
-  if (status === "replaced") {
+  if (kind === "finished") {
     return "border-zinc-200 bg-zinc-100 text-zinc-700";
   }
   return "border-red-200 bg-red-50 text-red-800";
 }
 
-function packStatusLabel(status: MemberOwnedPackStatus): string {
-  if (status === "active") return "En cours";
-  if (status === "pending") return "En attente";
-  if (status === "replaced") return "Renouvelé";
+function packBadgeLabel(kind: PackBadgeKind): string {
+  if (kind === "active") return "Actif";
+  if (kind === "consuming") return "En cours";
+  if (kind === "finished") return "Terminé";
   return "Expiré";
+}
+
+function showRenewalBadge(pack: MemberOwnedPackDto, badgeKind: PackBadgeKind): boolean {
+  return pack.isRenewal && (badgeKind === "active" || badgeKind === "consuming");
 }
 
 function InfoField({ label, children }: { label: string; children: ReactNode }) {
@@ -128,6 +141,7 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
 
   function renderPackCard(pack: MemberOwnedPackDto) {
     const isOpen = openEnrollmentIds.has(pack.enrollmentId);
+    const badgeKind = getPackBadgeKind(pack);
     const sessionsTotal =
       pack.totalSessions ??
       (pack.courseQuotas.length > 0
@@ -152,10 +166,15 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
               <div className="flex flex-wrap items-center gap-2">
                 <p className="text-base font-semibold text-brand-dark">{pack.packName}</p>
                 <span
-                  className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${packStatusBadgeClass(pack.status)}`}
+                  className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${packBadgeClass(badgeKind)}`}
                 >
-                  {packStatusLabel(pack.status)}
+                  {packBadgeLabel(badgeKind)}
                 </span>
+                {showRenewalBadge(pack, badgeKind) ? (
+                  <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900">
+                    Renouvelé
+                  </span>
+                ) : null}
               </div>
               <PackMetricsGrid
                 className="mt-3"
@@ -254,7 +273,7 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
         <div className="space-y-3">
           {activeItems.length < items.length ? (
             <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-dark/50">
-              Packs en cours
+              Packs actifs
             </p>
           ) : null}
           {activeItems.map(renderPackCard)}
