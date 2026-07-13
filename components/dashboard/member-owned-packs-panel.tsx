@@ -25,12 +25,17 @@ function formatPackSessionsValue(count: number | null): string {
   return String(count);
 }
 
-type PackBadgeKind = "active" | "consuming" | "finished" | "expired";
+type PackBadgeKind = "active" | "consuming" | "finished" | "closed" | "expired";
+
+function isPackConsuming(pack: MemberOwnedPackDto): boolean {
+  return pack.consumedSessions > 0 || pack.packStartedAt != null;
+}
 
 function getPackBadgeKind(pack: MemberOwnedPackDto): PackBadgeKind {
   if (pack.status === "expired") return "expired";
-  if (pack.status === "replaced") return "finished";
-  if (pack.consumedSessions > 0 || pack.packStartedAt) return "consuming";
+  if (pack.remainingSessions <= 0) return "finished";
+  if (pack.status === "replaced" && isPackConsuming(pack)) return "closed";
+  if (isPackConsuming(pack)) return "consuming";
   return "active";
 }
 
@@ -44,14 +49,28 @@ function packBadgeClass(kind: PackBadgeKind): string {
   if (kind === "finished") {
     return "border-zinc-200 bg-zinc-100 text-zinc-700";
   }
+  if (kind === "closed") {
+    return "border-zinc-200 bg-zinc-100 text-zinc-700";
+  }
   return "border-red-200 bg-red-50 text-red-800";
 }
 
 function packBadgeLabel(kind: PackBadgeKind): string {
   if (kind === "active") return "Actif";
   if (kind === "consuming") return "En cours";
+  if (kind === "closed") return "Clôturé";
   if (kind === "finished") return "Terminé";
   return "Expiré";
+}
+
+function packStatusHint(pack: MemberOwnedPackDto, kind: PackBadgeKind): string | null {
+  if (kind === "active" && pack.status === "replaced") {
+    return "Aucune séance consommée — pack conservé dans l'historique après renouvellement.";
+  }
+  if (kind === "closed") {
+    return "Renouvellement effectué avant épuisement — séances restantes non utilisées.";
+  }
+  return null;
 }
 
 function showRenewalBadge(pack: MemberOwnedPackDto, badgeKind: PackBadgeKind): boolean {
@@ -176,6 +195,11 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
                   </span>
                 ) : null}
               </div>
+              {packStatusHint(pack, badgeKind) ? (
+                <p className="mt-1.5 text-xs leading-relaxed text-brand-dark/60">
+                  {packStatusHint(pack, badgeKind)}
+                </p>
+              ) : null}
               <PackMetricsGrid
                 className="mt-3"
                 price={formatPackPriceDt(pack.priceCents) ?? "—"}
