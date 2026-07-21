@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { PlanningGridSessionCard } from "@/components/planning/planning-grid-session-card";
-import { buildPeriodDaySelectOptions } from "@/lib/planning-period-day-dates";
+import { buildPeriodDaySelectOptions, type PeriodDaySelectOption } from "@/lib/planning-period-day-dates";
 import { formatPlanningColumnHeader } from "@/lib/planning-period-range-label";
 import { formatYmdLocal, startOfLocalToday } from "@/lib/calendar-day";
 import type { AdminPlanningItem, PlanningPeriodConfig } from "@/types/admin/planning";
@@ -16,6 +16,9 @@ type PlanningWeekGridProps = {
   levelLabelFor: (level: AdminPlanningItem["level"]) => string | null;
   levelToneFor: (level: AdminPlanningItem["level"]) => string | null;
   readOnly?: boolean;
+  /** Page publique : hauteur naturelle, sans scroll interne. */
+  embedded?: boolean;
+  renderEmptyDay?: (column: PeriodDaySelectOption) => ReactNode | null;
 };
 
 export function PlanningWeekGrid({
@@ -26,6 +29,8 @@ export function PlanningWeekGrid({
   levelLabelFor,
   levelToneFor,
   readOnly = false,
+  embedded = false,
+  renderEmptyDay,
 }: PlanningWeekGridProps) {
   const todayYmd = formatYmdLocal(startOfLocalToday());
   const dayColumns = buildPeriodDaySelectOptions(period.periodStartYmd, period.periodEndYmd);
@@ -50,7 +55,7 @@ export function PlanningWeekGrid({
   const columnCount = Math.min(Math.max(dayColumns.length, 1), 7);
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className={embedded ? `${styles.planningWeekEmbedded} max-h-[min(70vh,720px)]` : "flex h-full min-h-0 flex-col"}>
       <div
         className={`${styles.planningWeekHeader} ${styles.planningDayColumns} gap-1 sm:gap-1.5`}
         data-cols={columnCount}
@@ -61,6 +66,7 @@ export function PlanningWeekGrid({
           return (
             <div
               key={`header-${column.sessionYmd}`}
+              id={embedded ? `planning-col-${column.sessionYmd}` : undefined}
               className={`rounded-lg border px-1 py-1.5 text-center text-[10px] font-semibold leading-tight shadow-sm sm:text-[11px] ${
                 isToday
                   ? "border-brand-dark/35 bg-brand-dark/5 text-brand-dark"
@@ -73,9 +79,9 @@ export function PlanningWeekGrid({
         })}
       </div>
 
-      <div className={styles.planningWeekScrollViewport}>
+      <div className={embedded ? styles.planningWeekEmbeddedScroll : styles.planningWeekScrollViewport}>
         <div
-          className={`${styles.planningWeekBody} ${styles.planningDayColumns} gap-1 sm:gap-1.5`}
+          className={`${styles.planningDayColumns} gap-1 sm:gap-1.5 ${styles.planningWeekBody}`}
           data-cols={columnCount}
         >
           {dayColumns.map((column) => {
@@ -83,12 +89,16 @@ export function PlanningWeekGrid({
               a.startTime.localeCompare(b.startTime),
             );
 
+            const emptyContent = renderEmptyDay?.(column);
+
             return (
               <div key={column.sessionYmd} className="flex min-w-0 flex-col gap-1.5">
                 {columnItems.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-brand-medium/20 px-1 py-4 text-center text-[10px] leading-tight text-brand-dark/45">
-                    Aucune séance
-                  </div>
+                  emptyContent ?? (
+                    <div className="rounded-lg border border-dashed border-brand-medium/20 px-1 py-4 text-center text-[10px] leading-tight text-brand-dark/45">
+                      Aucune séance
+                    </div>
+                  )
                 ) : (
                   columnItems.map((item) => (
                     <PlanningGridSessionCard

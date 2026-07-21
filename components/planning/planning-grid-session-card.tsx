@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { planningSessionGridPillLayout } from "@/lib/badge-classes";
 import { planningCourseCardToneClass } from "@/lib/planning-course-card-tone";
+import { computePlanningCourseEnd } from "@/lib/planning-session-slot";
 
 type PlanningGridSessionCardProps = {
   courseSlug: string;
@@ -32,6 +33,7 @@ export function PlanningGridSessionCard({
   actions,
 }: PlanningGridSessionCardProps) {
   const surfaceClass = planningCourseCardToneClass(courseSlug);
+  const resolvedEndTime = endTime || computePlanningCourseEnd(startTime, durationMinutes) || startTime;
 
   return (
     <article
@@ -44,14 +46,20 @@ export function PlanningGridSessionCard({
         {courseLabel}
       </p>
 
-      <p className="mt-0.5 truncate text-[10px] leading-tight text-brand-dark/75" title={coachName ?? undefined}>
-        {coachName ?? "—"}
+      <p className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold leading-tight text-brand-dark tabular-nums sm:text-xs">
+        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 shrink-0 text-brand-dark/55" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
+          <circle cx="12" cy="12" r="8" />
+          <path d="M12 8v4l2.5 2" />
+        </svg>
+        <span>
+          {startTime}
+          <span className="font-normal text-brand-dark/45"> – </span>
+          {resolvedEndTime}
+        </span>
       </p>
 
-      <p className="mt-0.5 text-[10px] font-medium leading-tight text-brand-dark/85">
-        <span className="tabular-nums">{startTime}</span>
-        <span className="text-brand-dark/50"> – </span>
-        <span className="tabular-nums">{endTime}</span>
+      <p className="mt-0.5 truncate text-[10px] leading-tight text-brand-dark/75" title={coachName ?? undefined}>
+        {coachName ?? "—"}
       </p>
 
       <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-0.5">

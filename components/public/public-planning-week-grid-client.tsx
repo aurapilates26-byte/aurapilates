@@ -2,19 +2,19 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { PlanningPeriodNotice } from "@/components/planning/planning-period-notice";
+import { PlanningWeekGrid } from "@/components/planning/planning-week-grid";
 import { buildPeriodDaySelectOptions } from "@/lib/planning-period-day-dates";
 import { formatYmdLocal, parseYmdLocal, startOfLocalToday } from "@/lib/calendar-day";
 import { courseLabel } from "@/lib/course-labels";
+import { planningLevelBadgeClass } from "@/lib/planning-level-badge";
 import {
-  DAY_LABEL_FR,
   PLANNING_LEVEL_FORM_OPTIONS,
   planningLevelLabelFr,
 } from "@/lib/planning-public-labels";
 import { DEFAULT_STUDIO_BOOKING_RULES } from "@/lib/studio-booking-rules";
 import { usePlanningPeriodStore } from "@/store/planning-period-store";
-import type { PlanningPeriodEnriched } from "@/types/admin/planning";
+import type { AdminPlanningItem, PlanningPeriodConfig, PlanningPeriodEnriched } from "@/types/admin/planning";
 import type { PublicPlanningDay, PublicPlanningTableRow } from "@/components/public/public-planning-tabs-client";
-import styles from "@/components/public/public-planning-week-grid.module.css";
 
 const DEFAULT_COURSE_FILTERS = [
   { value: "ALL", label: "Tous les cours" },
@@ -41,6 +41,7 @@ const COURSE_FILTER_LABELS: Record<string, string> = {
   "cours-de-yoga": "Yoga",
   "cours-de-dance": "Danse",
   "coaching-prive": "Coaching privé",
+  "sans-cours": "Sans cours",
 };
 
 function formatWeekLabel(startYmd: string, endYmd: string): string {
@@ -50,25 +51,6 @@ function formatWeekLabel(startYmd: string, endYmd: string): string {
   const startPart = start.toLocaleDateString("fr-FR", { day: "numeric", month: "long" });
   const endPart = end.toLocaleDateString("fr-FR", { day: "numeric", month: "long", year: "numeric" });
   return `Semaine du ${startPart} au ${endPart}`;
-}
-
-function formatDayColumnParts(sessionYmd: string, dayOfWeek: PublicPlanningDay) {
-  const date = parseYmdLocal(sessionYmd);
-  if (!date) {
-    return { weekday: DAY_LABEL_FR[dayOfWeek], dayMonth: "" };
-  }
-  const weekday = date.toLocaleDateString("fr-FR", { weekday: "long" });
-  const dayMonth = date.toLocaleDateString("fr-FR", { day: "numeric", month: "long" });
-  return {
-    weekday: weekday.charAt(0).toUpperCase() + weekday.slice(1),
-    dayMonth,
-  };
-}
-
-function formatTimeFr(hhmm: string): string {
-  const [h, m] = hhmm.split(":");
-  if (!h || !m) return hhmm;
-  return `${h}h${m}`;
 }
 
 function ChevronLeftIcon({ className }: { className?: string }) {
@@ -87,31 +69,38 @@ function ChevronRightIcon({ className }: { className?: string }) {
   );
 }
 
-function PublicGridSessionCard({ row }: { row: PublicPlanningTableRow }) {
-  return (
-    <article className="rounded-xl border border-brand-medium/20 bg-[#f7f4ef] px-3 py-2.5 shadow-sm">
-      <p className="text-sm font-semibold leading-tight text-brand-dark">{row.courseTitle}</p>
-      {row.levelLabel ? (
-        <p className="mt-0.5 text-xs capitalize text-brand-dark/65">{row.levelLabel}</p>
-      ) : null}
-      <div className="mt-2 flex flex-wrap items-center gap-3 text-[11px] text-brand-dark/60">
-        <span className="inline-flex items-center gap-1">
-          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
-            <circle cx="12" cy="8" r="3" />
-            <path d="M6 20c0-3 2.5-5 6-5s6 2 6 5" />
-          </svg>
-          {row.capacity}
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
-            <circle cx="12" cy="12" r="8" />
-            <path d="M12 8v4l2 2" />
-          </svg>
-          {row.durationMinutes} min
-        </span>
-      </div>
-    </article>
-  );
+function coachFromPublicRow(row: PublicPlanningTableRow): AdminPlanningItem["coach"] {
+  if (!row.coachName || row.coachName === "Coach à confirmer") return null;
+  const parts = row.coachName.trim().split(/\s+/);
+  return {
+    id: row.id,
+    firstName: parts[0] ?? "",
+    lastName: parts.slice(1).join(" "),
+    imageUrl: row.coachImageUrl,
+  };
+}
+
+function toGridItems(
+  rows: PublicPlanningTableRow[],
+  dayColumns: ReturnType<typeof buildPeriodDaySelectOptions>,
+): AdminPlanningItem[] {
+  const ymdByDay = new Map(dayColumns.map((column) => [column.dayOfWeek, column.sessionYmd]));
+
+  return rows.map((row) => ({
+    id: row.id,
+    courseSlug: row.courseSlug,
+    dayOfWeek: row.dayOfWeek,
+    anchorSessionYmd: ymdByDay.get(row.dayOfWeek) ?? null,
+    level: (row.level as AdminPlanningItem["level"]) ?? null,
+    startTime: row.startTime,
+    endTime: row.endTime,
+    durationMinutes: row.durationMinutes,
+    capacity: row.capacity,
+    waitlistCapacity: row.waitlistCapacity,
+    coach: coachFromPublicRow(row),
+    createdAt: "",
+    updatedAt: "",
+  }));
 }
 
 type PublicPlanningWeekGridClientProps = {
@@ -179,33 +168,28 @@ export function PublicPlanningWeekGridClient({ rows, initialPeriodConfig }: Publ
     [courseFilter, levelFilter, rows],
   );
 
-  const timeSlots = useMemo(() => {
-    const times = [...new Set(filteredRows.map((r) => r.startTime))];
-    return times.sort((a, b) => a.localeCompare(b));
-  }, [filteredRows]);
+  const gridItems = useMemo(
+    () => toGridItems(filteredRows, dayColumns),
+    [dayColumns, filteredRows],
+  );
 
-  const displayTimeSlots = timeSlots.length > 0 ? timeSlots : ["__empty__"];
-
-  const sessionsByDayTime = useMemo(() => {
-    const map = new Map<string, PublicPlanningTableRow[]>();
-    for (const row of filteredRows) {
-      const key = `${row.dayOfWeek}-${row.startTime}`;
-      const list = map.get(key) ?? [];
-      list.push(row);
-      map.set(key, list);
+  const courseLabelBySlug = useMemo(() => {
+    const map: Record<string, string> = { ...COURSE_FILTER_LABELS };
+    for (const row of rows) {
+      map[row.courseSlug] = row.courseTitle;
     }
     return map;
-  }, [filteredRows]);
+  }, [rows]);
 
-  const closedDays = useMemo(() => {
-    const closed = new Set<PublicPlanningDay>();
-    for (const column of dayColumns) {
-      const day = column.dayOfWeek as PublicPlanningDay;
-      const hasSessions = filteredRows.some((row) => row.dayOfWeek === day);
-      if (!hasSessions) closed.add(day);
-    }
-    return closed;
-  }, [dayColumns, filteredRows]);
+  const gridPeriod = useMemo(
+    (): PlanningPeriodConfig => ({
+      bookingWindow: periodConfig.bookingWindow,
+      periodStartYmd: periodConfig.periodStartYmd,
+      periodEndYmd: periodConfig.periodEndYmd,
+      periodLabel: periodConfig.periodLabel,
+    }),
+    [periodConfig],
+  );
 
   const todayYmd = formatYmdLocal(startOfLocalToday());
   const hasPublishedSlots = rows.length > 0;
@@ -217,8 +201,6 @@ export function PublicPlanningWeekGridClient({ rows, initialPeriodConfig }: Publ
       </p>
     );
   }
-
-  const columnCount = Math.min(Math.max(dayColumns.length, 1), 7);
 
   return (
     <div className="space-y-5">
@@ -286,91 +268,39 @@ export function PublicPlanningWeekGridClient({ rows, initialPeriodConfig }: Publ
       </div>
 
       <div className="overflow-x-auto">
-        <div className="min-w-[960px]">
-          <div
-            className={`${styles.dayColumns} ${styles.headerRow}`}
-            data-cols={columnCount}
-            aria-label="Jours de la semaine"
-          >
-            <div />
-            {dayColumns.map((column) => {
-              const parts = formatDayColumnParts(column.sessionYmd, column.dayOfWeek as PublicPlanningDay);
+        <div className="min-w-[720px] rounded-2xl border border-brand-medium/20 bg-white shadow-sm">
+          <PlanningWeekGrid
+            period={gridPeriod}
+            items={gridItems}
+            courseLabelBySlug={courseLabelBySlug}
+            renderSessionActions={() => null}
+            levelLabelFor={(level) => {
+              const raw = planningLevelLabelFr(level ?? undefined);
+              return raw ? capitalizeFr(raw) : null;
+            }}
+            levelToneFor={(level) => planningLevelBadgeClass(level)}
+            readOnly
+            embedded
+            renderEmptyDay={(column) => {
+              if (column.dayOfWeek !== "SUN") return null;
               return (
-                <div
-                  key={column.sessionYmd}
-                  id={`planning-col-${column.sessionYmd}`}
-                  className={`text-center ${
-                    column.sessionYmd === todayYmd ? "text-brand-dark" : "text-brand-dark/80"
-                  }`}
-                >
-                  <p className="text-xs font-semibold sm:text-sm">{parts.weekday}</p>
-                  <p className="mt-0.5 text-[11px] font-normal text-brand-dark/55 sm:text-xs">{parts.dayMonth}</p>
+                <div className="flex min-h-[120px] flex-col items-center justify-center rounded-lg border border-dashed border-brand-medium/20 px-2 py-6 text-center">
+                  <p className="text-lg text-brand-dark/25" aria-hidden>
+                    ♥
+                  </p>
+                  <p className="mt-1 text-[10px] text-brand-dark/50">Le studio est fermé</p>
                 </div>
               );
-            })}
-          </div>
-
-          <div className={`${styles.dayColumns} ${styles.bodyRow}`} data-cols={columnCount}>
-            <div className={styles.timeAxis}>
-              {displayTimeSlots.map((time) => (
-                <div key={time} className={styles.timeLabel}>
-                  {time === "__empty__" ? null : formatTimeFr(time)}
-                </div>
-              ))}
-            </div>
-            {dayColumns.map((column) => {
-              const day = column.dayOfWeek as PublicPlanningDay;
-
-              if (closedDays.has(day)) {
-                return (
-                  <div key={column.sessionYmd} className={styles.closedDay}>
-                    <div>
-                      {day === "SUN" ? (
-                        <>
-                          <p className="text-lg text-brand-dark/25" aria-hidden>
-                            ♥
-                          </p>
-                          <p className="mt-1 text-xs text-brand-dark/50">Le studio est fermé</p>
-                        </>
-                      ) : (
-                        <p className="text-xs text-brand-dark/50">
-                          {hasPublishedSlots ? "Aucune séance" : "Créneaux à venir"}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                );
-              }
-
-              return (
-                <div key={column.sessionYmd} className={styles.dayColumn}>
-                  {displayTimeSlots.map((time) => {
-                    if (time === "__empty__") {
-                      return <div key={time} className={styles.slot} />;
-                    }
-
-                    const cellSessions = sessionsByDayTime.get(`${day}-${time}`) ?? [];
-
-                    return (
-                      <div key={time} className={styles.slot}>
-                        {cellSessions.map((session) => (
-                          <PublicGridSessionCard key={session.id} row={session} />
-                        ))}
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            })}
-          </div>
-
-          {!hasPublishedSlots ? (
-            <p className={styles.emptyNotice}>
-              Le planning détaillé sera affiché dès que les créneaux seront publiés depuis l&apos;administration.
-            </p>
-          ) : null}
+            }}
+          />
         </div>
       </div>
+
+      {!hasPublishedSlots ? (
+        <p className="text-center text-sm text-brand-dark/60">
+          Le planning détaillé sera affiché dès que les créneaux seront publiés depuis l&apos;administration.
+        </p>
+      ) : null}
     </div>
   );
 }
