@@ -17,6 +17,7 @@ import {
   preparePackForAdminPresenceDebit,
 } from "@/lib/admin/member-pack-selection";
 import { isSessionYmdWithinPlanningPeriod } from "@/lib/planning-period-status";
+import { resolvePlanningPeriodConfigForSessionYmd } from "@/lib/admin/planning-period-archive";
 import { prisma } from "@/lib/prisma";
 import { HISTORICAL_PRESENCE_MARKED_BY } from "@/lib/admin/unmark-historical-presence";
 import type { PlanningPeriodConfig } from "@/types/admin/planning";
@@ -130,7 +131,10 @@ export async function markHistoricalPresence(input: {
   }
 
   if (!isSessionYmdWithinPlanningPeriod(input.sessionDateYmd, input.periodConfig)) {
-    throw new Error("OUTSIDE_PERIOD");
+    const resolved = await resolvePlanningPeriodConfigForSessionYmd(input.sessionDateYmd);
+    if (!resolved || !isSessionYmdWithinPlanningPeriod(input.sessionDateYmd, resolved)) {
+      throw new Error("OUTSIDE_PERIOD");
+    }
   }
 
   const result = await prisma.$transaction(

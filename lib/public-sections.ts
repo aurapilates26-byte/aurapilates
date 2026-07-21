@@ -6,7 +6,8 @@ export const PUBLIC_LANDING_SECTIONS = [
   { label: "Pack", slug: "tarif" },
   { label: "Inscription", slug: "inscription" },
   { label: "Témoignages", slug: "temoignages" },
-  { label: "FAQ", slug: "faq" },
+  /* Masqué temporairement — page dédiée à venir. */
+  // { label: "FAQ", slug: "faq" },
 ] as const;
 
 export type PublicLandingSectionSlug = (typeof PUBLIC_LANDING_SECTIONS)[number]["slug"];
@@ -21,11 +22,11 @@ export function isPublicLandingSectionSlug(value: string): value is PublicLandin
 /** Slugs servis par `app/(public)/(marketing)/[section]/page.tsx` (pas `cours`, reserve a `cours/page.tsx`). */
 export const MARKETING_DYNAMIC_SECTION_SLUGS = [
   /* "coach", // masqué temporairement (aligné sur le nav public) */
-  "planning",
+  /* "planning", // page dédiée : app/(public)/planning/page.tsx */
   "tarif",
   "inscription",
   "temoignages",
-  "faq",
+  /* "faq", // masqué temporairement */
 ] as const;
 
 export type MarketingDynamicSectionSlug = (typeof MARKETING_DYNAMIC_SECTION_SLUGS)[number];

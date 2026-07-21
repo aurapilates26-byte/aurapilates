@@ -6,6 +6,7 @@ import { Button, ConfirmDialog, Input, SelectMenu } from "@/components/ui";
 import { PlanningPeriodNavigator } from "@/components/planning/planning-period-navigator";
 import { PlanningWeekGrid } from "@/components/planning/planning-week-grid";
 import { PlanningHistoricalPresenceDialog } from "@/components/planning/planning-historical-presence-dialog";
+import { PlanningYesterdayPresenceStrip } from "@/components/planning/planning-yesterday-presence-strip";
 import { PlanningPeriodSettingsPanel } from "@/components/planning/planning-period-settings-panel";
 import {
   computePlanningCourseEnd,
@@ -20,9 +21,12 @@ import {
 import { planningLevelBadgeClass } from "@/lib/planning-level-badge";
 import { buildPeriodDaySelectOptions, weekdayDateLineForPeriod, weekdaysPresentInPeriod } from "@/lib/planning-period-day-dates";
 import {
+  periodContainsYmd,
   resolveCalendarCurrentPeriod,
   resolveNextPlanningPeriod,
+  resolvePeriodConfigForSessionYmd,
   todayYmdLocal,
+  yesterdayYmdLocal,
 } from "@/lib/admin/planning-admin-calendar-period";
 import { PLANNING_LEVEL_FORM_OPTIONS, planningLevelLabelFr } from "@/lib/planning-public-labels";
 import { planningGridCacheKey, planningGridFetchUrl } from "@/lib/planning-grid-cache-key";
@@ -173,6 +177,9 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   const [draftSelectedDay, setDraftSelectedDay] = useState<PlanningDayOfWeek>(() => todayPlanningDay());
   const [historicalSlot, setHistoricalSlot] = useState<AdminPlanningItem | null>(null);
   const [historicalSessionYmd, setHistoricalSessionYmd] = useState<string | null>(null);
+  const [historicalPeriodConfig, setHistoricalPeriodConfig] = useState<PlanningPeriodConfig | null>(null);
+  const [yesterdayItems, setYesterdayItems] = useState<AdminPlanningItem[]>([]);
+  const [yesterdayLoading, setYesterdayLoading] = useState(false);
 
   const [gridNavIndex, setGridNavIndex] = useState<number | null>(null);
   const [gridNavPinned, setGridNavPinned] = useState(false);
@@ -424,6 +431,66 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
       return haystack.includes(q);
     });
   }, [filters.search, gridItems]);
+
+  const yesterdayYmd = yesterdayYmdLocal();
+
+  const yesterdayPeriod = useMemo(
+    () =>
+      resolvePeriodConfigForSessionYmd(yesterdayYmd, {
+        published: periodConfig,
+        archives: archivedPeriods,
+      }),
+    [archivedPeriods, periodConfig, yesterdayYmd],
+  );
+
+  const showYesterdayPresencePanel = Boolean(
+    canManagePresence &&
+      showList &&
+      currentGridSlot?.kind === "published" &&
+      currentGridSlot.sessionScope !== "archive" &&
+      yesterdayPeriod &&
+      !periodContainsYmd(currentGridSlot.period, yesterdayYmd),
+  );
+
+  const visibleYesterdayItems = useMemo(() => {
+    const q = filters.search.trim().toLowerCase();
+    return yesterdayItems.filter((item) => {
+      if (!q) return true;
+      const coachName = item.coach ? `${item.coach.firstName} ${item.coach.lastName}` : "";
+      const haystack = `${item.courseSlug} ${coachName}`.toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [filters.search, yesterdayItems]);
+
+  useEffect(() => {
+    if (!showYesterdayPresencePanel || !yesterdayPeriod) {
+      setYesterdayItems([]);
+      return;
+    }
+
+    let cancelled = false;
+    setYesterdayLoading(true);
+
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/admin/planning?scope=archive&periodStartYmd=${encodeURIComponent(yesterdayPeriod.periodStartYmd)}`,
+          { cache: "no-store" },
+        );
+        const data = (await res.json()) as { items?: AdminPlanningItem[] };
+        if (cancelled) return;
+        setYesterdayItems((data.items ?? []).filter((item) => item.anchorSessionYmd === yesterdayYmd));
+      } catch {
+        if (!cancelled) setYesterdayItems([]);
+      } finally {
+        if (!cancelled) setYesterdayLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showYesterdayPresencePanel, yesterdayPeriod, yesterdayYmd]);
 
   const visibleItems = useMemo(() => {
     const q = filters.search.trim().toLowerCase();
@@ -695,8 +762,18 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     }
   };
 
-  const openGridHistoricalPresence = (item: AdminPlanningItem) => {
-    const ymd = item.anchorSessionYmd;
+  const resolveHistoricalPeriod = useCallback(
+    (sessionYmd: string): PlanningPeriodConfig | null =>
+      resolvePeriodConfigForSessionYmd(sessionYmd, {
+        published: periodConfig,
+        archives: archivedPeriods,
+        fallback: currentGridSlot?.period ?? null,
+      }),
+    [archivedPeriods, currentGridSlot, periodConfig],
+  );
+
+  const openGridHistoricalPresence = (item: AdminPlanningItem, sessionYmdOverride?: string) => {
+    const ymd = sessionYmdOverride ?? item.anchorSessionYmd;
     if (!ymd) {
       toast({
         variant: "error",
@@ -705,6 +782,18 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
       });
       return;
     }
+
+    const resolvedPeriod = resolveHistoricalPeriod(ymd);
+    if (!resolvedPeriod) {
+      toast({
+        variant: "error",
+        title: "Période introuvable",
+        description: "Impossible de déterminer la période pour cette date de cours.",
+      });
+      return;
+    }
+
+    setHistoricalPeriodConfig(resolvedPeriod);
     setHistoricalSlot(item);
     setHistoricalSessionYmd(ymd);
   };
@@ -831,6 +920,16 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
                 }
               />
             </div>
+
+            {showYesterdayPresencePanel ? (
+              <PlanningYesterdayPresenceStrip
+                yesterdayYmd={yesterdayYmd}
+                items={visibleYesterdayItems}
+                loading={yesterdayLoading}
+                courseLabelBySlug={courseLabelBySlug}
+                onOpenPresence={(item) => openGridHistoricalPresence(item, yesterdayYmd)}
+              />
+            ) : null}
 
             {visibleGridItems.length === 0 ? (
               <div className="shrink-0 px-5 py-10 text-center text-sm text-brand-dark/60">
@@ -1039,10 +1138,11 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
         onClose={() => {
           setHistoricalSlot(null);
           setHistoricalSessionYmd(null);
+          setHistoricalPeriodConfig(null);
         }}
         slot={historicalSlot}
         sessionDateYmd={historicalSessionYmd}
-        periodConfig={selectedArchivePeriod}
+        periodConfig={historicalPeriodConfig}
         courseLabel={historicalSlot ? courseLabelBySlug[historicalSlot.courseSlug] ?? historicalSlot.courseSlug : ""}
       />
     </div>

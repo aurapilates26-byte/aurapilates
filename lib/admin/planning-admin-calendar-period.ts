@@ -1,4 +1,11 @@
-import { formatYmdLocal, formatYmdPrismaDate, parseYmdLocal, startOfLocalToday } from "@/lib/calendar-day";
+import {
+  addLocalDays,
+  formatYmdLocal,
+  formatYmdPrismaDate,
+  parseYmdLocal,
+  parseYmdToPrismaDate,
+  startOfLocalToday,
+} from "@/lib/calendar-day";
 import { formatPeriodIntervalFr } from "@/lib/planning-booking-window";
 import { proposeNextPlanningPeriod } from "@/lib/planning-period-status";
 import type {
@@ -69,6 +76,40 @@ export function resolveNextPlanningPeriod(
 
 export function todayYmdLocal(): string {
   return formatYmdLocal(startOfLocalToday());
+}
+
+export function yesterdayYmdLocal(): string {
+  return formatYmdLocal(addLocalDays(startOfLocalToday(), -1));
+}
+
+/** Période (publiée ou archivée) contenant une date de séance. */
+export function resolvePeriodConfigForSessionYmd(
+  sessionYmd: string,
+  options: {
+    published: PlanningPeriodConfig | null;
+    archives: PlanningArchivedPeriodItem[];
+    fallback?: PlanningPeriodConfig | null;
+  },
+): PlanningPeriodConfig | null {
+  if (options.published && periodContainsYmd(options.published, sessionYmd)) {
+    return options.published;
+  }
+
+  const fromArchive = options.archives.find((arch) => periodContainsYmd(arch, sessionYmd));
+  if (fromArchive) {
+    return {
+      bookingWindow: fromArchive.bookingWindow,
+      periodStartYmd: fromArchive.periodStartYmd,
+      periodEndYmd: fromArchive.periodEndYmd,
+      periodLabel: fromArchive.periodLabel,
+    };
+  }
+
+  if (options.fallback && periodContainsYmd(options.fallback, sessionYmd)) {
+    return options.fallback;
+  }
+
+  return null;
 }
 
 /** Archives brutes pour résolution calendrier (sans effets de bord). */

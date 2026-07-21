@@ -1,35 +1,97 @@
+type HeroHeadingLine = {
+  text: string;
+  weight: "bold" | "normal";
+};
+
+type HeroFeature = {
+  title: string;
+  subtitle: string;
+};
+
 type HomeText = {
   hero: {
-    title: string;
-    subtitle: string;
-    centerTitle: string;
-    centerSubtitle: string;
+    headingLines: HeroHeadingLine[];
+    description: string;
+    primaryCta: string;
+    secondaryCta: string;
+    feminineTagline: string;
     image: string;
     imageAlt: string;
+    features: HeroFeature[];
   };
   sections: {
+    about: {
+      kicker: string;
+      title: string;
+      paragraphs: string[];
+      cta: string;
+      image: string;
+      imageAlt: string;
+    };
     cours: { kicker: string; title: string; subtitle: string };
     tarif: { kicker: string; title: string; subtitle: string };
     coach: { kicker: string; title: string; subtitle: string };
     planning: { kicker: string; title: string; subtitle: string };
     inscription: { title: string; subtitle: string };
     temoignages: { kicker: string; title: string; subtitle: string };
+    ready: {
+      title: string;
+      subtitle: string;
+      cta: string;
+      image: string;
+      imageAlt: string;
+    };
     faq: { kicker: string; title: string; subtitle: string };
   };
 };
 
 export const homeText: HomeText = {
   hero: {
-    title: "100% femmes",
-    subtitle: "Bien-être, force et progression continue.",
-    centerTitle: "Aura Studio Pilates",
-    centerSubtitle: "Respirez, alignez, rayonnez avec Aura Pilates.",
-    image: "/images/Amelioration continue garantie.png",
-    imageAlt: "Amélioration continue garantie",
+    headingLines: [
+      { text: "Votre moment.", weight: "bold" },
+      { text: "Votre équilibre.", weight: "normal" },
+      { text: "Votre Aura.", weight: "bold" },
+    ],
+    description:
+      "Pilates Reformer, Mat Pilates et Yoga. Des cours pensés pour renforcer votre corps, apaiser votre esprit et révéler votre énergie.",
+    primaryCta: "Réserver une séance",
+    secondaryCta: "Découvrir nos cours",
+    feminineTagline: "Un studio 100% féminin",
+    image: "/images/hero.png",
+    imageAlt: "Studio Aura Pilates",
+    features: [
+      {
+        title: "Exclusivement féminin",
+        subtitle: "Un espace bienveillant rien que pour vous.",
+      },
+      {
+        title: "Encadrement personnalisé",
+        subtitle: "Des coachs à votre écoute et attentifs à vos besoins.",
+      },
+      {
+        title: "Équipements premium",
+        subtitle: "Des équipements haut de gamme pour une pratique sûre et efficace.",
+      },
+      {
+        title: "Bien-être global",
+        subtitle: "Un équilibre entre force, mobilité et sérénité.",
+      },
+    ],
   },
   sections: {
+    about: {
+      kicker: "À propos d'Aura",
+      title: "Plus qu'un studio",
+      paragraphs: [
+        "Aura Pilates est un espace entièrement dédié au bien-être des femmes, où mouvement, respiration et harmonie se rencontrent.",
+        "Au cœur d'un cadre chaleureux et élégant, notre équipe vous accueille pour une pratique exigeante et bienveillante, adaptée à votre rythme et à vos besoins.",
+      ],
+      cta: "Découvrir notre histoire",
+      image: "/images/aprops.png",
+      imageAlt: "Intérieur du studio Aura Pilates",
+    },
     cours: {
-      kicker: "Cours",
+      kicker: "Nos cours",
       title: "Des cours pensés pour votre progression",
       subtitle: "Pilates, yoga et danse pour progresser chaque semaine en confiance",
     },
@@ -53,9 +115,16 @@ export const homeText: HomeText = {
       subtitle: "Rejoignez le studio avec un accueil personnalisé dès votre premier cours",
     },
     temoignages: {
-      kicker: "Témoignages",
-      title: "Ce que nos clientes disent",
-      subtitle: "Des avis authentiques pour imaginer votre place au studio",
+      kicker: "Elles parlent d'Aura",
+      title: "Vos mots, notre plus belle récompense",
+      subtitle: "",
+    },
+    ready: {
+      title: "Prête à prendre du temps pour vous ?",
+      subtitle: "Réservez votre première séance et découvrez l'expérience Aura.",
+      cta: "Réserver une séance",
+      image: "/images/pretes.png",
+      imageAlt: "Moment de bien-être au studio Aura Pilates",
     },
     faq: {
       kicker: "FAQ",
@@ -91,14 +160,20 @@ export const homeTestimonials: HomeTestimonial[] = [
     quote:
       "Un cadre calme et féminin comme je le cherchais. Les cours au Reformer m'ont aidée à mieux tenir ma posture au travail.",
   },
+  {
+    initials: "LK",
+    name: "Lina K.",
+    quote:
+      "Une ambiance douce et professionnelle. Chaque séance est un vrai moment pour moi, entre renforcement et détente.",
+  },
 ];
 
 export const courseContent = [
   {
     slug: "pilates-reformer",
-    title: "Pilates reformer",
+    title: "Pilates Reformer",
     cardDescription:
-      "Renforcement global et précision du mouvement grâce au travail sur machine.",
+      "Renforcez votre corps en profondeur, améliorez votre posture et gagnez en stabilité grâce au travail sur machine.",
     cardImage: "/images/Pilates_reformer.png",
     heroImage: "/images/Pilates_reformer.png",
     galleryImage: "/images/Calme interieur et mobilite.png",
@@ -111,9 +186,9 @@ export const courseContent = [
   },
   {
     slug: "mat-pilates",
-    title: "Mat pilates",
+    title: "Mat Pilates",
     cardDescription:
-      "Cours sur tapis pour renforcer le centre du corps et améliorer la posture.",
+      "Renforcez votre centre, améliorez votre posture et gagnez en mobilité avec des exercices au sol accessibles à tous les niveaux.",
     cardImage: "/images/Mat_pilates.png",
     heroImage: "/images/Mat_pilates.png",
     galleryImage: "/images/Fondations solides sur tapis.png",
@@ -128,7 +203,7 @@ export const courseContent = [
     slug: "cours-de-yoga",
     title: "Yoga",
     cardDescription:
-      "Mobilité, souplesse et respiration pour équilibrer corps et esprit.",
+      "Détendez votre corps, améliorez votre souplesse et retrouvez un équilibre intérieur grâce à la respiration et au mouvement.",
     cardImage: "/images/Cours_de_yoga.png",
     heroImage: "/images/Cours_de_yoga.png",
     galleryImage: "/images/Calme interieur et mobilite.png",
@@ -143,7 +218,7 @@ export const courseContent = [
     slug: "cours-de-dance",
     title: "Danse",
     cardDescription:
-      "Expression, coordination et cardio dans une ambiance dynamique.",
+      "Exprimez-vous en mouvement, travaillez votre coordination et libérez votre énergie dans une ambiance dynamique et motivante.",
     cardImage: "/images/Cours_de_dance.png",
     heroImage: "/images/Cours_de_dance.png",
     galleryImage: "/images/Energie et expression en mouvement.png",
@@ -154,4 +229,54 @@ export const courseContent = [
     paragraphTwo:
       "Ce cours est idéal pour se dépenser, gagner en confiance et travailler l'endurance dans un cadre convivial. Il complète parfaitement les pratiques Pilates et yoga.",
   },
+  {
+    slug: "coaching-prive",
+    title: "Coaching privé",
+    cardDescription:
+      "Un accompagnement sur mesure, en solo ou en duo, pour cibler vos objectifs avec un suivi attentif et des progrès visibles.",
+    cardImage: "/images/coachinPrivé.png",
+    heroImage: "/images/coachinPrivé.png",
+    galleryImage: "/images/coachinPrivé.png",
+    intro:
+      "Le coaching privé vous offre une séance entièrement personnalisée, adaptée à votre niveau, vos besoins et vos objectifs.",
+    paragraphOne:
+      "En solo ou en duo, vous bénéficiez d'un suivi individualisé : correction des mouvements, progression à votre rythme et programme ajusté séance après séance.",
+    paragraphTwo:
+      "Ce format est idéal pour débuter en confiance, retrouver la forme après une pause, travailler un objectif précis ou simplement profiter d'un moment rien que pour vous.",
+  },
 ] as const;
+
+export const planningPageText = {
+  title: "Planning",
+  subtitle: "Trouvez votre moment.",
+  description:
+    "Découvrez nos cours et réservez votre séance en quelques clics. Nous avons hâte de vous accueillir au studio.",
+  features: [
+    {
+      title: "Cours en petits groupes",
+      subtitle: "Pour un accompagnement personnalisé",
+    },
+    {
+      title: "Réservation simple et rapide",
+      subtitle: "En ligne, 24h/24 et 7j/7",
+    },
+  ] as const,
+  tips: [
+    {
+      title: "Arrivez 10 minutes avant",
+      subtitle: "votre cours pour profiter pleinement de votre séance.",
+    },
+    {
+      title: "Tenue confortable",
+      subtitle: "et chaussettes antidérapantes recommandées.",
+    },
+    {
+      title: "Annulation possible",
+      subtitle: "jusqu'à 12h avant le cours depuis votre espace.",
+    },
+    {
+      title: "Des questions ?",
+      subtitle: "Notre équipe est là pour vous aider.",
+    },
+  ] as const,
+};

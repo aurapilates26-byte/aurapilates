@@ -1,6 +1,4 @@
 import type { Prisma } from "@prisma/client";
-import { PlanningPeriodActiveBadge } from "@/components/planning/planning-period-active-badge";
-import { PlanningPeriodNotice } from "@/components/planning/planning-period-notice";
 import { PublicPlanningSectionClient } from "@/components/public/public-planning-section-client";
 import type { PublicPlanningDay, PublicPlanningTableRow } from "@/components/public/public-planning-tabs-client";
 import { courseLabel } from "@/lib/course-labels";
@@ -49,27 +47,18 @@ export async function PublicPlanningDisplay() {
           return planningSlotHasPublicOccurrenceInRange(staggeredCtx, row, from, to);
         });
       }
+    } else {
+      rows = allRows;
     }
   } catch {
     rows = [];
-  }
-
-  if (rows.length === 0) {
-    return (
-      <div className="space-y-4">
-        <PlanningPeriodActiveBadge initialConfig={periodConfig} source="public" align="center" />
-        <PlanningPeriodNotice config={periodConfig} variant="public" />
-        <p className="text-center text-sm leading-6 text-brand-dark/80">
-          Le planning détaillé sera affiché ici dès que les créneaux seront publiés depuis l&apos;administration.
-        </p>
-      </div>
-    );
   }
 
   const tableRows: PublicPlanningTableRow[] = rows.map((row) => {
     const levelDisplay = planningLevelDisplay(row.level);
     return {
       id: row.id,
+      courseSlug: row.courseSlug,
       dayOfWeek: row.dayOfWeek as PublicPlanningDay,
       startTime: row.startTime,
       endTime: row.endTime,

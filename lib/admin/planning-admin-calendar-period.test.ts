@@ -3,6 +3,7 @@ import {
   periodContainsYmd,
   resolveCalendarCurrentPeriod,
   resolveNextPlanningPeriod,
+  resolvePeriodConfigForSessionYmd,
 } from "@/lib/admin/planning-admin-calendar-period";
 import type { PlanningArchivedPeriodItem, PlanningPeriodConfig } from "@/types/admin/planning";
 
@@ -41,5 +42,14 @@ describe("planning-admin-calendar-period", () => {
     expect(periodContainsYmd(archived, "2026-06-22")).toBe(true);
     expect(periodContainsYmd(archived, "2026-06-28")).toBe(true);
     expect(periodContainsYmd(archived, "2026-06-29")).toBe(false);
+  });
+
+  it("resolvePeriodConfigForSessionYmd picks archive when date is outside published", () => {
+    const resolved = resolvePeriodConfigForSessionYmd("2026-06-25", {
+      published,
+      archives: [archived],
+    });
+    expect(resolved?.periodStartYmd).toBe("2026-06-22");
+    expect(resolved?.periodEndYmd).toBe("2026-06-28");
   });
 });

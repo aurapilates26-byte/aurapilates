@@ -234,6 +234,37 @@ export async function getArchivedPlanningPeriodConfig(
   return configFromArchiveRow(row);
 }
 
+/** Période publiée ou archivée contenant une date de séance (résolution serveur). */
+export async function resolvePlanningPeriodConfigForSessionYmd(
+  sessionYmd: string,
+): Promise<PlanningPeriodConfig | null> {
+  const sessionDate = parseYmdToPrismaDate(sessionYmd);
+  if (!sessionDate) return null;
+
+  const { getPlanningPeriodConfig } = await import("@/lib/admin/planning-period-config");
+  const { isSessionYmdWithinPlanningPeriod } = await import("@/lib/planning-period-status");
+
+  try {
+    const published = await getPlanningPeriodConfig();
+    if (isSessionYmdWithinPlanningPeriod(sessionYmd, published)) {
+      return published;
+    }
+  } catch {
+    // Pas de période publiée configurée.
+  }
+
+  const archive = await prisma.studioPlanningPeriodArchive.findFirst({
+    where: {
+      periodStartDate: { lte: sessionDate },
+      periodEndDate: { gte: sessionDate },
+    },
+    orderBy: { periodStartDate: "desc" },
+  });
+  if (archive) return configFromArchiveRow(archive);
+
+  return null;
+}
+
 /** Périodes connues à importer (saisie initiale studio). */
 export const KNOWN_PLANNING_PERIOD_SEEDS: { periodStartYmd: string; bookingWindow: PlanningBookingWindow }[] = [
   { periodStartYmd: "2026-05-18", bookingWindow: "WEEKLY" },

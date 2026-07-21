@@ -1,9 +1,7 @@
 "use client";
 
-import {
-  PublicPlanningTabsClient,
-  type PublicPlanningTableRow,
-} from "@/components/public/public-planning-tabs-client";
+import { PublicPlanningWeekGridClient } from "@/components/public/public-planning-week-grid-client";
+import type { PublicPlanningTableRow } from "@/components/public/public-planning-tabs-client";
 import type { PlanningPeriodEnriched } from "@/types/admin/planning";
 
 type PublicPlanningSectionClientProps = {
@@ -12,5 +10,5 @@ type PublicPlanningSectionClientProps = {
 };
 
 export function PublicPlanningSectionClient({ rows, initialPeriodConfig }: PublicPlanningSectionClientProps) {
-  return <PublicPlanningTabsClient rows={rows} initialPeriodConfig={initialPeriodConfig} />;
+  return <PublicPlanningWeekGridClient rows={rows} initialPeriodConfig={initialPeriodConfig} />;
 }

@@ -15,6 +15,7 @@ export type PublicPlanningDay = "MON" | "TUE" | "WED" | "THU" | "FRI" | "SAT" | 
 
 export type PublicPlanningTableRow = {
   id: string;
+  courseSlug: string;
   dayOfWeek: PublicPlanningDay;
   startTime: string;
   endTime: string;
