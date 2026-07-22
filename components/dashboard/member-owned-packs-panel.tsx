@@ -5,6 +5,7 @@ import { PaymentMethodBadge } from "@/components/dashboard/payment-method-badge"
 import { PackMetricsGrid } from "@/components/pack-metrics-grid";
 import type { MemberOwnedPackDto } from "@/lib/admin/member-owned-packs";
 import { formatPackPriceDt } from "@/lib/public-pack-display";
+import { useMemberBookingRefresh } from "@/hooks/use-member-booking-refresh";
 
 function formatDateFr(value: string | null | undefined) {
   if (!value) return "—";
@@ -140,6 +141,10 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
   useEffect(() => {
     void load();
   }, [load, reloadToken]);
+
+  // Écoute les événements de rafraîchissement (présence marquée, annulation, etc.)
+  // et recharge les packs quand un changement est détecté
+  useMemberBookingRefresh(load);
 
   if (isLoading) {
     return <p className="text-sm text-brand-dark/60">Chargement des packs…</p>;
