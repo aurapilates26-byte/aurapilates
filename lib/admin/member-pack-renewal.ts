@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { startOfLocalToday } from "@/lib/calendar-day";
 import { packExpiresAtLocal } from "@/lib/member-pack-period";
 import { prisma } from "@/lib/prisma";
@@ -104,40 +104,235 @@ export async function loadMemberPackState(
   };
 }
 
+/** Capacité totale = quota catalogue × nombre d'achats (inscriptions) du même pack. */
+export function packBalanceCapacityUnits(enrollmentCount: number, memberHasPackAssigned: boolean): number {
+  if (enrollmentCount > 0) return enrollmentCount;
+  return memberHasPackAssigned ? 1 : 0;
+}
+
+export function computePackCourseRemaining(capacityPerPurchase: number, units: number, used: number): number {
+  return Math.max(0, capacityPerPurchase * units - Math.max(0, used));
+}
+
+const CONSUMING_FOR_BALANCE_RECOMPUTE = {
+  OR: [
+    { status: { in: ["BOOKED", "ATTENDED"] as const } },
+    { status: "CANCELLED" as const, packRefundedAt: null },
+  ],
+} satisfies Pick<Prisma.ReservationWhereInput, "OR">;
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"
+  );
+}
+
+/**
+ * Écriture idempotente du solde (évite P2002 en concurrence delete+create).
+ * updateMany → create → en cas de course, updateMany à nouveau.
+ */
+export async function setMemberPackBalanceRemaining(
+  tx: typeof prisma | Prisma.TransactionClient,
+  input: {
+    memberId: string;
+    packId: string;
+    courseSlug: string | null;
+    remaining: number;
+  },
+): Promise<void> {
+  const remaining = Math.max(0, input.remaining);
+  const updated = await tx.memberPackBalance.updateMany({
+    where: {
+      memberId: input.memberId,
+      packId: input.packId,
+      courseSlug: input.courseSlug,
+    },
+    data: { remaining },
+  });
+  if (updated.count > 0) return;
+
+  try {
+    await tx.memberPackBalance.create({
+      data: {
+        memberId: input.memberId,
+        packId: input.packId,
+        courseSlug: input.courseSlug,
+        remaining,
+      },
+    });
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error;
+    await tx.memberPackBalance.updateMany({
+      where: {
+        memberId: input.memberId,
+        packId: input.packId,
+        courseSlug: input.courseSlug,
+      },
+      data: { remaining },
+    });
+  }
+}
+
+function dedupeCourseQuotas(
+  courseQuotas: { courseSlug: string; sessionCount: number }[],
+): { courseSlug: string; sessionCount: number }[] {
+  const bySlug = new Map<string, number>();
+  for (const quota of courseQuotas) {
+    bySlug.set(quota.courseSlug, quota.sessionCount);
+  }
+  return [...bySlug.entries()].map(([courseSlug, sessionCount]) => ({ courseSlug, sessionCount }));
+}
+
+/**
+ * Recalcule le solde réel d'un pack catalogue pour une adhérente.
+ * 2 achats AURA SCULPT (15 Ref + 15 Mat) → capacité 30 Ref + 30 Mat, moins les séances déjà débitées.
+ * Idempotent et sûr en concurrence (pas de delete+create naïf).
+ */
+export async function recomputeMemberPackBalancesForPack(
+  tx: typeof prisma | Prisma.TransactionClient,
+  input: { memberId: string; packId: string },
+): Promise<void> {
+  const [pack, enrollmentCount, member] = await Promise.all([
+    tx.pack.findUnique({
+      where: { id: input.packId },
+      select: {
+        id: true,
+        sessionCount: true,
+        courseQuotas: { select: { courseSlug: true, sessionCount: true } },
+      },
+    }),
+    tx.memberPackEnrollment.count({
+      where: { memberId: input.memberId, packId: input.packId },
+    }),
+    tx.member.findUnique({
+      where: { id: input.memberId },
+      select: { packId: true },
+    }),
+  ]);
+  if (!pack) return;
+
+  const units = packBalanceCapacityUnits(enrollmentCount, member?.packId === input.packId);
+  if (units === 0) {
+    await tx.memberPackBalance.deleteMany({
+      where: { memberId: input.memberId, packId: input.packId },
+    });
+    return;
+  }
+
+  const quotas = dedupeCourseQuotas(pack.courseQuotas);
+
+  if (quotas.length > 0) {
+    const desiredSlugs = quotas.map((q) => q.courseSlug);
+    await tx.memberPackBalance.deleteMany({
+      where: {
+        memberId: input.memberId,
+        packId: input.packId,
+        OR: [{ courseSlug: null }, { courseSlug: { notIn: desiredSlugs } }],
+      },
+    });
+
+    for (const quota of quotas) {
+      const used = await tx.reservation.count({
+        where: {
+          memberId: input.memberId,
+          ...CONSUMING_FOR_BALANCE_RECOMPUTE,
+          planning: { courseSlug: quota.courseSlug },
+          OR: [
+            { debitedPackId: input.packId },
+            { debitedPackId: null, status: "ATTENDED" },
+          ],
+        },
+      });
+      await setMemberPackBalanceRemaining(tx, {
+        memberId: input.memberId,
+        packId: pack.id,
+        courseSlug: quota.courseSlug,
+        remaining: computePackCourseRemaining(quota.sessionCount, units, used),
+      });
+    }
+    return;
+  }
+
+  if (pack.sessionCount != null) {
+    await tx.memberPackBalance.deleteMany({
+      where: {
+        memberId: input.memberId,
+        packId: input.packId,
+        courseSlug: { not: null },
+      },
+    });
+
+    const used = await tx.reservation.count({
+      where: {
+        memberId: input.memberId,
+        ...CONSUMING_FOR_BALANCE_RECOMPUTE,
+        OR: [
+          { debitedPackId: input.packId },
+          { debitedPackId: null, status: "ATTENDED" },
+        ],
+      },
+    });
+    await setMemberPackBalanceRemaining(tx, {
+      memberId: input.memberId,
+      packId: pack.id,
+      courseSlug: null,
+      remaining: computePackCourseRemaining(pack.sessionCount, units, used),
+    });
+  }
+}
+
+/** Initialise / aligne le solde (délègue au recalcul dès qu'il existe des inscriptions). */
 export async function resetMemberPackBalancesForPack(
   tx: typeof prisma | Prisma.TransactionClient,
   input: { memberId: string; packId: string }
 ) {
+  const enrollmentCount = await tx.memberPackEnrollment.count({
+    where: { memberId: input.memberId, packId: input.packId },
+  });
+  if (enrollmentCount > 0) {
+    await recomputeMemberPackBalancesForPack(tx, input);
+    return;
+  }
+
   const pack = await tx.pack.findUnique({
     where: { id: input.packId },
     select: { id: true, sessionCount: true, courseQuotas: { select: { courseSlug: true, sessionCount: true } } },
   });
   if (!pack) return;
 
-  await tx.memberPackBalance.deleteMany({
-    where: { memberId: input.memberId, packId: input.packId },
-  });
-
-  if (pack.courseQuotas.length > 0) {
-    await tx.memberPackBalance.createMany({
-      data: pack.courseQuotas.map((q) => ({
+  const quotas = dedupeCourseQuotas(pack.courseQuotas);
+  if (quotas.length > 0) {
+    await tx.memberPackBalance.deleteMany({
+      where: {
+        memberId: input.memberId,
+        packId: input.packId,
+        OR: [{ courseSlug: null }, { courseSlug: { notIn: quotas.map((q) => q.courseSlug) } }],
+      },
+    });
+    for (const quota of quotas) {
+      await setMemberPackBalanceRemaining(tx, {
         memberId: input.memberId,
         packId: pack.id,
-        courseSlug: q.courseSlug,
-        remaining: q.sessionCount,
-      })),
-    });
+        courseSlug: quota.courseSlug,
+        remaining: quota.sessionCount,
+      });
+    }
     return;
   }
 
   if (pack.sessionCount != null) {
-    await tx.memberPackBalance.create({
-      data: {
+    await tx.memberPackBalance.deleteMany({
+      where: {
         memberId: input.memberId,
-        packId: pack.id,
-        courseSlug: null,
-        remaining: pack.sessionCount,
+        packId: input.packId,
+        courseSlug: { not: null },
       },
+    });
+    await setMemberPackBalanceRemaining(tx, {
+      memberId: input.memberId,
+      packId: pack.id,
+      courseSlug: null,
+      remaining: pack.sessionCount,
     });
   }
 }

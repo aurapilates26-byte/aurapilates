@@ -1,8 +1,9 @@
 import "server-only";
 
-import type { MemberPackEnrollmentStatus, Prisma } from "@prisma/client";
+import { Prisma, type MemberPackEnrollmentStatus } from "@prisma/client";
 import { startOfLocalToday, formatYmdLocal, parseYmdToPrismaDate } from "@/lib/calendar-day";
 import {
+  allocateConsumedSessionsFifoForPackEnrollments,
   backfillEnrollmentStartFromFirstConsumption,
   countEnrollmentConsumedSessionsByCourseInPeriod,
   countEnrollmentConsumedSessionsInPeriod,
@@ -10,9 +11,7 @@ import {
   findFirstEnrollmentConsumedSessionDate,
   getEnrollmentPaymentTotals,
 } from "@/lib/admin/member-pack-enrollment";
-import {
-  resetMemberPackBalancesForPack,
-} from "@/lib/admin/member-pack-renewal";
+import { recomputeMemberPackBalancesForPack } from "@/lib/admin/member-pack-renewal";
 import { addPackDurationToStartDate } from "@/lib/pack-duration";
 import type { PackPaymentMethodValue } from "@/lib/pack-payment-method";
 import { courseLabel } from "@/lib/course-labels";
@@ -57,22 +56,23 @@ async function migratePendingPacksToParallel(
   });
 
   for (const row of pending) {
-    await resetMemberPackBalancesForPack(tx, { memberId, packId: row.packId });
+    await recomputeMemberPackBalancesForPack(tx, { memberId, packId: row.packId });
     await tx.memberPendingPack.delete({ where: { id: row.id } });
   }
 }
 
-/** Ajoute un pack sans retirer les soldes des packs déjà actifs. */
+/** Ajoute un pack sans écraser le solde des achats déjà présents du même catalogue. */
 export async function addParallelMemberPack(
   tx: Prisma.TransactionClient,
   input: { memberId: string; packId: string },
 ): Promise<void> {
   await migratePendingPacksToParallel(tx, input.memberId);
-  await resetMemberPackBalancesForPack(tx, input);
   await tx.member.update({
     where: { id: input.memberId },
     data: { packId: input.packId, packStartedAt: null },
   });
+  // Solde = quotas × nombre d'inscriptions (recalculé après création d'enrollment côté paiement).
+  await recomputeMemberPackBalancesForPack(tx, input);
 }
 
 function mapEnrollmentStatusToDisplay(
@@ -332,8 +332,31 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
       a.createdAt.getTime() - b.createdAt.getTime(),
   );
 
-  // Recalcule les soldes = somme des séances restantes sur les inscriptions ouvertes du même pack.
+  // Recalcule les soldes = quotas × achats − séances consommées.
   await syncBalancesFromOpenEnrollments(memberId, enrollmentsAsc);
+
+  // Attribution FIFO (plus ancien achat d'abord) pour l'affichage multi-packs même catalogue.
+  const fifoByEnrollmentId = new Map<string, { byCourse: Map<string, number>; total: number }>();
+  const enrollmentsByPackId = new Map<string, typeof enrollmentsAsc>();
+  for (const enrollment of enrollmentsAsc) {
+    const list = enrollmentsByPackId.get(enrollment.packId) ?? [];
+    list.push(enrollment);
+    enrollmentsByPackId.set(enrollment.packId, list);
+  }
+  for (const [packId, packEnrollments] of enrollmentsByPackId) {
+    const pack = packEnrollments[0]!.pack;
+    const allocated = await allocateConsumedSessionsFifoForPackEnrollments({
+      memberId,
+      packId,
+      enrollmentsAsc: packEnrollments.map((e) => ({ id: e.id })),
+      courseQuotas: pack.courseQuotas,
+      sessionCount: pack.sessionCount,
+      category: pack.category,
+    });
+    for (const [enrollmentId, consumption] of allocated) {
+      fifoByEnrollmentId.set(enrollmentId, consumption);
+    }
+  }
 
   const items: MemberOwnedPackDto[] = [];
 
@@ -367,8 +390,19 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
       }
     } else {
       const { periodStart, periodEndExclusive } = getEnrollmentPeriodBounds(enrollment, enrollmentsAsc);
+      const fifo = fifoByEnrollmentId.get(enrollment.id);
 
-      if (pack.courseQuotas.length > 0) {
+      if (fifo) {
+        if (pack.courseQuotas.length > 0) {
+          courseQuotaRemaining = courseQuotaUsageLines(pack, fifo.byCourse);
+          const consumedRaw = courseQuotaRemaining.reduce((sum, q) => sum + q.consumed, 0);
+          consumedSessions =
+            totalSessions != null ? Math.min(consumedRaw, totalSessions) : consumedRaw;
+        } else {
+          consumedSessions =
+            totalSessions != null ? Math.min(fifo.total, totalSessions) : fifo.total;
+        }
+      } else if (pack.courseQuotas.length > 0) {
         const consumedByCourse = await countEnrollmentConsumedSessionsByCourseInPeriod({
           memberId,
           packId: pack.id,
@@ -520,7 +554,7 @@ export async function reopenUnusedReplacedEnrollments(memberId: string): Promise
   }
 }
 
-/** Solde pack = somme des séances restantes des inscriptions ouvertes (ACTIVE / PENDING). */
+/** Solde pack = quotas catalogue × nombre d'achats − séances déjà consommées. */
 export async function syncBalancesFromOpenEnrollments(
   memberId: string,
   enrollmentsAsc?: {
@@ -542,74 +576,71 @@ export async function syncBalancesFromOpenEnrollments(
     (await prisma.memberPackEnrollment.findMany({
       where: { memberId },
       orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
-      include: {
-        pack: {
-          select: {
-            sessionCount: true,
-            category: true,
-            courseQuotas: { select: { courseSlug: true, sessionCount: true } },
-          },
-        },
-      },
+      select: { packId: true },
     }));
 
-  const openByPack = new Map<string, typeof rows>();
-  for (const row of rows) {
-    if (row.status !== "ACTIVE" && row.status !== "PENDING_START") continue;
-    const list = openByPack.get(row.packId) ?? [];
-    list.push(row);
-    openByPack.set(row.packId, list);
+  const packIds = [...new Set(rows.map((row) => row.packId))];
+  const member = await prisma.member.findUnique({
+    where: { id: memberId },
+    select: { packId: true },
+  });
+  if (member?.packId && !packIds.includes(member.packId)) {
+    packIds.push(member.packId);
   }
+  if (packIds.length === 0) return;
 
-  for (const [packId, openRows] of openByPack) {
-    const pack = openRows[0]!.pack;
-    if (pack.courseQuotas.length > 0) {
-      continue;
+  // Recalculs atomiques ; retry si collision Serializable (P2034).
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await prisma.$transaction(
+        async (tx) => {
+          for (const packId of packIds) {
+            await recomputeMemberPackBalancesForPack(tx, { memberId, packId });
+          }
+        },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          maxWait: 5000,
+          timeout: 15000,
+        },
+      );
+      return;
+    } catch (error) {
+      lastError = error;
+      const retryable =
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        (error.code === "P2034" || error.code === "P2002");
+      if (!retryable || attempt === 2) throw error;
     }
-    if (pack.sessionCount == null) continue;
-
-    let remainingTotal = 0;
-    for (const enrollment of openRows) {
-      // Pack unique 1 séance déjà démarré (= débité) → 0 restant.
-      if (pack.sessionCount === 1 && enrollment.packStartedAt) {
-        continue;
-      }
-      if (pack.sessionCount === 1 && !enrollment.packStartedAt) {
-        remainingTotal += 1;
-        continue;
-      }
-
-      const { periodStart, periodEndExclusive } = getEnrollmentPeriodBounds(enrollment, rows);
-      const consumed = await countEnrollmentConsumedSessionsInPeriod({
-        memberId,
-        packId,
-        courseQuotas: [],
-        sessionCount: pack.sessionCount,
-        category: pack.category ?? null,
-        periodStart,
-        periodEndExclusive,
-      });
-      remainingTotal += Math.max(0, pack.sessionCount - Math.min(consumed, pack.sessionCount));
-    }
-
-    await prisma.memberPackBalance.deleteMany({ where: { memberId, packId } });
-    await prisma.memberPackBalance.create({
-      data: {
-        memberId,
-        packId,
-        courseSlug: null,
-        remaining: remainingTotal,
-      },
-    });
   }
+  throw lastError;
 }
+
+const memberPackStockLocks = new Map<string, Promise<void>>();
 
 /**
  * Prépare le stock débitable avant une réservation / présence :
  * réouvre les packs parallèles inutilisés et recalcule les soldes.
+ * Verrou par adhérente pour éviter les courses (P2002) entre fiche + présence.
  */
 export async function ensureMemberParallelPackStockForDebit(memberId: string): Promise<void> {
-  await reopenUnusedReplacedEnrollments(memberId);
-  await repairEnrollmentStartsBeforePurchase(memberId);
-  await syncBalancesFromOpenEnrollments(memberId);
+  const previous = memberPackStockLocks.get(memberId) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  memberPackStockLocks.set(memberId, gate);
+
+  await previous.catch(() => undefined);
+  try {
+    await reopenUnusedReplacedEnrollments(memberId);
+    await repairEnrollmentStartsBeforePurchase(memberId);
+    await syncBalancesFromOpenEnrollments(memberId);
+  } finally {
+    release();
+    if (memberPackStockLocks.get(memberId) === gate) {
+      memberPackStockLocks.delete(memberId);
+    }
+  }
 }

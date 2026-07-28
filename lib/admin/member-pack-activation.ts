@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client";
-import { packExpiresAtLocal, packStartDateLocal } from "@/lib/member-pack-period";
+import { packStartDateLocal } from "@/lib/member-pack-period";
 import { syncActiveEnrollmentDates } from "@/lib/admin/member-pack-enrollment";
-import { resetMemberPackBalancesForPack } from "@/lib/admin/member-pack-renewal";
+import { recomputeMemberPackBalancesForPack } from "@/lib/admin/member-pack-renewal";
 
 export type ActivateMemberPackOnSessionResult = {
   packStartedAt: Date;
@@ -150,65 +150,12 @@ type PackForBalanceSync = {
   courseQuotas: { courseSlug: string; sessionCount: number }[];
 };
 
-/** Recalcule les soldes pack à partir des réservations consommées sur la période en cours. */
+/** Recalcule les soldes pack (quotas × achats − séances consommées). */
 export async function syncMemberPackBalancesFromReservations(
   tx: Prisma.TransactionClient,
   memberId: string,
   pack: PackForBalanceSync,
-  packStartedAt: Date,
+  _packStartedAt: Date,
 ): Promise<void> {
-  await resetMemberPackBalancesForPack(tx, { memberId, packId: pack.id });
-
-  const packStartDate = packStartDateLocal(packStartedAt);
-  const expiresAt = packExpiresAtLocal(packStartedAt, pack.durationDays);
-  const isMixed = pack.courseQuotas.length > 0;
-
-  if (isMixed) {
-    const usedRows = packStartDate
-      ? await tx.reservation.findMany({
-          where: {
-            memberId,
-            OR: [{ status: { in: ["BOOKED", "ATTENDED"] } }, { status: "CANCELLED", packRefundedAt: null }],
-            sessionDate: { gte: packStartDate, ...(expiresAt ? { lte: expiresAt } : {}) },
-            planning: { courseSlug: { in: pack.courseQuotas.map((q) => q.courseSlug) } },
-          },
-          select: { planning: { select: { courseSlug: true } } },
-        })
-      : [];
-    const usedBySlug = new Map<string, number>();
-    for (const r of usedRows) {
-      usedBySlug.set(r.planning.courseSlug, (usedBySlug.get(r.planning.courseSlug) ?? 0) + 1);
-    }
-    await tx.memberPackBalance.deleteMany({ where: { memberId, packId: pack.id } });
-    await tx.memberPackBalance.createMany({
-      data: pack.courseQuotas.map((q) => ({
-        memberId,
-        packId: pack.id,
-        courseSlug: q.courseSlug,
-        remaining: Math.max(0, q.sessionCount - (usedBySlug.get(q.courseSlug) ?? 0)),
-      })),
-    });
-    return;
-  }
-
-  if (pack.sessionCount != null) {
-    const used = packStartDate
-      ? await tx.reservation.count({
-          where: {
-            memberId,
-            OR: [{ status: { in: ["BOOKED", "ATTENDED"] } }, { status: "CANCELLED", packRefundedAt: null }],
-            sessionDate: { gte: packStartDate, ...(expiresAt ? { lte: expiresAt } : {}) },
-          },
-        })
-      : 0;
-    await tx.memberPackBalance.deleteMany({ where: { memberId, packId: pack.id } });
-    await tx.memberPackBalance.create({
-      data: {
-        memberId,
-        packId: pack.id,
-        courseSlug: null,
-        remaining: Math.max(0, pack.sessionCount - used),
-      },
-    });
-  }
+  await recomputeMemberPackBalancesForPack(tx, { memberId, packId: pack.id });
 }

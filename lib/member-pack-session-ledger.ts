@@ -2,6 +2,10 @@ import type { Prisma } from "@prisma/client";
 import { formatYmdPrismaDate, parseYmdLocal } from "@/lib/calendar-day";
 import { PACK_ERRORS } from "@/lib/create-member-reservation";
 import {
+  packBalanceCapacityUnits,
+  setMemberPackBalanceRemaining,
+} from "@/lib/admin/member-pack-renewal";
+import {
   debitSelectedPackSession,
   resolvePackForMemberBooking,
 } from "@/lib/admin/member-pack-selection";
@@ -53,9 +57,20 @@ export async function creditMemberPackSession(
   const isMixed = params.pack.courseQuotas.length > 0;
   const targetCourseSlug = isMixed ? params.courseSlug : null;
 
-  const maxRemaining = isMixed
+  const [enrollmentCount, member] = await Promise.all([
+    tx.memberPackEnrollment.count({
+      where: { memberId: params.memberId, packId: params.pack.id },
+    }),
+    tx.member.findUnique({
+      where: { id: params.memberId },
+      select: { packId: true },
+    }),
+  ]);
+  const units = packBalanceCapacityUnits(enrollmentCount, member?.packId === params.pack.id);
+  const perPurchase = isMixed
     ? (params.pack.courseQuotas.find((q) => q.courseSlug === params.courseSlug)?.sessionCount ?? null)
     : params.pack.sessionCount;
+  const maxRemaining = perPurchase == null ? null : perPurchase * Math.max(1, units);
 
   const updated = await tx.memberPackBalance.updateMany({
     where: {
@@ -82,13 +97,11 @@ export async function creditMemberPackSession(
   if (updated.count > 0) return;
 
   const credited = maxRemaining == null ? 1 : Math.min(1, maxRemaining);
-  await tx.memberPackBalance.create({
-    data: {
-      memberId: params.memberId,
-      packId: params.pack.id,
-      courseSlug: targetCourseSlug,
-      remaining: credited,
-    },
+  await setMemberPackBalanceRemaining(tx, {
+    memberId: params.memberId,
+    packId: params.pack.id,
+    courseSlug: targetCourseSlug,
+    remaining: credited,
   });
 }
 

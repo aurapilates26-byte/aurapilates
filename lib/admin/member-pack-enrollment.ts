@@ -6,6 +6,7 @@ import { addPackDurationToStartDate } from "@/lib/pack-duration";
 import { packExpiresAtLocal, packStartDateLocal } from "@/lib/member-pack-period";
 import { getEligibilityForPack } from "@/lib/pack-eligibility";
 import { prisma } from "@/lib/prisma";
+import { assignConsumedSessionsFifo } from "@/lib/admin/member-pack-fifo";
 
 const CONSUMING_RESERVATION_STATUSES = {
   OR: [
@@ -56,6 +57,11 @@ export async function createPackEnrollmentAfterPayment(
       purchasedAt: input.purchasedAt,
       status: "PENDING_START",
     },
+  });
+  const { recomputeMemberPackBalancesForPack } = await import("@/lib/admin/member-pack-renewal");
+  await recomputeMemberPackBalancesForPack(tx, {
+    memberId: input.memberId,
+    packId: input.packId,
   });
   return row.id;
 }
@@ -424,6 +430,57 @@ function enrollmentConsumedWhere(input: {
       ? { planning: { courseSlug: { in: eligibilitySlugs } } }
       : {}),
   };
+}
+
+/**
+ * Charge toutes les séances consommées d'un pack catalogue, puis les répartit
+ * en FIFO sur les inscriptions (plus ancien achat d'abord, par cours).
+ */
+export async function allocateConsumedSessionsFifoForPackEnrollments(input: {
+  memberId: string;
+  packId: string;
+  enrollmentsAsc: { id: string }[];
+  courseQuotas: { courseSlug: string; sessionCount: number }[];
+  sessionCount: number | null;
+  category?: string | null;
+}): Promise<Map<string, { byCourse: Map<string, number>; total: number }>> {
+  if (input.enrollmentsAsc.length === 0) return new Map();
+
+  const quotaSlugs = input.courseQuotas.map((q) => q.courseSlug);
+  const eligibilitySlugs =
+    quotaSlugs.length > 0
+      ? quotaSlugs
+      : getEligibilityForPack({
+          category: input.category ?? null,
+          courseQuotas: [],
+        }).allowedCourseSlugs;
+
+  const rows = await prisma.reservation.findMany({
+    where: {
+      memberId: input.memberId,
+      AND: [
+        DISPLAY_CONSUMED_RESERVATION_STATUSES,
+        {
+          OR: [
+            { debitedPackId: input.packId },
+            { debitedPackId: null, status: "ATTENDED" },
+          ],
+        },
+      ],
+      ...(eligibilitySlugs.length > 0
+        ? { planning: { courseSlug: { in: eligibilitySlugs } } }
+        : {}),
+    },
+    orderBy: [{ sessionDate: "asc" }, { createdAt: "asc" }],
+    select: { planning: { select: { courseSlug: true } } },
+  });
+
+  return assignConsumedSessionsFifo({
+    enrollmentsAsc: input.enrollmentsAsc,
+    courseQuotas: input.courseQuotas,
+    sessionCount: input.sessionCount,
+    sessionsAsc: rows.map((row) => ({ courseSlug: row.planning.courseSlug })),
+  });
 }
 
 /**
