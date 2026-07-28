@@ -1,8 +1,9 @@
-export type ReservationsListTab = "upcoming" | "history";
+export type ReservationsListTab = "upcoming" | "history" | "packs";
 
 export const RESERVATION_TAB_LABELS: Record<ReservationsListTab, string> = {
   upcoming: "Prochaines séances",
   history: "Historique",
+  packs: "Packs",
 };
 
 export const UPCOMING_RESERVATION_STATUS_LABELS: Record<string, string> = {

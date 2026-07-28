@@ -26,7 +26,12 @@ export type MemberDetailData = {
   phone: string | null;
   email: string | null;
   birthDate: string | null;
-  pack: { id: string; name: string; durationDays: string | null } | null;
+  pack: {
+    id: string;
+    name: string;
+    durationDays: string | null;
+    courseQuotas: { courseSlug: string; sessionCount: number }[];
+  } | null;
   packStartedAt: string | null;
   packExpiresAt: string | null;
   packRemainingSessions: number;
@@ -113,7 +118,12 @@ function mapMemberRecord(
     email: displayMemberEmail(record.user?.email ?? null),
     birthDate: toIso(record.birthDate),
     pack: record.pack
-      ? { id: record.pack.id, name: record.pack.name, durationDays: record.pack.durationDays }
+      ? {
+          id: record.pack.id,
+          name: record.pack.name,
+          durationDays: record.pack.durationDays,
+          courseQuotas: record.pack.courseQuotas,
+        }
       : null,
     packStartedAt: toIso(record.packStartedAt),
     packExpiresAt: toIso(packExpiresAt),

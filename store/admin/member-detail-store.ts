@@ -36,7 +36,14 @@ function listItemToDetail(item: ListMemberPreview): MemberDetailData {
     phone: item.phone,
     email: item.email,
     birthDate: item.birthDate,
-    pack: item.pack,
+    pack: item.pack
+      ? {
+          id: item.pack.id,
+          name: item.pack.name,
+          durationDays: item.pack.durationDays,
+          courseQuotas: [],
+        }
+      : null,
     packStartedAt: item.packStartedAt,
     packExpiresAt: item.packExpiresAt,
     packRemainingSessions: 0,

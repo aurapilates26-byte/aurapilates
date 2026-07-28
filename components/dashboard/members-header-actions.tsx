@@ -1,20 +1,20 @@
 "use client";
 
+import type { MemberPaymentStatus } from "@/lib/admin/member-payment-status";
+
 type MembersHeaderActionsProps = {
-  listMode: "members" | "deposits";
-  depositCount: number;
+  paymentStatusFilter: "ALL" | MemberPaymentStatus;
+  unpaidCount: number;
   viewMode: "list" | "form";
-  onShowDeposits: () => void;
-  onShowMembers: () => void;
+  onFilterAdvances: () => void;
   onToggleViewMode: () => void;
 };
 
 export function MembersHeaderActions({
-  listMode,
-  depositCount,
+  paymentStatusFilter,
+  unpaidCount,
   viewMode,
-  onShowDeposits,
-  onShowMembers,
+  onFilterAdvances,
   onToggleViewMode,
 }: MembersHeaderActionsProps) {
   const secondaryBtnClass =
@@ -27,22 +27,19 @@ export function MembersHeaderActions({
       {viewMode === "list" ? (
         <button
           type="button"
-          onClick={listMode === "deposits" ? onShowMembers : onShowDeposits}
-          className={listMode === "deposits" ? primaryBtnClass : secondaryBtnClass}
+          onClick={onFilterAdvances}
+          className={paymentStatusFilter === "ADVANCE" ? primaryBtnClass : secondaryBtnClass}
+          title="Filtrer les adhérentes avec une avance en attente"
         >
           Avances
-          {depositCount > 0 ? (
+          {unpaidCount > 0 ? (
             <span className="ml-2 inline-flex min-w-[1.25rem] justify-center rounded-full bg-amber-600 px-1.5 py-0.5 text-[10px] font-bold text-white">
-              {depositCount}
+              {unpaidCount}
             </span>
           ) : null}
         </button>
       ) : null}
-      <button
-        type="button"
-        onClick={onToggleViewMode}
-        className={primaryBtnClass}
-      >
+      <button type="button" onClick={onToggleViewMode} className={primaryBtnClass}>
         {viewMode === "form" ? "Retour à la liste" : "Nouvelle adhérente"}
       </button>
     </div>

@@ -57,6 +57,7 @@ export type MemberReservationItem = {
   debitedPackName?: string | null;
   planning: {
     id: string;
+    courseSlug: string;
     courseLabel: string;
     startTime: string;
     endTime: string;

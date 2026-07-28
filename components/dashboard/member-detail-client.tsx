@@ -251,7 +251,7 @@ export function MemberDetailClient({
   const [renewDiscountType, setRenewDiscountType] = useState<"NONE" | PersonalDiscountType>("NONE");
   const [renewDiscountValue, setRenewDiscountValue] = useState("");
   const [renewDiscountReason, setRenewDiscountReason] = useState("");
-  const [renewPaymentMode, setRenewPaymentMode] = useState<"full" | "deposit">("full");
+  const [renewPaymentMode, setRenewPaymentMode] = useState<"full" | "deposit" | "credit">("full");
   const [renewDepositAmount, setRenewDepositAmount] = useState("");
   const [renewPaymentMethod, setRenewPaymentMethod] = useState<PackPaymentMethodValue>("CASH");
 
@@ -743,7 +743,7 @@ export function MemberDetailClient({
           body: JSON.stringify({
             packId: renewPackId,
             paymentMode: renewPaymentMode,
-            paymentMethod: renewPaymentMethod,
+            ...(renewPaymentMode !== "credit" ? { paymentMethod: renewPaymentMethod } : {}),
             personalDiscount:
               renewDiscountType === "NONE"
                 ? null
@@ -1038,6 +1038,7 @@ export function MemberDetailClient({
               <AdminMemberReservationsPanel
                 memberId={memberId}
                 reloadToken={reservationsReloadToken}
+                courseQuotaSlugs={member.pack?.courseQuotas?.map((q) => q.courseSlug)}
                 onUpcomingChange={setUpcomingReservations}
                 onReservationsMutated={() => setOwnedPacksReloadToken((t) => t + 1)}
               />
@@ -1305,7 +1306,10 @@ export function MemberDetailClient({
                 <div className="mt-2 flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={() => setRenewPaymentMode("full")}
+                    onClick={() => {
+                      setRenewPaymentMode("full");
+                      setRenewDepositAmount("");
+                    }}
                     className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
                       renewPaymentMode === "full"
                         ? "bg-brand-dark text-white"
@@ -1323,7 +1327,21 @@ export function MemberDetailClient({
                         : "border border-brand-medium/30 bg-white text-brand-dark"
                     }`}
                   >
-                    Acompte seulement
+                    Avance
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRenewPaymentMode("credit");
+                      setRenewDepositAmount("");
+                    }}
+                    className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                      renewPaymentMode === "credit"
+                        ? "bg-brand-dark text-white"
+                        : "border border-brand-medium/30 bg-white text-brand-dark"
+                    }`}
+                  >
+                    Crédit
                   </button>
                 </div>
               </div>
@@ -1342,6 +1360,24 @@ export function MemberDetailClient({
                   />
                 </div>
               ) : null}
+              {renewPaymentMode === "credit" ? (
+                <div className="rounded-xl border border-amber-200/80 bg-amber-50/70 px-4 py-3 text-xs text-amber-950/90">
+                  Aucun paiement n&apos;est enregistré. Le pack est utilisable immédiatement ; le montant total
+                  {renewDiscountPreview ? (
+                    <>
+                      {" "}
+                      (<span className="font-semibold">{renewDiscountPreview.final} DT</span>)
+                    </>
+                  ) : renewPackListPriceDinars != null ? (
+                    <>
+                      {" "}
+                      (<span className="font-semibold">{renewPackListPriceDinars} DT</span>)
+                    </>
+                  ) : null}{" "}
+                  reste à payer.
+                </div>
+              ) : null}
+              {renewPaymentMode !== "credit" ? (
               <div className="rounded-xl border border-brand-medium/15 bg-zinc-50/60 p-4">
                 <p className="text-sm font-semibold text-brand-dark">Moyen de paiement</p>
                 <p className="mt-1 text-xs text-brand-dark/60">
@@ -1364,6 +1400,7 @@ export function MemberDetailClient({
                   ))}
                 </div>
               </div>
+              ) : null}
               {renewPreviewMessage ? (
                 <div
                   className={`rounded-xl border px-3 py-2 text-xs ${

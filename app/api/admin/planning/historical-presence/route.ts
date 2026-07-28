@@ -11,6 +11,8 @@ import {
   unmarkHistoricalPresence,
   unmarkHistoricalPresenceErrorMessage,
 } from "@/lib/admin/unmark-historical-presence";
+import { listMemberOwnedPacks } from "@/lib/admin/member-owned-packs";
+import { broadcastMemberBookingRefresh } from "@/lib/member-booking-stream";
 import type { PlanningPeriodConfig } from "@/types/admin/planning";
 
 function errorResponse(message: string, status: number) {
@@ -73,8 +75,12 @@ export async function POST(request: Request) {
       periodConfig: parsed.data.periodConfig as PlanningPeriodConfig,
       createdByUserId: session.user.id,
     });
-    const items = await listHistoricalPresenceRoster(parsed.data.planningId, parsed.data.sessionDateYmd);
-    return Response.json({ ok: true, result, items });
+    const [items, ownedPacks] = await Promise.all([
+      listHistoricalPresenceRoster(parsed.data.planningId, parsed.data.sessionDateYmd),
+      listMemberOwnedPacks(parsed.data.memberId),
+    ]);
+    broadcastMemberBookingRefresh();
+    return Response.json({ ok: true, result, items, ownedPacks });
   } catch (e) {
     const code = e instanceof Error ? e.message : "UNKNOWN";
     return errorResponse(historicalPresenceErrorMessage(code), 409);
@@ -93,8 +99,12 @@ export async function DELETE(request: Request) {
 
   try {
     const result = await unmarkHistoricalPresence(parsed.data.reservationId);
-    const items = await listHistoricalPresenceRoster(result.planningId, result.sessionDateYmd);
-    return Response.json({ ok: true, result, items });
+    const [items, ownedPacks] = await Promise.all([
+      listHistoricalPresenceRoster(result.planningId, result.sessionDateYmd),
+      listMemberOwnedPacks(result.memberId),
+    ]);
+    broadcastMemberBookingRefresh();
+    return Response.json({ ok: true, result, items, ownedPacks });
   } catch (e) {
     const code = e instanceof Error ? e.message : "UNKNOWN";
     return errorResponse(unmarkHistoricalPresenceErrorMessage(code), 409);

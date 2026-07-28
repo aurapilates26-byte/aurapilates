@@ -16,11 +16,19 @@ import {
   debitSelectedPackSession,
   preparePackForAdminPresenceDebit,
 } from "@/lib/admin/member-pack-selection";
+import { ensureMemberParallelPackStockForDebit } from "@/lib/admin/member-owned-packs";
 import { isSessionYmdWithinPlanningPeriod } from "@/lib/planning-period-status";
 import { resolvePlanningPeriodConfigForSessionYmd } from "@/lib/admin/planning-period-archive";
 import { prisma } from "@/lib/prisma";
 import { HISTORICAL_PRESENCE_MARKED_BY } from "@/lib/admin/unmark-historical-presence";
 import type { PlanningPeriodConfig } from "@/types/admin/planning";
+
+function isTransactionWriteConflict(error: unknown): boolean {
+  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034") {
+    return true;
+  }
+  return error instanceof Error && /write conflict|deadlock/i.test(error.message);
+}
 
 export type HistoricalPresenceRosterItem = {
   reservationId: string;
@@ -64,6 +72,9 @@ export function historicalPresenceErrorMessage(code: string): string {
   if (code === PACK_ERRORS.noSessionsLeft) return "Plus de séances disponibles pour ce cours";
   if (code === PACK_ERRORS.packChoiceRequired) {
     return "Plusieurs packs couvrent ce cours : précisez le pack à débiter.";
+  }
+  if (code === "P2034" || /write conflict|deadlock/i.test(code)) {
+    return "Conflit temporaire, réessayez";
   }
   return "Enregistrement impossible";
 }
@@ -137,209 +148,238 @@ export async function markHistoricalPresence(input: {
     }
   }
 
-  const result = await prisma.$transaction(
-    async (tx) => {
-      const planning = await tx.planning.findUnique({ where: { id: input.planningId } });
-      if (!planning) throw new Error("PLANNING_NOT_FOUND");
-      if (planning.isDraft) throw new Error("DRAFT_SLOT");
-      if (planning.dayOfWeek !== prismaDayOfWeekFromLocalDate(sessionDateLocal)) {
-        throw new Error("DAY_MISMATCH");
-      }
-      if (planning.anchorSessionYmd) {
-        const anchorYmd = formatYmdPrismaDate(planning.anchorSessionYmd);
-        if (anchorYmd !== input.sessionDateYmd) throw new Error("ANCHOR_MISMATCH");
-      }
+  // Avant le débit : rouvrir les packs « En cours / pas démarrés » restés REPLACED + recalculer le solde.
+  await ensureMemberParallelPackStockForDebit(input.memberId);
 
-      await tryActivatePendingPackIfCurrentFinished(tx, input.memberId);
+  const maxAttempts = 3;
+  let result: {
+    reservationId: string;
+    alreadyMarked: boolean;
+    packStartAdjusted: boolean;
+  } | null = null;
 
-      const member = await tx.member.findUnique({
-        where: { id: input.memberId },
-        select: { id: true, packId: true, packStartedAt: true },
-      });
-      if (!member) throw new Error("MEMBER_NOT_FOUND");
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      result = await prisma.$transaction(
+        async (tx) => {
+          const planning = await tx.planning.findUnique({ where: { id: input.planningId } });
+          if (!planning) throw new Error("PLANNING_NOT_FOUND");
+          if (planning.isDraft) throw new Error("DRAFT_SLOT");
+          if (planning.dayOfWeek !== prismaDayOfWeekFromLocalDate(sessionDateLocal)) {
+            throw new Error("DAY_MISMATCH");
+          }
+          if (planning.anchorSessionYmd) {
+            const anchorYmd = formatYmdPrismaDate(planning.anchorSessionYmd);
+            if (anchorYmd !== input.sessionDateYmd) throw new Error("ANCHOR_MISMATCH");
+          }
 
-      const existing = await tx.reservation.findUnique({
-        where: {
-          memberId_planningId_sessionDate: {
+          await tryActivatePendingPackIfCurrentFinished(tx, input.memberId);
+
+          const member = await tx.member.findUnique({
+            where: { id: input.memberId },
+            select: { id: true, packId: true, packStartedAt: true },
+          });
+          if (!member) throw new Error("MEMBER_NOT_FOUND");
+
+          const existing = await tx.reservation.findUnique({
+            where: {
+              memberId_planningId_sessionDate: {
+                memberId: input.memberId,
+                planningId: input.planningId,
+                sessionDate: sessionDateDb,
+              },
+            },
+            select: {
+              id: true,
+              status: true,
+              packRefundedAt: true,
+              debitedPackId: true,
+              attendance: { select: { reservationId: true } },
+            },
+          });
+
+          const preferredPackId = input.preferredPackId ?? existing?.debitedPackId ?? null;
+
+          if (existing?.status === "ATTENDED") {
+            if (existing.attendance) {
+              return {
+                reservationId: existing.id,
+                alreadyMarked: true,
+                packStartAdjusted: false,
+              };
+            }
+            await tx.attendance.create({
+              data: {
+                reservationId: existing.id,
+                memberId: input.memberId,
+                planningId: input.planningId,
+                sessionDate: sessionDateDb,
+                markedBy: HISTORICAL_PRESENCE_MARKED_BY.ATTENDED_REPAIR,
+              },
+            });
+            return {
+              reservationId: existing.id,
+              alreadyMarked: false,
+              packStartAdjusted: false,
+            };
+          }
+
+          if (existing?.status === "BOOKED") {
+            await tx.reservation.update({
+              where: { id: existing.id },
+              data: {
+                status: "ATTENDED",
+                source: "ADMIN",
+                createdByUserId: input.createdByUserId ?? null,
+                debitedPackId: existing.debitedPackId ?? preferredPackId,
+              },
+            });
+            await tx.attendance.create({
+              data: {
+                reservationId: existing.id,
+                memberId: input.memberId,
+                planningId: input.planningId,
+                sessionDate: sessionDateDb,
+                markedBy: HISTORICAL_PRESENCE_MARKED_BY.BOOKED,
+              },
+            });
+            return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: false };
+          }
+
+          if (existing?.status === "CANCELLED" && !existing.packRefundedAt) {
+            await tx.reservation.update({
+              where: { id: existing.id },
+              data: {
+                status: "ATTENDED",
+                source: "ADMIN",
+                createdByUserId: input.createdByUserId ?? null,
+              },
+            });
+            await tx.attendance.create({
+              data: {
+                reservationId: existing.id,
+                memberId: input.memberId,
+                planningId: input.planningId,
+                sessionDate: sessionDateDb,
+                markedBy: HISTORICAL_PRESENCE_MARKED_BY.CANCELLED,
+              },
+            });
+            return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: false };
+          }
+
+          const selected = await preparePackForAdminPresenceDebit(tx, {
             memberId: input.memberId,
-            planningId: input.planningId,
-            sessionDate: sessionDateDb,
-          },
+            memberPackId: member.packId,
+            memberPackStartedAt: member.packStartedAt,
+            courseSlug: planning.courseSlug,
+            sessionDateDb,
+            sessionDateLocal,
+            preferredPackId,
+          });
+
+          if (existing?.status === "WAITLIST") {
+            await debitSelectedPackSession(tx, {
+              memberId: input.memberId,
+              pack: selected.pack,
+              courseSlug: planning.courseSlug,
+              sessionDateDb,
+            });
+            await tx.reservation.update({
+              where: { id: existing.id },
+              data: {
+                status: "ATTENDED",
+                source: "ADMIN",
+                createdByUserId: input.createdByUserId ?? null,
+                debitedPackId: selected.pack.id,
+              },
+            });
+            await tx.attendance.create({
+              data: {
+                reservationId: existing.id,
+                memberId: input.memberId,
+                planningId: input.planningId,
+                sessionDate: sessionDateDb,
+                markedBy: HISTORICAL_PRESENCE_MARKED_BY.WAITLIST,
+              },
+            });
+            return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: true };
+          }
+
+          if (existing?.status === "CANCELLED" && existing.packRefundedAt) {
+            await debitSelectedPackSession(tx, {
+              memberId: input.memberId,
+              pack: selected.pack,
+              courseSlug: planning.courseSlug,
+              sessionDateDb,
+            });
+            await tx.reservation.update({
+              where: { id: existing.id },
+              data: {
+                status: "ATTENDED",
+                source: "ADMIN",
+                createdByUserId: input.createdByUserId ?? null,
+                packRefundedAt: null,
+                debitedPackId: selected.pack.id,
+              },
+            });
+            await tx.attendance.create({
+              data: {
+                reservationId: existing.id,
+                memberId: input.memberId,
+                planningId: input.planningId,
+                sessionDate: sessionDateDb,
+                markedBy: HISTORICAL_PRESENCE_MARKED_BY.CANCELLED_REFUNDED,
+              },
+            });
+            return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: true };
+          }
+
+          await debitSelectedPackSession(tx, {
+            memberId: input.memberId,
+            pack: selected.pack,
+            courseSlug: planning.courseSlug,
+            sessionDateDb,
+          });
+          const created = await tx.reservation.create({
+            data: {
+              memberId: input.memberId,
+              planningId: input.planningId,
+              sessionDate: sessionDateDb,
+              status: "ATTENDED",
+              source: "ADMIN",
+              createdByUserId: input.createdByUserId ?? null,
+              packRefundedAt: null,
+              debitedPackId: selected.pack.id,
+            },
+          });
+          await tx.attendance.create({
+            data: {
+              reservationId: created.id,
+              memberId: input.memberId,
+              planningId: input.planningId,
+              sessionDate: sessionDateDb,
+              markedBy: HISTORICAL_PRESENCE_MARKED_BY.NEW,
+            },
+          });
+          return { reservationId: created.id, alreadyMarked: false, packStartAdjusted: true };
         },
-        select: {
-          id: true,
-          status: true,
-          packRefundedAt: true,
-          debitedPackId: true,
-          attendance: { select: { reservationId: true } },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          maxWait: 5000,
+          timeout: 10000,
         },
-      });
-
-      const preferredPackId =
-        input.preferredPackId ?? existing?.debitedPackId ?? null;
-
-      if (existing?.status === "ATTENDED") {
-        if (existing.attendance) {
-          return {
-            reservationId: existing.id,
-            alreadyMarked: true,
-            packStartAdjusted: false,
-          };
-        }
-        await tx.attendance.create({
-          data: {
-            reservationId: existing.id,
-            memberId: input.memberId,
-            planningId: input.planningId,
-            sessionDate: sessionDateDb,
-            markedBy: HISTORICAL_PRESENCE_MARKED_BY.ATTENDED_REPAIR,
-          },
-        });
-        return {
-          reservationId: existing.id,
-          alreadyMarked: false,
-          packStartAdjusted: false,
-        };
+      );
+      break;
+    } catch (error) {
+      if (!isTransactionWriteConflict(error) || attempt === maxAttempts) {
+        if (isTransactionWriteConflict(error)) throw new Error("P2034");
+        throw error;
       }
+      await ensureMemberParallelPackStockForDebit(input.memberId);
+    }
+  }
 
-      if (existing?.status === "BOOKED") {
-        await tx.reservation.update({
-          where: { id: existing.id },
-          data: {
-            status: "ATTENDED",
-            source: "ADMIN",
-            createdByUserId: input.createdByUserId ?? null,
-            debitedPackId: existing.debitedPackId ?? preferredPackId,
-          },
-        });
-        await tx.attendance.create({
-          data: {
-            reservationId: existing.id,
-            memberId: input.memberId,
-            planningId: input.planningId,
-            sessionDate: sessionDateDb,
-            markedBy: HISTORICAL_PRESENCE_MARKED_BY.BOOKED,
-          },
-        });
-        return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: false };
-      }
-
-      if (existing?.status === "CANCELLED" && !existing.packRefundedAt) {
-        await tx.reservation.update({
-          where: { id: existing.id },
-          data: { status: "ATTENDED", source: "ADMIN", createdByUserId: input.createdByUserId ?? null },
-        });
-        await tx.attendance.create({
-          data: {
-            reservationId: existing.id,
-            memberId: input.memberId,
-            planningId: input.planningId,
-            sessionDate: sessionDateDb,
-            markedBy: HISTORICAL_PRESENCE_MARKED_BY.CANCELLED,
-          },
-        });
-        return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: false };
-      }
-
-      const selected = await preparePackForAdminPresenceDebit(tx, {
-        memberId: input.memberId,
-        memberPackId: member.packId,
-        memberPackStartedAt: member.packStartedAt,
-        courseSlug: planning.courseSlug,
-        sessionDateDb,
-        sessionDateLocal,
-        preferredPackId,
-      });
-
-      if (existing?.status === "WAITLIST") {
-        await debitSelectedPackSession(tx, {
-          memberId: input.memberId,
-          pack: selected.pack,
-          courseSlug: planning.courseSlug,
-        });
-        await tx.reservation.update({
-          where: { id: existing.id },
-          data: {
-            status: "ATTENDED",
-            source: "ADMIN",
-            createdByUserId: input.createdByUserId ?? null,
-            debitedPackId: selected.pack.id,
-          },
-        });
-        await tx.attendance.create({
-          data: {
-            reservationId: existing.id,
-            memberId: input.memberId,
-            planningId: input.planningId,
-            sessionDate: sessionDateDb,
-            markedBy: HISTORICAL_PRESENCE_MARKED_BY.WAITLIST,
-          },
-        });
-        return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: true };
-      }
-
-      if (existing?.status === "CANCELLED" && existing.packRefundedAt) {
-        await debitSelectedPackSession(tx, {
-          memberId: input.memberId,
-          pack: selected.pack,
-          courseSlug: planning.courseSlug,
-        });
-        await tx.reservation.update({
-          where: { id: existing.id },
-          data: {
-            status: "ATTENDED",
-            source: "ADMIN",
-            createdByUserId: input.createdByUserId ?? null,
-            packRefundedAt: null,
-            debitedPackId: selected.pack.id,
-          },
-        });
-        await tx.attendance.create({
-          data: {
-            reservationId: existing.id,
-            memberId: input.memberId,
-            planningId: input.planningId,
-            sessionDate: sessionDateDb,
-            markedBy: HISTORICAL_PRESENCE_MARKED_BY.CANCELLED_REFUNDED,
-          },
-        });
-        return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: true };
-      }
-
-      await debitSelectedPackSession(tx, {
-        memberId: input.memberId,
-        pack: selected.pack,
-        courseSlug: planning.courseSlug,
-      });
-      const created = await tx.reservation.create({
-        data: {
-          memberId: input.memberId,
-          planningId: input.planningId,
-          sessionDate: sessionDateDb,
-          status: "ATTENDED",
-          source: "ADMIN",
-          createdByUserId: input.createdByUserId ?? null,
-          packRefundedAt: null,
-          debitedPackId: selected.pack.id,
-        },
-      });
-      await tx.attendance.create({
-        data: {
-          reservationId: created.id,
-          memberId: input.memberId,
-          planningId: input.planningId,
-          sessionDate: sessionDateDb,
-          markedBy: HISTORICAL_PRESENCE_MARKED_BY.NEW,
-        },
-      });
-      return { reservationId: created.id, alreadyMarked: false, packStartAdjusted: true };
-    },
-    {
-      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-      maxWait: 5000,
-      timeout: 10000,
-    },
-  );
+  if (!result) throw new Error("UNKNOWN");
 
   return {
     reservationId: result.reservationId,

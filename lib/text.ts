@@ -280,3 +280,150 @@ export const planningPageText = {
     },
   ] as const,
 };
+
+/** Page À propos — contenu aligné sur la maquette. */
+export const aboutPageText = {
+  story: {
+    kicker: "À propos d'Aura",
+    title: "Notre histoire",
+    subtitle: "Plus qu'un studio, une vision.",
+    paragraphs: [
+      "Aura est née d'une conviction profonde : chaque femme mérite un espace pour se reconnecter à son corps, à son esprit et à elle-même.",
+      "Nous avons imaginé un lieu où le mouvement devient un rituel de bien-être, où force et douceur coexistent, et où l'élégance se ressent dans chaque détail.",
+    ],
+    closingLines: ["Bienvenue chez Aura.", "Bienvenue chez vous."] as const,
+    image: "/images/hero.png",
+    imageAlt: "Studio Aura Pilates — reformers et espace lumineux",
+  },
+  philosophy: {
+    kicker: "Notre philosophie",
+    quote:
+      "Le bien-être n'est pas une destination. C'est une attention que l'on s'accorde, chaque jour.",
+    pillars: [
+      {
+        title: "Conscience",
+        subtitle: "Chaque mouvement a du sens.",
+      },
+      {
+        title: "Bienveillance",
+        subtitle: "Nous avançons ensemble, à votre rythme.",
+      },
+      {
+        title: "Équilibre",
+        subtitle: "Force et douceur, corps et esprit.",
+      },
+      {
+        title: "Élégance",
+        subtitle: "Un lieu raffiné pensé dans les moindres détails.",
+      },
+    ] as const,
+  },
+  vision: {
+    kicker: "Notre vision",
+    title: "Un espace pensé pour les femmes, par des femmes.",
+    paragraphs: [
+      "Aura est le fruit d'une envie commune : créer un studio chaleureux, élégant et exigeant, où chaque femme se sent accueillie, écoutée et accompagnée.",
+      "Notre équipe partage les mêmes valeurs et la même passion pour le mouvement et le bien-être. Ensemble, nous avons conçu un lieu à notre image et à la vôtre.",
+    ],
+    image: "/images/aprops.png",
+    imageAlt: "Ambiance et détails du studio Aura",
+    points: [
+      "Une équipe passionnée",
+      "Une approche humaine et authentique",
+      "Une exigence dans chaque détail",
+    ] as const,
+  },
+  studio: {
+    kicker: "Notre studio",
+    title: "Un lieu pensé pour vous.",
+    description:
+      "Lumineux, chaleureux et apaisant, notre studio a été conçu comme une bulle de bien-être, exclusivement dédiée aux femmes. Chaque détail a été choisi pour que vous vous sentiez bien, dès votre arrivée.",
+    cards: [
+      {
+        title: "Équipements haut de gamme",
+        image: "/images/Pilates_reformer.png",
+        imageAlt: "Reformers Aura Pilates",
+      },
+      {
+        title: "Ambiance chaleureuse",
+        image: "/images/tarifimg2.jpg",
+        imageAlt: "Espace détente du studio",
+      },
+      {
+        title: "Design épuré et élégant",
+        image: "/images/tarifimg1.jpg",
+        imageAlt: "Design intérieur Aura",
+      },
+      {
+        title: "Hygiène et confort prioritaires",
+        image: "/images/tarifimg3.jpg",
+        imageAlt: "Confort et hygiène au studio",
+      },
+    ] as const,
+  },
+  engagement: {
+    kicker: "Notre engagement",
+    title: "Nous sommes là pour vous.",
+    items: [
+      {
+        title: "Coachs certifiées et passionnées",
+        subtitle: "Formées en continu pour vous offrir le meilleur accompagnement.",
+      },
+      {
+        title: "Accompagnement personnalisé",
+        subtitle: "À l'écoute de vos besoins, de vos objectifs et de votre rythme.",
+      },
+      {
+        title: "Communauté bienveillante",
+        subtitle: "Un studio où chaque femme trouve sa place.",
+      },
+      {
+        title: "Qualité & exigence",
+        subtitle:
+          "Nous sélectionnons avec soin nos méthodes, nos équipements et chaque détail de votre expérience.",
+      },
+    ] as const,
+  },
+  cta: {
+    title: "Prête à faire partie de l'expérience Aura ?",
+    subtitle: "Réservez votre séance et prenez du temps pour vous.",
+    button: "Réserver une séance",
+    href: "/planning",
+    image: "/images/pretes.png",
+    imageAlt: "Ambiance Aura Pilates",
+  },
+};
+
+/** Page Contact — contenu aligné sur la maquette. */
+export const contactPageText = {
+  hero: {
+    kicker: "Contactez-nous",
+    title: "Nous sommes là pour vous.",
+    subtitle: "Une question, une envie, un besoin ?",
+    description:
+      "Notre équipe est à votre écoute pour répondre à toutes vos questions, vous conseiller et vous accompagner dans votre parcours bien-être chez Aura.",
+    image: "/images/contact.png",
+    imageAlt: "Accueil du studio Aura Pilates",
+  },
+  studio: {
+    title: "Venez découvrir notre studio.",
+    description:
+      "Un espace lumineux, chaleureux et exclusivement dédié aux femmes, conçu pour vous offrir une expérience unique de bien-être.",
+    loungeImage: "/images/tarifimg2.jpg",
+    loungeImageAlt: "Espace détente Aura Pilates",
+    features: [
+      { title: "Studio exclusivement féminin", subtitle: "Un cadre bienveillant rien que pour vous." },
+      { title: "Ambiance chaleureuse", subtitle: "Un lieu apaisant dès votre arrivée." },
+      { title: "Équipements haut de gamme", subtitle: "Reformers et matériel premium." },
+      { title: "Coachs certifiées et passionnées", subtitle: "Un accompagnement attentif à chaque séance." },
+    ] as const,
+  },
+  cta: {
+    title: "Prête à prendre du temps pour vous ?",
+    subtitle: "Réservez votre séance et commencez votre expérience bien-être chez Aura.",
+    button: "Réserver une séance",
+    href: "/planning",
+    image: "/images/pretes.png",
+    imageAlt: "Moment bien-être Aura Pilates",
+  },
+};

@@ -1,8 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { getSession, signIn } from "next-auth/react";
-import { Button } from "@/components/ui";
+import { Button, Input } from "@/components/ui";
 import { postLoginPath } from "@/lib/admin/access";
 
 export function LoginForm() {
@@ -40,53 +41,69 @@ export function LoginForm() {
   };
 
   return (
-    <form className="mt-8 space-y-5" onSubmit={handleSubmit}>
-      <p className="text-xs leading-relaxed text-brand-dark/65">
-        Adhérentes et coachs : <span className="font-semibold">téléphone</span> +{" "}
-        <span className="font-semibold">clé QR</span>. Administration :{" "}
-        <span className="font-semibold">email</span> + <span className="font-semibold">mot de passe</span>.
-      </p>
+    <form className="space-y-6" onSubmit={handleSubmit}>
+      {/* Champs avec icônes */}
+      <div className="space-y-5">
+        <div className="relative">
+          <label htmlFor="identifier" className="text-sm font-medium text-brand-dark mb-2 block">
+            ✉️ Adresse e-mail
+          </label>
+          <Input
+            id="identifier"
+            name="identifier"
+            type="text"
+            autoComplete="username"
+            placeholder="Entrez votre adresse e-mail"
+            variant="soft"
+            value={identifier}
+            onChange={(event) => setIdentifier(event.target.value)}
+            required
+          />
+        </div>
 
-      <div className="space-y-2">
-        <label htmlFor="identifier" className="text-sm font-medium">
-          Identifiant
-        </label>
-        <input
-          id="identifier"
-          name="identifier"
-          type="text"
-          autoComplete="username"
-          placeholder="Téléphone ou email"
-          className="w-full rounded-lg border border-brand-medium/40 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-brand-dark/70 focus:ring-2 focus:ring-brand-medium/25"
-          required
-          value={identifier}
-          onChange={(event) => setIdentifier(event.target.value)}
-        />
+        <div className="relative">
+          <label htmlFor="secret" className="text-sm font-medium text-brand-dark mb-2 block">
+            🔒 Mot de passe
+          </label>
+          <Input
+            id="secret"
+            name="secret"
+            type="password"
+            autoComplete="current-password"
+            placeholder="Entrez votre mot de passe"
+            variant="soft"
+            value={secret}
+            onChange={(event) => setSecret(event.target.value)}
+            required
+          />
+        </div>
       </div>
 
-      <div className="space-y-2">
-        <label htmlFor="secret" className="text-sm font-medium">
-          Mot de passe ou clé QR
-        </label>
-        <input
-          id="secret"
-          name="secret"
-          type="password"
-          autoComplete="current-password"
-          placeholder="Votre mot de passe ou clé QR"
-          className="w-full rounded-lg border border-brand-medium/40 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-brand-dark/70 focus:ring-2 focus:ring-brand-medium/25"
-          required
-          value={secret}
-          onChange={(event) => setSecret(event.target.value)}
-        />
+      {/* Lien Mot de passe oublié */}
+      <div className="text-right">
+        <Link
+          href="/reset-password"
+          className="text-xs font-medium text-brand-dark/60 hover:text-brand-dark hover:underline"
+        >
+          Mot de passe oublié ?
+        </Link>
       </div>
 
-      {error ? <p className="text-sm font-medium text-red-600">{error}</p> : null}
+      {/* Message d'erreur */}
+      {error ? (
+        <p className="text-sm font-medium text-red-600 bg-red-50 p-3 rounded">{error}</p>
+      ) : null}
 
-      <div className="pt-2">
-        <Button type="submit" size="sm" className="w-full justify-center" disabled={isLoading}>
-          {isLoading ? "Connexion…" : "Se connecter"}
-        </Button>
+      {/* Bouton Se connecter */}
+      <Button type="submit" size="lg" className="w-full justify-center" disabled={isLoading}>
+        {isLoading ? "Connexion…" : "Se connecter"}
+      </Button>
+
+      {/* Ou */}
+      <div className="relative flex items-center gap-3 text-xs uppercase tracking-[0.24em] text-brand-dark/50">
+        <span className="h-px flex-1 bg-brand-medium/20" />
+        <span>ou</span>
+        <span className="h-px flex-1 bg-brand-medium/20" />
       </div>
     </form>
   );

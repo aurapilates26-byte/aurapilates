@@ -4,46 +4,39 @@ import { useState } from "react";
 import { DashboardHeader } from "@/components/dashboard/header";
 import { MembersHeaderActions } from "@/components/dashboard/members-header-actions";
 import { MembersManager } from "@/components/dashboard/members-manager";
+import type { MemberPaymentStatus } from "@/lib/admin/member-payment-status";
 
 export function AdminMembersClient() {
   const [viewMode, setViewMode] = useState<"list" | "form">("list");
-  const [listMode, setListMode] = useState<"members" | "deposits">("members");
-  const [depositCount, setDepositCount] = useState(0);
+  const [paymentStatusFilter, setPaymentStatusFilter] = useState<"ALL" | MemberPaymentStatus>("ALL");
+  const [unpaidCount, setUnpaidCount] = useState(0);
 
   return (
     <>
       <DashboardHeader
         role="ADMIN"
-        title={listMode === "deposits" && viewMode === "list" ? "Avances adhérentes" : "Adhérentes"}
-        description={
-          listMode === "deposits" && viewMode === "list"
-            ? "Adhérentes avec acompte en attente. Finalisez le solde et assignez le QR pour les activer dans la liste principale."
-            : "Ajoutez des adhérentes et assignez un QR code maintenant ou plus tard depuis leur fiche."
-        }
+        title="Adhérentes"
+        description="Liste unique des adhérentes. Filtrez par paiement : Payé, Avance ou Crédit. Les séances sont utilisables dès l'achat du pack."
         showRoleLine={false}
         actions={
           <MembersHeaderActions
-            listMode={listMode}
-            depositCount={depositCount}
+            paymentStatusFilter={paymentStatusFilter}
+            unpaidCount={unpaidCount}
             viewMode={viewMode}
-            onShowDeposits={() => {
-              setListMode("deposits");
+            onFilterAdvances={() => {
+              setPaymentStatusFilter((prev) => (prev === "ADVANCE" ? "ALL" : "ADVANCE"));
               setViewMode("list");
             }}
-            onShowMembers={() => setListMode("members")}
             onToggleViewMode={() => setViewMode((prev) => (prev === "list" ? "form" : "list"))}
           />
         }
       />
       <MembersManager
-        listMode={listMode}
         viewMode={viewMode}
         onChangeViewMode={setViewMode}
-        onDepositCountChange={setDepositCount}
-        onShowDeposits={() => {
-          setListMode("deposits");
-          setViewMode("list");
-        }}
+        paymentStatusFilter={paymentStatusFilter}
+        onPaymentStatusFilterChange={setPaymentStatusFilter}
+        onUnpaidCountChange={setUnpaidCount}
       />
     </>
   );

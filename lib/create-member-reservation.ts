@@ -16,6 +16,7 @@ import {
   debitSelectedPackSession,
   resolvePackForMemberBooking,
 } from "@/lib/admin/member-pack-selection";
+import { ensureMemberParallelPackStockForDebit } from "@/lib/admin/member-owned-packs";
 import { prisma } from "@/lib/prisma";
 
 export const PACK_ERRORS = {
@@ -65,6 +66,8 @@ export async function createMemberReservation(params: {
     }
     await getPlanningPeriodConfig();
   }
+
+  await ensureMemberParallelPackStockForDebit(params.memberId);
 
   const result = await prisma.$transaction(
     async (tx) => {
@@ -169,6 +172,7 @@ export async function createMemberReservation(params: {
             memberId: params.memberId,
             pack,
             courseSlug: planning.courseSlug,
+            sessionDateDb,
           });
         }
         const updated = await tx.reservation.update({
@@ -192,6 +196,7 @@ export async function createMemberReservation(params: {
           memberId: params.memberId,
           pack,
           courseSlug: planning.courseSlug,
+          sessionDateDb,
         });
       }
 

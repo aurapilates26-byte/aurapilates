@@ -24,7 +24,7 @@ export function PublicCourseCard({
 
   return (
     <article
-      className={`flex h-full min-h-0 flex-col overflow-hidden rounded-2xl bg-white shadow-[0_4px_24px_rgba(90,64,51,0.08)] ${className}`.trim()}
+      className={`flex h-full min-h-0 flex-col overflow-hidden rounded-2xl bg-white shadow-sm ${className}`.trim()}
     >
       <div
         className={

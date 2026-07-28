@@ -18,6 +18,7 @@ import {
   debitSelectedPackSession,
   preparePackForAdminPresenceDebit,
 } from "@/lib/admin/member-pack-selection";
+import { ensureMemberParallelPackStockForDebit } from "@/lib/admin/member-owned-packs";
 import { prisma } from "@/lib/prisma";
 
 const RESERVATION_ELIGIBLE_STATUSES: ReservationStatus[] = [
@@ -78,6 +79,14 @@ export async function POST(request: Request) {
 
   let outcome: Outcome;
   try {
+    const reservationMember = await prisma.reservation.findUnique({
+      where: { id: reservationId },
+      select: { memberId: true },
+    });
+    if (reservationMember?.memberId) {
+      await ensureMemberParallelPackStockForDebit(reservationMember.memberId);
+    }
+
     outcome = await prisma.$transaction(async (tx) => {
       const current = await tx.reservation.findUnique({
         where: { id: reservationId },
@@ -140,6 +149,7 @@ export async function POST(request: Request) {
             memberId: current.memberId,
             pack: selected.pack,
             courseSlug: current.planning.courseSlug,
+            sessionDateDb: todayDb,
           });
           await tx.reservation.update({
             where: { id: reservationId },

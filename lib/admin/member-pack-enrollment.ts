@@ -1,9 +1,10 @@
 import "server-only";
 
-import type { MemberPackEnrollmentStatus, Prisma } from "@prisma/client";
+import { Prisma, type MemberPackEnrollmentStatus } from "@prisma/client";
 import { formatYmdLocal, parseYmdToPrismaDate } from "@/lib/calendar-day";
 import { addPackDurationToStartDate } from "@/lib/pack-duration";
 import { packExpiresAtLocal, packStartDateLocal } from "@/lib/member-pack-period";
+import { getEligibilityForPack } from "@/lib/pack-eligibility";
 import { prisma } from "@/lib/prisma";
 
 const CONSUMING_RESERVATION_STATUSES = {
@@ -68,24 +69,82 @@ export async function syncActiveEnrollmentDates(
     durationDays: string | null;
   },
 ): Promise<void> {
-  const packExpiresAt = addPackDurationToStartDate(input.packStartedAt, input.durationDays) ?? null;
-  const enrollment = await tx.memberPackEnrollment.findFirst({
-    where: {
-      memberId: input.memberId,
-      packId: input.packId,
-      status: { in: ["PENDING_START", "ACTIVE"] },
-    },
-    orderBy: [{ purchasedAt: "desc" }, { createdAt: "desc" }],
-    select: { id: true },
-  });
+  // FIFO : démarrer la plus ancienne inscription pas encore démarrée, sinon l'ACTIVE courante.
+  const enrollment =
+    (await tx.memberPackEnrollment.findFirst({
+      where: {
+        memberId: input.memberId,
+        packId: input.packId,
+        status: "PENDING_START",
+      },
+      orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
+      select: { id: true, purchasedAt: true },
+    })) ??
+    (await tx.memberPackEnrollment.findFirst({
+      where: {
+        memberId: input.memberId,
+        packId: input.packId,
+        status: "ACTIVE",
+      },
+      orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
+      select: { id: true, purchasedAt: true },
+    }));
   if (!enrollment) return;
+
+  // Ne jamais démarrer une inscription avant sa date d'achat (évite de coller le début du pack précédent sur le renouvellement).
+  const purchasedYmd = formatYmdLocal(enrollment.purchasedAt);
+  const startedYmd = formatYmdLocal(input.packStartedAt);
+  const clampedStart =
+    startedYmd < purchasedYmd
+      ? parseYmdToPrismaDate(purchasedYmd)!
+      : input.packStartedAt;
+
+  const packExpiresAt = addPackDurationToStartDate(clampedStart, input.durationDays) ?? null;
 
   await tx.memberPackEnrollment.update({
     where: { id: enrollment.id },
     data: {
-      packStartedAt: input.packStartedAt,
+      packStartedAt: clampedStart,
       packExpiresAt,
       status: "ACTIVE",
+      closedAt: null,
+    },
+  });
+}
+
+/**
+ * Après un débit de séance : rattache la conso à la plus ancienne inscription ouverte
+ * (packs parallèles 1 séance « Pas encore démarré »).
+ */
+export async function consumeOldestOpenEnrollmentOnDebit(
+  tx: Prisma.TransactionClient,
+  input: {
+    memberId: string;
+    packId: string;
+    sessionDateDb: Date;
+    durationDays: string | null;
+  },
+): Promise<void> {
+  const unstarted = await tx.memberPackEnrollment.findFirst({
+    where: {
+      memberId: input.memberId,
+      packId: input.packId,
+      status: { in: ["PENDING_START", "ACTIVE"] },
+      packStartedAt: null,
+    },
+    orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
+    select: { id: true },
+  });
+  if (!unstarted) return;
+
+  const packExpiresAt = addPackDurationToStartDate(input.sessionDateDb, input.durationDays) ?? null;
+  await tx.memberPackEnrollment.update({
+    where: { id: unstarted.id },
+    data: {
+      packStartedAt: input.sessionDateDb,
+      packExpiresAt,
+      status: "ACTIVE",
+      closedAt: null,
     },
   });
 }
@@ -121,63 +180,100 @@ export async function ensureMemberPackEnrollmentsBackfilled(memberId: string): P
   });
   const durationByPackId = new Map(packs.map((p) => [p.id, p.durationDays]));
 
-  await prisma.$transaction(async (tx) => {
-    const enrollmentIds: { id: string; packId: string; purchasedAt: Date }[] = [];
+  try {
+    await prisma.$transaction(async (tx) => {
+      // Re-check inside the transaction to avoid concurrent double-backfill races.
+      const lockedCount = await tx.memberPackEnrollment.count({ where: { memberId } });
+      if (lockedCount > 0) return;
 
-    for (const payment of payments) {
-      const row = await tx.memberPackEnrollment.create({
-        data: {
-          memberId,
-          packId: payment.packId,
-          packPaymentId: payment.id,
-          purchasedAt: payment.paidAt ?? payment.createdAt,
-          status: "PENDING_START",
-        },
-      });
-      enrollmentIds.push({ id: row.id, packId: payment.packId, purchasedAt: row.purchasedAt });
-    }
+      const enrollmentIds: { id: string; packId: string; purchasedAt: Date }[] = [];
 
-    const byPack = new Map<string, typeof enrollmentIds>();
-    for (const row of enrollmentIds) {
-      const list = byPack.get(row.packId) ?? [];
-      list.push(row);
-      byPack.set(row.packId, list);
-    }
-
-    for (const [packId, rows] of byPack) {
-      const sorted = [...rows].sort((a, b) => a.purchasedAt.getTime() - b.purchasedAt.getTime());
-      const isCurrentPack = member.packId === packId;
-      const latest = sorted[sorted.length - 1];
-
-      for (let i = 0; i < sorted.length - 1; i++) {
-        await tx.memberPackEnrollment.update({
-          where: { id: sorted[i].id },
-          data: { status: "REPLACED", closedAt: sorted[i + 1].purchasedAt },
+      for (const payment of payments) {
+        const existingForPayment = await tx.memberPackEnrollment.findUnique({
+          where: { packPaymentId: payment.id },
+          select: { id: true, packId: true, purchasedAt: true, memberId: true },
         });
-      }
+        if (existingForPayment) {
+          if (existingForPayment.memberId === memberId) {
+            enrollmentIds.push({
+              id: existingForPayment.id,
+              packId: existingForPayment.packId,
+              purchasedAt: existingForPayment.purchasedAt,
+            });
+          }
+          continue;
+        }
 
-      if (isCurrentPack && member.packStartedAt) {
-        const durationDays = durationByPackId.get(packId) ?? null;
-        const packExpiresAt = addPackDurationToStartDate(member.packStartedAt, durationDays);
-        await tx.memberPackEnrollment.update({
-          where: { id: latest.id },
+        const row = await tx.memberPackEnrollment.create({
           data: {
-            packStartedAt: member.packStartedAt,
-            packExpiresAt: packExpiresAt ?? null,
-            status: "ACTIVE",
+            memberId,
+            packId: payment.packId,
+            packPaymentId: payment.id,
+            purchasedAt: payment.paidAt ?? payment.createdAt,
+            status: "PENDING_START",
           },
         });
-      } else if (!isCurrentPack || !member.packStartedAt) {
-        if (sorted.length > 1 || !isCurrentPack) {
-          const lastStatus = isCurrentPack ? "PENDING_START" : "REPLACED";
+        enrollmentIds.push({ id: row.id, packId: payment.packId, purchasedAt: row.purchasedAt });
+      }
+
+      if (enrollmentIds.length === 0) return;
+
+      const byPack = new Map<string, typeof enrollmentIds>();
+      for (const row of enrollmentIds) {
+        const list = byPack.get(row.packId) ?? [];
+        list.push(row);
+        byPack.set(row.packId, list);
+      }
+
+      for (const [packId, rows] of byPack) {
+        const sorted = [...rows].sort((a, b) => a.purchasedAt.getTime() - b.purchasedAt.getTime());
+        const isCurrentPack = member.packId === packId;
+        const latest = sorted[sorted.length - 1]!;
+
+        for (let i = 0; i < sorted.length - 1; i++) {
           await tx.memberPackEnrollment.update({
-            where: { id: latest.id },
-            data: lastStatus === "REPLACED" ? { status: "REPLACED", closedAt: new Date() } : { status: "PENDING_START" },
+            where: { id: sorted[i]!.id },
+            data: { status: "REPLACED", closedAt: sorted[i + 1]!.purchasedAt },
           });
         }
+
+        if (isCurrentPack && member.packStartedAt) {
+          const durationDays = durationByPackId.get(packId) ?? null;
+          const packExpiresAt = addPackDurationToStartDate(member.packStartedAt, durationDays);
+          await tx.memberPackEnrollment.update({
+            where: { id: latest.id },
+            data: {
+              packStartedAt: member.packStartedAt,
+              packExpiresAt: packExpiresAt ?? null,
+              status: "ACTIVE",
+            },
+          });
+        } else if (!isCurrentPack || !member.packStartedAt) {
+          if (sorted.length > 1 || !isCurrentPack) {
+            const lastStatus = isCurrentPack ? "PENDING_START" : "REPLACED";
+            await tx.memberPackEnrollment.update({
+              where: { id: latest.id },
+              data:
+                lastStatus === "REPLACED"
+                  ? { status: "REPLACED", closedAt: new Date() }
+                  : { status: "PENDING_START" },
+            });
+          }
+        }
       }
+    });
+  } catch (error) {
+    // Concurrent request already created the enrollments — treat as success.
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002" &&
+      Array.isArray(error.meta?.target) &&
+      error.meta.target.includes("packPaymentId")
+    ) {
+      return;
     }
-  });
+    throw error;
+  }
 }
 
 export async function getEnrollmentPaymentTotals(
@@ -282,31 +378,39 @@ export async function countEnrollmentConsumedSessions(input: {
   return 0;
 }
 
-/**
- * Compte les séances consommées sur la période d'une inscription pack
- * (achat → renouvellement suivant), indépendamment de packStartedAt.
- */
-export async function countEnrollmentConsumedSessionsInPeriod(input: {
+function enrollmentPeriodSessionDateFilter(input: {
+  periodStart: Date | null;
+  periodEndExclusive: Date | null;
+}): Prisma.DateTimeFilter | undefined {
+  const filter: Prisma.DateTimeFilter = {
+    ...(input.periodStart ? { gte: input.periodStart } : {}),
+    ...(input.periodEndExclusive ? { lt: input.periodEndExclusive } : {}),
+  };
+  return Object.keys(filter).length > 0 ? filter : undefined;
+}
+
+function enrollmentConsumedWhere(input: {
   memberId: string;
   packId: string;
   courseQuotas: { courseSlug: string; sessionCount: number }[];
-  sessionCount: number | null;
-  periodStart: Date;
+  /** Catégorie catalogue — filtre les cours quand le pack n'a pas de quotas. */
+  category?: string | null;
+  periodStart: Date | null;
   periodEndExclusive: Date | null;
-}): Promise<number> {
-  const sessionDateFilter: Prisma.DateTimeFilter = {
-    gte: input.periodStart,
-    ...(input.periodEndExclusive ? { lt: input.periodEndExclusive } : {}),
-  };
+}): Prisma.ReservationWhereInput {
+  const sessionDate = enrollmentPeriodSessionDateFilter(input);
+  const quotaSlugs = input.courseQuotas.map((q) => q.courseSlug);
+  const eligibilitySlugs =
+    quotaSlugs.length > 0
+      ? quotaSlugs
+      : getEligibilityForPack({
+          category: input.category ?? null,
+          courseQuotas: [],
+        }).allowedCourseSlugs;
 
-  const totalCap =
-    input.courseQuotas.length > 0
-      ? input.courseQuotas.reduce((sum, q) => sum + q.sessionCount, 0)
-      : input.sessionCount;
-
-  const baseWhere: Prisma.ReservationWhereInput = {
+  return {
     memberId: input.memberId,
-    sessionDate: sessionDateFilter,
+    ...(sessionDate ? { sessionDate } : {}),
     AND: [
       DISPLAY_CONSUMED_RESERVATION_STATUSES,
       {
@@ -316,22 +420,129 @@ export async function countEnrollmentConsumedSessionsInPeriod(input: {
         ],
       },
     ],
+    ...(eligibilitySlugs.length > 0
+      ? { planning: { courseSlug: { in: eligibilitySlugs } } }
+      : {}),
   };
+}
 
-  const courseSlugFilter =
+/**
+ * Compte les séances consommées sur la période d'une inscription pack.
+ * `periodStart` null = pas de borne basse (présences historiques avant la date d'achat).
+ * `periodEndExclusive` = début du renouvellement suivant (`packStartedAt` / achat) ou clôture.
+ */
+export async function countEnrollmentConsumedSessionsInPeriod(input: {
+  memberId: string;
+  packId: string;
+  courseQuotas: { courseSlug: string; sessionCount: number }[];
+  sessionCount: number | null;
+  category?: string | null;
+  periodStart: Date | null;
+  periodEndExclusive: Date | null;
+}): Promise<number> {
+  const totalCap =
     input.courseQuotas.length > 0
-      ? { planning: { courseSlug: { in: input.courseQuotas.map((q) => q.courseSlug) } } }
-      : {};
+      ? input.courseQuotas.reduce((sum, q) => sum + q.sessionCount, 0)
+      : input.sessionCount;
+
+  const baseWhere = enrollmentConsumedWhere(input);
 
   if (totalCap == null) {
-    return prisma.reservation.count({ where: { ...baseWhere, ...courseSlugFilter } });
+    return prisma.reservation.count({ where: baseWhere });
   }
 
   const rows = await prisma.reservation.findMany({
-    where: { ...baseWhere, ...courseSlugFilter },
+    where: baseWhere,
     orderBy: [{ sessionDate: "asc" }, { createdAt: "asc" }],
     take: totalCap,
     select: { id: true },
   });
   return rows.length;
+}
+
+/**
+ * Répartition des séances consommées par cours (même fenêtre FIFO / plafond que le total).
+ * Sert à afficher « Reformer X/15 · Mat Y/15 » cohérent avec « Séances (X+Y)/30 ».
+ */
+export async function countEnrollmentConsumedSessionsByCourseInPeriod(input: {
+  memberId: string;
+  packId: string;
+  courseQuotas: { courseSlug: string; sessionCount: number }[];
+  sessionCount: number | null;
+  category?: string | null;
+  periodStart: Date | null;
+  periodEndExclusive: Date | null;
+}): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  for (const q of input.courseQuotas) {
+    counts.set(q.courseSlug, 0);
+  }
+  if (input.courseQuotas.length === 0) return counts;
+
+  const totalCap = input.courseQuotas.reduce((sum, q) => sum + q.sessionCount, 0);
+  const rows = await prisma.reservation.findMany({
+    where: enrollmentConsumedWhere(input),
+    orderBy: [{ sessionDate: "asc" }, { createdAt: "asc" }],
+    take: totalCap,
+    select: { planning: { select: { courseSlug: true } } },
+  });
+
+  for (const row of rows) {
+    const slug = row.planning.courseSlug;
+    if (!counts.has(slug)) continue;
+    counts.set(slug, (counts.get(slug) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * Première séance consommée (présence / annulation tardive) sur la période d'inscription.
+ * Sert à renseigner Pack début / expiration quand `packStartedAt` n'a jamais été synchronisé
+ * (ex. pack clôturé après renouvellement ou saisie historique).
+ */
+export async function findFirstEnrollmentConsumedSessionDate(input: {
+  memberId: string;
+  packId: string;
+  courseQuotas: { courseSlug: string; sessionCount: number }[];
+  periodStart: Date | null;
+  periodEndExclusive: Date | null;
+}): Promise<Date | null> {
+  const row = await prisma.reservation.findFirst({
+    where: enrollmentConsumedWhere(input),
+    orderBy: [{ sessionDate: "asc" }, { createdAt: "asc" }],
+    select: { sessionDate: true },
+  });
+  return row?.sessionDate ?? null;
+}
+
+/** Persiste packStartedAt / packExpiresAt sur une inscription à partir de la 1ʳᵉ consommation. */
+export async function backfillEnrollmentStartFromFirstConsumption(input: {
+  enrollmentId: string;
+  memberId: string;
+  packId: string;
+  courseQuotas: { courseSlug: string; sessionCount: number }[];
+  durationDays: string | null;
+  periodStart: Date | null;
+  periodEndExclusive: Date | null;
+}): Promise<{ packStartedAt: Date; packExpiresAt: Date | null } | null> {
+  const firstSessionDate = await findFirstEnrollmentConsumedSessionDate({
+    memberId: input.memberId,
+    packId: input.packId,
+    courseQuotas: input.courseQuotas,
+    periodStart: input.periodStart,
+    periodEndExclusive: input.periodEndExclusive,
+  });
+  if (!firstSessionDate) return null;
+
+  const packExpiresAt = addPackDurationToStartDate(firstSessionDate, input.durationDays) ?? null;
+  await prisma.memberPackEnrollment.update({
+    where: { id: input.enrollmentId },
+    data: {
+      packStartedAt: firstSessionDate,
+      packExpiresAt,
+      status: "ACTIVE",
+      closedAt: null,
+    },
+  });
+  return { packStartedAt: firstSessionDate, packExpiresAt };
 }

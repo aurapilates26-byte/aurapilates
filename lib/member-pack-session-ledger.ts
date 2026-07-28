@@ -137,6 +137,7 @@ export async function promoteNextWaitlistReservation(
         memberId: waiter.memberId,
         pack: selected.pack,
         courseSlug: params.courseSlug,
+        sessionDateDb: params.sessionDate,
       });
       await tx.reservation.update({
         where: { id: waiter.id },

@@ -42,7 +42,10 @@ export async function completeMemberDepositEnrollment(input: {
   });
 
   if (!member) throw new Error("MEMBER_NOT_FOUND");
-  if (member.enrollmentStatus !== "DEPOSIT_PENDING") {
+  const hasOpenBalance =
+    member.expectedPackAmountDinars != null &&
+    (member.enrollmentStatus === "DEPOSIT_PENDING" || member.enrollmentStatus === "ACTIVE");
+  if (!hasOpenBalance) {
     throw new Error("NOT_DEPOSIT_PENDING");
   }
   if (!member.packId || member.expectedPackAmountDinars == null) {
@@ -65,7 +68,7 @@ export async function completeMemberDepositEnrollment(input: {
         paymentKind: "BALANCE",
         packSaleTotalDinars: member.expectedPackAmountDinars,
         paymentMethod: input.paymentMethod,
-        note: "Solde pack — finalisation de l'acompte",
+        note: "Solde pack — finalisation du reste à payer",
       });
 
       if (input.qrId) {
@@ -85,7 +88,11 @@ export async function completeMemberDepositEnrollment(input: {
 
       await tx.member.update({
         where: { id: member.id },
-        data: { enrollmentStatus: "ACTIVE" },
+        data: {
+          enrollmentStatus: "ACTIVE",
+          expectedPackAmountDinars: null,
+          isActive: true,
+        },
       });
     });
   } else {
@@ -106,7 +113,11 @@ export async function completeMemberDepositEnrollment(input: {
       }
       await tx.member.update({
         where: { id: member.id },
-        data: { enrollmentStatus: "ACTIVE" },
+        data: {
+          enrollmentStatus: "ACTIVE",
+          expectedPackAmountDinars: null,
+          isActive: true,
+        },
       });
     });
   }

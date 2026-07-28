@@ -28,6 +28,7 @@ import {
   recordDepositOnMemberCreate,
   updateMemberDepositPaymentInTransaction,
 } from "@/lib/admin/member-deposit";
+import { deriveMemberPaymentStatus } from "@/lib/admin/member-payment-status";
 import { addParallelMemberPack } from "@/lib/admin/member-owned-packs";
 import { closeOpenEnrollmentsForPack } from "@/lib/admin/member-pack-enrollment";
 import {
@@ -135,6 +136,16 @@ function mapMember(
         : null,
     depositPaymentMethod: paymentTotals?.depositPaymentMethod ?? null,
     packPaymentMethod: paymentTotals?.packPaymentMethod ?? null,
+    paymentStatus: deriveMemberPaymentStatus({
+      enrollmentStatus: record.enrollmentStatus,
+      expectedPackAmountDinars: record.expectedPackAmountDinars,
+      remainingDinars:
+        record.expectedPackAmountDinars != null && paymentTotals
+          ? Math.max(0, record.expectedPackAmountDinars - paymentTotals.totalPaid)
+          : record.expectedPackAmountDinars != null
+            ? record.expectedPackAmountDinars
+            : null,
+    }),
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     qrCode: qr
@@ -227,7 +238,8 @@ export async function listAdminMembers(request: Request) {
   const parsedQuery = listMembersQuerySchema.safeParse({
     search: url.searchParams.get("search") ?? undefined,
     status: url.searchParams.get("status") ?? "ALL",
-    enrollment: url.searchParams.get("enrollment") ?? "ACTIVE",
+    enrollment: url.searchParams.get("enrollment") ?? "ALL",
+    paymentStatus: url.searchParams.get("paymentStatus") ?? "ALL",
     packId: url.searchParams.get("packId") ?? undefined,
     page: url.searchParams.get("page") ?? "1",
     pageSize: url.searchParams.get("pageSize") ?? "20",
@@ -237,7 +249,7 @@ export async function listAdminMembers(request: Request) {
     return errorResponse("Invalid query parameters", 400);
   }
 
-  const { search, status, enrollment, packId, page, pageSize } = parsedQuery.data;
+  const { search, status, enrollment, paymentStatus, packId, page, pageSize } = parsedQuery.data;
 
   const where: Prisma.MemberWhereInput = {};
 
@@ -259,18 +271,23 @@ export async function listAdminMembers(request: Request) {
   }
 
   const orderBy = { updatedAt: "desc" as const };
-  const needsStatusFilter = status !== "ALL";
+  const needsPostFilter = status !== "ALL" || paymentStatus !== "ALL";
 
   let rows: MemberListRow[];
   let total: number;
 
-  if (needsStatusFilter) {
+  if (needsPostFilter) {
     const all = await db.member.findMany({
       where,
       orderBy,
       include: memberListInclude,
     });
-    const filtered = all.filter((member) => matchesStatusFilter(memberOperationalStatusFromRow(member), status));
+    const filtered = all.filter((member) => {
+      if (!matchesStatusFilter(memberOperationalStatusFromRow(member), status)) return false;
+      if (paymentStatus === "ALL") return true;
+      const mapped = mapMemberListRow(member);
+      return mapped.paymentStatus === paymentStatus;
+    });
     total = filtered.length;
     rows = filtered.slice((page - 1) * pageSize, page * pageSize);
   } else {
@@ -311,6 +328,8 @@ export async function createAdminMember(request: Request) {
 
   const { qrId, email, personalDiscount, paymentMode, depositAmountDinars, paymentMethod, ...memberData } = parsedBody.data;
   const isDepositMode = paymentMode === "deposit";
+  const isCreditMode = paymentMode === "credit";
+  const hasOpenBalance = isDepositMode || isCreditMode;
 
   if (isDepositMode && qrId) {
     return errorResponse("Le QR code est assigné lors de la finalisation du paiement (acompte).", 400);
@@ -411,9 +430,10 @@ export async function createAdminMember(request: Request) {
         personalDiscountType: personalDiscount?.type ?? null,
         personalDiscountValue: personalDiscount?.value ?? null,
         personalDiscountReason: personalDiscount?.reason?.trim() || null,
+        // Avance = DEPOSIT_PENDING + acompte · Crédit = ACTIVE sans paiement · les deux peuvent consommer.
         enrollmentStatus: isDepositMode ? "DEPOSIT_PENDING" : "ACTIVE",
-        expectedPackAmountDinars: isDepositMode ? expectedPackAmountDinars : null,
-        isActive: memberData.isActive ?? false,
+        expectedPackAmountDinars: hasOpenBalance ? expectedPackAmountDinars : null,
+        isActive: memberData.isActive ?? true,
         note: memberData.note?.trim() || null,
       },
     });
@@ -429,9 +449,9 @@ export async function createAdminMember(request: Request) {
         expectedPackAmountDinars,
         recordedByUserId: adminUserId,
         precomputed: paymentPrecomputed,
-        paymentMethod,
+        paymentMethod: paymentMethod!,
       });
-    } else {
+    } else if (!isCreditMode) {
       const noteParts = ["Création adhérente"];
       if (personalDiscount?.reason) {
         noteParts.push(`Remise perso: ${personalDiscount.reason}`);
@@ -444,7 +464,7 @@ export async function createAdminMember(request: Request) {
         personalDiscount: personalDiscountInput,
         note: noteParts.join(" · "),
         paymentKind: "FULL",
-        paymentMethod,
+        paymentMethod: paymentMethod!,
       });
     }
 
@@ -803,6 +823,8 @@ export async function renewAdminMemberPackById(id: string, request: Request) {
 
   const { packId, personalDiscount, paymentMode, depositAmountDinars, paymentMethod } = parsedBody.data;
   const isDepositMode = paymentMode === "deposit";
+  const isCreditMode = paymentMode === "credit";
+  const hasOpenBalance = isDepositMode || isCreditMode;
 
   const selectedPack = await db.pack.findUnique({
     where: { id: packId },
@@ -858,7 +880,7 @@ export async function renewAdminMemberPackById(id: string, request: Request) {
   await db.$transaction(async (tx) => {
     const memberCurrent = await tx.member.findUnique({
       where: { id },
-      select: { id: true, personalDiscountType: true, personalDiscountValue: true },
+      select: { id: true, personalDiscountType: true, personalDiscountValue: true, isActive: true },
     });
 
     if (!memberCurrent) {
@@ -872,9 +894,10 @@ export async function renewAdminMemberPackById(id: string, request: Request) {
         await closeOpenEnrollmentsForPack(tx, id, packStateBefore.packId, "REPLACED");
       }
       await closeOpenEnrollmentsForPack(tx, id, packId, "REPLACED");
+      // Pack utilisable immédiatement (même avec avance / crédit).
       await tx.member.update({
         where: { id },
-        data: { packId, packStartedAt: null, isActive: false },
+        data: { packId, packStartedAt: null, isActive: true },
       });
       await resetMemberPackBalancesForPack(tx, { memberId: id, packId });
     }
@@ -885,15 +908,16 @@ export async function renewAdminMemberPackById(id: string, request: Request) {
         personalDiscountType: personalDiscount?.type ?? null,
         personalDiscountValue: personalDiscount?.value ?? null,
         personalDiscountReason: personalDiscount?.reason?.trim() || null,
-        ...(isDepositMode
+        ...(hasOpenBalance
           ? {
-              enrollmentStatus: "DEPOSIT_PENDING",
+              enrollmentStatus: isDepositMode ? "DEPOSIT_PENDING" : "ACTIVE",
               expectedPackAmountDinars,
-              isActive: false,
+              isActive: true,
             }
           : {
               enrollmentStatus: "ACTIVE",
               expectedPackAmountDinars: null,
+              isActive: true,
             }),
       },
     });
@@ -907,9 +931,9 @@ export async function renewAdminMemberPackById(id: string, request: Request) {
         expectedPackAmountDinars,
         recordedByUserId: adminUserId,
         precomputed: paymentPrecomputed,
-        paymentMethod,
+        paymentMethod: paymentMethod!,
       });
-    } else {
+    } else if (!isCreditMode) {
       const noteParts = [
         decision.mode === "queued" ? "Renouvellement pack (pack parallèle)" : "Renouvellement pack",
       ];
@@ -924,7 +948,7 @@ export async function renewAdminMemberPackById(id: string, request: Request) {
         personalDiscount: personalDiscountInput,
         note: noteParts.join(" · "),
         paymentKind: "FULL",
-        paymentMethod,
+        paymentMethod: paymentMethod!,
       });
     }
 

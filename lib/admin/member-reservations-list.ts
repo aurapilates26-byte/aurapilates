@@ -35,6 +35,7 @@ export type AdminMemberReservationItem = {
   createdByRole: string | null;
   planning: {
     id: string;
+    courseSlug: string;
     courseLabel: string;
     startTime: string;
     endTime: string;
@@ -68,6 +69,7 @@ export function serializeAdminMemberReservation(r: ReservationWithPlanning): Adm
     createdByRole: r.createdByUser?.role ?? null,
     planning: {
       id: r.planning.id,
+      courseSlug: r.planning.courseSlug,
       courseLabel: courseLabel(r.planning.courseSlug),
       startTime: r.planning.startTime,
       endTime: r.planning.endTime,

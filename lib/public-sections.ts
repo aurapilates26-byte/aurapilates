@@ -1,11 +1,10 @@
 export const PUBLIC_LANDING_SECTIONS = [
-  { label: "Cours", slug: "cours" },
   /* Masque temporairement — réactiver avec la section `#coach` sur `landing-page.tsx`. */
   // { label: "Coach", slug: "coach" },
+  { label: "À propos", slug: "a-propos" },
   { label: "Planning", slug: "planning" },
-  { label: "Pack", slug: "tarif" },
-  { label: "Inscription", slug: "inscription" },
-  { label: "Témoignages", slug: "temoignages" },
+  { label: "Tarifs", slug: "tarif" },
+  { label: "Contact", slug: "contact" },
   /* Masqué temporairement — page dédiée à venir. */
   // { label: "FAQ", slug: "faq" },
 ] as const;
@@ -24,8 +23,6 @@ export const MARKETING_DYNAMIC_SECTION_SLUGS = [
   /* "coach", // masqué temporairement (aligné sur le nav public) */
   /* "planning", // page dédiée : app/(public)/planning/page.tsx */
   "tarif",
-  "inscription",
-  "temoignages",
   /* "faq", // masqué temporairement */
 ] as const;
 

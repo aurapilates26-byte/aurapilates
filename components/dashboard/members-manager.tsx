@@ -5,6 +5,10 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState }
 import { useToast } from "@/components/ui/toast-provider";
 import { Button, Checkbox, ConfirmDialog, Input, SelectMenu, Textarea } from "@/components/ui";
 import { MemberDepositCompleteDialog } from "@/components/dashboard/member-deposit-complete-dialog";
+import {
+  MEMBER_PAYMENT_STATUS_LABELS,
+  type MemberPaymentStatus,
+} from "@/lib/admin/member-payment-status";
 import { PaymentMethodBadge } from "@/components/dashboard/payment-method-badge";
 import { PACK_CATEGORY_OPTIONS, normalizePackCategory } from "@/lib/pack-categories";
 import {
@@ -208,11 +212,11 @@ export type MembersManagerHandle = {
   refresh: () => void;
 };
 type MembersManagerProps = {
-  listMode?: "members" | "deposits";
   viewMode: "list" | "form";
   onChangeViewMode: (mode: "list" | "form") => void;
-  onDepositCountChange?: (count: number) => void;
-  onShowDeposits?: () => void;
+  paymentStatusFilter?: "ALL" | MemberPaymentStatus;
+  onPaymentStatusFilterChange?: (value: "ALL" | MemberPaymentStatus) => void;
+  onUnpaidCountChange?: (count: number) => void;
 };
 
 type MemberItem = {
@@ -227,6 +231,7 @@ type MemberItem = {
   packExpiresAt: string | null;
   isActive: boolean;
   enrollmentStatus?: "ACTIVE" | "DEPOSIT_PENDING";
+  paymentStatus?: MemberPaymentStatus;
   expectedPackAmountDinars?: number | null;
   totalPaidDinars?: number | null;
   remainingDinars?: number | null;
@@ -261,7 +266,13 @@ type PackItem = {
 };
 
 export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerProps>(function MembersManagerWithRef(
-  { listMode = "members", viewMode, onChangeViewMode, onDepositCountChange, onShowDeposits },
+  {
+    viewMode,
+    onChangeViewMode,
+    paymentStatusFilter = "ALL",
+    onPaymentStatusFilterChange,
+    onUnpaidCountChange,
+  },
   ref
 ) {
   const { toast } = useToast();
@@ -299,11 +310,11 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
   const [birthDate, setBirthDate] = useState("");
   const [packCategory, setPackCategory] = useState("");
   const [packId, setPackId] = useState("");
-  const [isActive, setIsActive] = useState(false);
+  const [isActive, setIsActive] = useState(true);
   const [discountType, setDiscountType] = useState<"NONE" | PersonalDiscountType>("NONE");
   const [discountValue, setDiscountValue] = useState("");
   const [discountReason, setDiscountReason] = useState("");
-  const [paymentMode, setPaymentMode] = useState<"full" | "deposit">("full");
+  const [paymentMode, setPaymentMode] = useState<"full" | "deposit" | "credit">("full");
   const [depositAmountDinars, setDepositAmountDinars] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PackPaymentMethodValue>("CASH");
   const [note, setNote] = useState("");
@@ -346,12 +357,15 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
             return false;
           }
         }
+        if (paymentStatusFilter !== "ALL" && (m.paymentStatus ?? "PAID") !== paymentStatusFilter) {
+          return false;
+        }
         if (statusFilter === "ALL") return true;
         if (statusFilter === "ACTIVE") return m.isActive;
         return !m.isActive;
       }),
     );
-  }, [items, search, statusFilter, packFilterId, packCategoryFilter, packs]);
+  }, [items, search, statusFilter, packFilterId, packCategoryFilter, packs, paymentStatusFilter]);
 
   const visibleItems = useMemo(() => {
     const start = (page - 1) * MEMBERS_PAGE_SIZE;
@@ -383,11 +397,10 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     setIsLoading(true);
     setError(null);
     try {
-      const enrollment = listMode === "deposits" ? "DEPOSIT_PENDING" : "ACTIVE";
       const params = new URLSearchParams({
         page: "1",
         pageSize: String(MEMBERS_FETCH_PAGE_SIZE),
-        enrollment,
+        enrollment: "ALL",
         status: "ALL",
       });
 
@@ -397,9 +410,10 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
         throw new Error(data?.error ?? "Impossible de charger les adhérentes.");
       }
       const data = (await response.json()) as MembersResponse;
-      setItems(sortMembersByCreatedAtDesc(data.items));
-      if (listMode === "deposits" && onDepositCountChange) {
-        onDepositCountChange(data.items.length);
+      const sorted = sortMembersByCreatedAtDesc(data.items);
+      setItems(sorted);
+      if (onUnpaidCountChange) {
+        onUnpaidCountChange(sorted.filter((m) => (m.paymentStatus ?? "PAID") === "ADVANCE").length);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Une erreur est survenue.");
@@ -408,16 +422,16 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     }
   };
 
-  const refreshDepositCount = async () => {
-    if (!onDepositCountChange) return;
+  const refreshUnpaidCount = async () => {
+    if (!onUnpaidCountChange) return;
     try {
       const response = await fetch(
-        "/api/admin/members?page=1&pageSize=1&enrollment=DEPOSIT_PENDING&status=ALL",
-        { cache: "no-store" }
+        "/api/admin/members?page=1&pageSize=5000&enrollment=ALL&status=ALL",
+        { cache: "no-store" },
       );
       if (!response.ok) return;
       const data = (await response.json()) as MembersResponse;
-      onDepositCountChange(data.meta?.total ?? 0);
+      onUnpaidCountChange(data.items.filter((m) => (m.paymentStatus ?? "PAID") === "ADVANCE").length);
     } catch {
       // ignore badge refresh errors
     }
@@ -482,11 +496,11 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     const timer = window.setTimeout(() => {
       void loadMembers();
       void loadPacks();
-      if (listMode === "members") void refreshDepositCount();
+      void refreshUnpaidCount();
     }, 0);
 
     return () => window.clearTimeout(timer);
-  }, [listMode]);
+  }, []);
 
   const handlePackCategoryFilterChange = (value: string) => {
     setPackCategoryFilter(value);
@@ -501,7 +515,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
 
   useEffect(() => {
     setPage(1);
-  }, [listMode, search, packFilterId, statusFilter, packCategoryFilter]);
+  }, [search, packFilterId, statusFilter, packCategoryFilter, paymentStatusFilter]);
 
   useEffect(() => {
     if (page > meta.totalPages) {
@@ -573,7 +587,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     setBirthDate("");
     setPackCategory("");
     setPackId("");
-    setIsActive(false);
+    setIsActive(true);
     setDiscountType("NONE");
     setDiscountValue("");
     setDiscountReason("");
@@ -726,8 +740,11 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
           packId,
           isActive,
           paymentMode,
-          paymentMethod,
         };
+
+        if (paymentMode !== "credit") {
+          createBody.paymentMethod = paymentMethod;
+        }
 
         if (discountType !== "NONE") {
           createBody.personalDiscount = {
@@ -757,21 +774,24 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
           throw new Error(data?.error ?? "Création impossible.");
         }
 
-        const createdWithDeposit = paymentMode === "deposit";
+        const createdWithPartial = paymentMode === "deposit" || paymentMode === "credit";
         await loadMembers();
-        await refreshDepositCount();
+        await refreshUnpaidCount();
         setEditingMemberId(null);
-        if (createdWithDeposit) {
-          onShowDeposits?.();
-        } else {
-          onChangeViewMode("list");
+        onChangeViewMode("list");
+        if (createdWithPartial) {
+          onPaymentStatusFilterChange?.(paymentMode === "credit" ? "CREDIT" : "ADVANCE");
         }
         resetForm();
         toast({
           variant: "success",
-          title: createdWithDeposit ? "Acompte enregistré" : "Adhérente créée",
-          description: createdWithDeposit
-            ? "L'adhérente apparaît dans Avances. Finalisez le solde pour l'ajouter à la liste principale."
+          title: createdWithPartial
+            ? paymentMode === "credit"
+              ? "Crédit enregistré"
+              : "Acompte enregistré"
+            : "Adhérente créée",
+          description: createdWithPartial
+            ? "L'adhérente reste dans la liste et peut consommer ses séances. Finalisez le solde quand le reste est payé."
             : "La nouvelle adhérente a été ajoutée et le QR code a été assigné.",
         });
         return;
@@ -833,7 +853,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
       }
 
       await loadMembers();
-      await refreshDepositCount();
+      await refreshUnpaidCount();
       setEditingMemberId(null);
       onChangeViewMode("list");
       resetForm();
@@ -880,7 +900,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
       }
       setMemberToDelete(null);
       await loadMembers();
-      await refreshDepositCount();
+      await refreshUnpaidCount();
       toast({
         variant: "success",
         title: "Adhérente supprimée",
@@ -917,7 +937,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
       }
       setDepositMember(null);
       await loadMembers();
-      await refreshDepositCount();
+      await refreshUnpaidCount();
       toast({ variant: "success", title: "Acompte finalisé", description: "L'adhérente est maintenant active." });
     } catch (e) {
       toast({
@@ -930,20 +950,16 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     }
   };
 
-  const renderDepositActions = (m: MemberItem) => (
-    <div className="flex flex-wrap items-center justify-center gap-2">
-      <EditMemberButton onClick={() => handleStartEdit(m)} />
-      <DeleteMemberButton onClick={() => setMemberToDelete(m)} />
-      <FinalizeDepositButton onClick={() => setDepositMember(m)} />
-    </div>
-  );
-
-  const renderMemberActions = (m: MemberItem) => (
-    <div className="flex flex-wrap items-center justify-end gap-2">
-      <MemberDetailLink memberId={m.id} />
-      <DeleteMemberButton onClick={() => setMemberToDelete(m)} />
-    </div>
-  );
+  const renderMemberActions = (m: MemberItem) => {
+    const unpaid = (m.paymentStatus ?? "PAID") !== "PAID";
+    return (
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <MemberDetailLink memberId={m.id} />
+        {unpaid ? <FinalizeDepositButton onClick={() => setDepositMember(m)} /> : null}
+        <DeleteMemberButton onClick={() => setMemberToDelete(m)} />
+      </div>
+    );
+  };
   useImperativeHandle(ref, () => {
     return {
       refresh() {
@@ -967,19 +983,16 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
               <div className="flex w-full flex-col gap-3 md:flex-row md:items-end md:gap-4">
                 <div className="shrink-0">
                   <p className="text-base font-semibold text-brand-dark">
-                    {listMode === "deposits" ? "Avances en attente" : "Liste des adhérentes"}
+                    {paymentStatusFilter === "ADVANCE" ? "Avances en attente" : "Liste des adhérentes"}
                   </p>
                   <p className="mt-1 text-xs text-brand-dark/60">
                     {search.trim() ||
                     statusFilter !== "ALL" ||
+                    paymentStatusFilter !== "ALL" ||
                     packCategoryFilter.trim() ||
                     packFilterId !== "ALL"
-                      ? `${filteredItems.length} résultat(s) sur ${items.length} ${
-                          listMode === "deposits" ? "avance(s)" : "adhérente(s)"
-                        }`
-                      : listMode === "deposits"
-                        ? `${items.length} avance(s) en attente`
-                        : `${items.length} adhérente(s) au total`}
+                      ? `${filteredItems.length} résultat(s) sur ${items.length} adhérente(s)`
+                      : `${items.length} adhérente(s) au total`}
                   </p>
                 </div>
 
@@ -993,19 +1006,31 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                       className="mt-0 py-2.5"
                     />
                   </div>
-                  {listMode === "members" ? (
-                    <SelectMenu
-                      id="members-status"
-                      value={statusFilter}
-                      onChange={(value) => setStatusFilter(value)}
-                      className="md:w-[7.5rem]"
-                      options={[
-                        { value: "ALL", label: "Tous" },
-                        { value: "ACTIVE", label: "Actives" },
-                        { value: "INACTIVE", label: "Inactives" },
-                      ]}
-                    />
-                  ) : null}
+                  <SelectMenu
+                    id="members-payment-status"
+                    value={paymentStatusFilter}
+                    onChange={(value) =>
+                      onPaymentStatusFilterChange?.((value as "ALL" | MemberPaymentStatus) || "ALL")
+                    }
+                    className="md:w-[8.5rem]"
+                    options={[
+                      { value: "ALL", label: "Tous paiements" },
+                      { value: "PAID", label: MEMBER_PAYMENT_STATUS_LABELS.PAID },
+                      { value: "ADVANCE", label: MEMBER_PAYMENT_STATUS_LABELS.ADVANCE },
+                      { value: "CREDIT", label: MEMBER_PAYMENT_STATUS_LABELS.CREDIT },
+                    ]}
+                  />
+                  <SelectMenu
+                    id="members-status"
+                    value={statusFilter}
+                    onChange={(value) => setStatusFilter(value)}
+                    className="md:w-[7.5rem]"
+                    options={[
+                      { value: "ALL", label: "Tous" },
+                      { value: "ACTIVE", label: "Actives" },
+                      { value: "INACTIVE", label: "Inactives" },
+                    ]}
+                  />
                   <SelectMenu
                     id="members-pack-category"
                     value={packCategoryFilter}
@@ -1034,6 +1059,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                     onClick={() => {
                       setSearch("");
                       setStatusFilter("ALL");
+                      onPaymentStatusFilterChange?.("ALL");
                       setPackCategoryFilter("");
                       setPackFilterId("ALL");
                     }}
@@ -1049,7 +1075,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
           </div>
           {visibleItems.length === 0 ? (
             <div className="px-5 py-10 text-center text-sm text-brand-dark/60">
-              {listMode === "deposits"
+              {paymentStatusFilter === "ADVANCE"
                 ? "Aucune avance en attente."
                 : "Aucune adhérente. Ajustez la recherche ou les filtres."}
             </div>
@@ -1060,13 +1086,13 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                   <article
                     key={m.id}
                     className={`space-y-3 px-4 py-4 text-sm ${
-                      listMode === "deposits" ? "bg-amber-50/20" : ""
+                      paymentStatusFilter === "ADVANCE" ? "bg-amber-50/20" : ""
                     }`}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div>
                         <p className="font-semibold text-brand-dark">
-                          {listMode === "members" ? (
+                          {true ? (
                             <Link href={`/dashboard/adherents/${m.id}`} className="hover:underline">
                               {(m.firstName || m.lastName)
                                 ? `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim()
@@ -1079,12 +1105,12 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                           )}
                         </p>
                         <p className="mt-1 text-xs text-brand-dark/65">
-                          {listMode === "deposits"
+                          {paymentStatusFilter === "ADVANCE"
                             ? `Inscrite le ${formatMemberCreatedAt(m.createdAt)}`
                             : `Ajoutée le ${formatMemberCreatedAt(m.createdAt)}`}
                         </p>
                       </div>
-                      {listMode === "members" ? (
+                      <div className="flex flex-wrap items-center gap-1.5">
                         <span
                           className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
                             m.isActive
@@ -1094,14 +1120,16 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                         >
                           {m.isActive ? "Active" : "Inactive"}
                         </span>
-                      ) : (
-                        <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-900">
-                          Acompte
-                        </span>
-                      )}
+                        {(m.paymentStatus ?? "PAID") !== "PAID" ? (
+                          <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-900">
+                            {MEMBER_PAYMENT_STATUS_LABELS[m.paymentStatus ?? "ADVANCE"]}
+                            {m.remainingDinars != null ? ` · ${m.remainingDinars} DT` : ""}
+                          </span>
+                        ) : null}
+                      </div>
                     </div>
                     <p className="text-xs text-brand-dark/75">Pack : {m.pack?.name ?? "—"}</p>
-                    {listMode === "deposits" ? (
+                    {paymentStatusFilter === "ADVANCE" ? (
                       <>
                         <div className="flex flex-col gap-2 text-xs text-brand-dark/75 sm:flex-row sm:items-start sm:justify-between">
                           <DepositAmountCell
@@ -1127,7 +1155,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                       </p>
                     )}
                     <div className="flex items-center justify-between gap-2">
-                      {listMode === "members" ? (
+                      {true ? (
                         <span
                           className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
                             m.qrCode?.qrId
@@ -1140,7 +1168,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                       ) : (
                         <span className="text-xs text-brand-dark/60">QR assigné à la finalisation</span>
                       )}
-                      {listMode === "deposits" ? renderDepositActions(m) : renderMemberActions(m)}
+                      {renderMemberActions(m)}
                     </div>
                   </article>
                 ))}
@@ -1151,7 +1179,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                   <thead>
                     <tr className="border-b border-brand-medium/15 bg-zinc-50/60 text-xs font-semibold text-brand-dark/70">
                       <th className="px-5 py-3 text-left">Nom</th>
-                      {listMode === "deposits" ? (
+                      {paymentStatusFilter === "ADVANCE" ? (
                         <>
                           <th className="px-4 py-3 text-center">Pack</th>
                           <th className="px-4 py-3 text-center">Progression</th>
@@ -1176,7 +1204,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                     {visibleItems.map((m) => (
                       <tr key={m.id} className="text-sm">
                         <td className="px-5 py-4 font-semibold text-brand-dark">
-                          {listMode === "members" ? (
+                          {true ? (
                             <Link href={`/dashboard/adherents/${m.id}`} className="hover:underline">
                               {(m.firstName || m.lastName)
                                 ? `${m.firstName ?? ""} ${m.lastName ?? ""}`.trim()
@@ -1188,7 +1216,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                               : "Adhérente"
                           )}
                         </td>
-                        {listMode === "deposits" ? (
+                        {paymentStatusFilter === "ADVANCE" ? (
                           <>
                             <td className="px-4 py-4 text-center text-brand-dark/80">{m.pack?.name ?? "—"}</td>
                             <td className="px-4 py-4">
@@ -1219,15 +1247,23 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                         ) : (
                           <>
                             <td className="px-4 py-4 text-center">
-                              <span
-                                className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
-                                  m.isActive
-                                    ? "border border-emerald-200 bg-emerald-50 text-emerald-900"
-                                    : "border border-zinc-200 bg-zinc-50 text-zinc-800"
-                                }`}
-                              >
-                                {m.isActive ? "Active" : "Inactive"}
-                              </span>
+                              <div className="flex flex-col items-center gap-1">
+                                <span
+                                  className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
+                                    m.isActive
+                                      ? "border border-emerald-200 bg-emerald-50 text-emerald-900"
+                                      : "border border-zinc-200 bg-zinc-50 text-zinc-800"
+                                  }`}
+                                >
+                                  {m.isActive ? "Active" : "Inactive"}
+                                </span>
+                                {(m.paymentStatus ?? "PAID") !== "PAID" ? (
+                                  <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-900">
+                                    {MEMBER_PAYMENT_STATUS_LABELS[m.paymentStatus ?? "ADVANCE"]}
+                                    {m.remainingDinars != null ? ` · ${m.remainingDinars} DT` : ""}
+                                  </span>
+                                ) : null}
+                              </div>
                             </td>
                             <td className="px-4 py-4 text-center text-brand-dark/80">{m.pack?.name ?? "—"}</td>
                             <td className="px-4 py-4 text-center tabular-nums text-brand-dark/80">
@@ -1250,7 +1286,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                           </>
                         )}
                         <td className="px-4 py-4 text-center">
-                          {listMode === "deposits" ? renderDepositActions(m) : renderMemberActions(m)}
+                          {renderMemberActions(m)}
                         </td>
                       </tr>
                     ))}
@@ -1263,7 +1299,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                   meta={meta}
                   isLoading={isLoading}
                   hasError={Boolean(error)}
-                  itemLabel={listMode === "deposits" ? "avances" : "adhérentes"}
+                  itemLabel={paymentStatusFilter === "ADVANCE" ? "avances" : "adhérentes"}
                 />
                 <ListPagination
                   page={meta.page}
@@ -1304,8 +1340,8 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
 
           {isEditingDepositPending ? (
             <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-950">
-              Cette adhérente est en attente de finalisation. Elle n&apos;apparaît pas dans la liste principale tant
-              que le solde n&apos;est pas encaissé.
+              Reste à payer en cours. L&apos;adhérente reste dans la liste et peut consommer ses séances. Finalisez
+              le solde pour clôturer l&apos;avance ou le crédit.
             </div>
           ) : null}
 
@@ -1539,6 +1575,13 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                         </p>
                       ) : null}
                     </div>
+                  ) : selectedPackListPriceDinars != null ? (
+                    <div className="rounded-xl border border-brand-medium/15 bg-zinc-50/60 px-4 py-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-dark/50">
+                        Prix catalogue
+                      </p>
+                      <p className="mt-1 text-sm font-bold text-brand-dark">{selectedPackListPriceDinars} DT</p>
+                    </div>
                   ) : null}
                 </>
               ) : null}
@@ -1554,7 +1597,10 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                     <div className="mt-2 flex flex-wrap gap-2">
                       <button
                         type="button"
-                        onClick={() => setPaymentMode("full")}
+                        onClick={() => {
+                          setPaymentMode("full");
+                          setDepositAmountDinars("");
+                        }}
                         className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
                           paymentMode === "full"
                             ? "bg-brand-dark text-white"
@@ -1572,7 +1618,21 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                             : "border border-brand-medium/30 bg-white text-brand-dark"
                         }`}
                       >
-                        Acompte seulement
+                        Avance
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPaymentMode("credit");
+                          setDepositAmountDinars("");
+                        }}
+                        className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                          paymentMode === "credit"
+                            ? "bg-brand-dark text-white"
+                            : "border border-brand-medium/30 bg-white text-brand-dark"
+                        }`}
+                      >
+                        Crédit (reste à payer)
                       </button>
                     </div>
                   </div>
@@ -1588,7 +1648,27 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                     />
                   ) : null}
 
-                  <PaymentMethodPicker value={paymentMethod} onChange={setPaymentMethod} />
+                  {paymentMode === "credit" ? (
+                    <div className="rounded-xl border border-amber-200/80 bg-amber-50/70 px-4 py-3 text-xs text-amber-950/90">
+                      Aucun paiement n&apos;est enregistré. Le pack est utilisable immédiatement ; le montant total
+                      {createDiscountPreview ? (
+                        <>
+                          {" "}
+                          (<span className="font-semibold">{createDiscountPreview.final} DT</span>)
+                        </>
+                      ) : selectedPackListPriceDinars != null ? (
+                        <>
+                          {" "}
+                          (<span className="font-semibold">{selectedPackListPriceDinars} DT</span>)
+                        </>
+                      ) : null}{" "}
+                      reste à payer.
+                    </div>
+                  ) : null}
+
+                  {paymentMode !== "credit" ? (
+                    <PaymentMethodPicker value={paymentMethod} onChange={setPaymentMethod} />
+                  ) : null}
                 </>
               ) : null}
           </div>
@@ -1659,6 +1739,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
         }
         isOpen={Boolean(depositMember)}
         isSubmitting={isCompletingDeposit}
+        existingQrId={depositMember?.qrCode?.qrId ?? null}
         onClose={() => {
           if (!isCompletingDeposit) setDepositMember(null);
         }}

@@ -42,9 +42,6 @@ export function PublicPacksPricingClient({ packs, canonicalCategories }: Props) 
     );
   }
 
-  const cardCtaClass =
-    "inline-flex shrink-0 items-center justify-center rounded-full border border-brand-dark/35 bg-brand-dark px-3 py-1 text-xs font-semibold text-white transition hover:bg-brand-dark/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-dark sm:text-sm";
-
   return (
     <div className="space-y-5">
       {categories.length > 0 ? (
@@ -73,8 +70,8 @@ export function PublicPacksPricingClient({ packs, canonicalCategories }: Props) 
           Aucun pack dans cette catégorie.
         </div>
       ) : (
-        <div className="flex flex-wrap justify-center gap-4 md:gap-5">
-          {visible.map((p) => {
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:gap-5 lg:grid-cols-4 lg:gap-6">
+          {visible.map((p, idx) => {
             const price = p.priceDisplay;
             const duration = p.durationDisplay;
             const sessions = p.sessionsDisplay;
@@ -95,109 +92,98 @@ export function PublicPacksPricingClient({ packs, canonicalCategories }: Props) 
             const priceShown = price ?? "—";
             const sessionsShown = sessions != null ? String(sessions) : "—";
             const durationShown = duration ?? "—";
+            
+            // Calculer prix par séance
+            const pricePerSession = 
+              p.priceCents != null && sessions != null && sessions > 0
+                ? Math.round(p.priceCents / sessions)
+                : null;
+            const pricePerSessionText = pricePerSession != null ? `soit ${pricePerSession} DT / séance` : null;
+            
+            // Badge "La plus choisie" pour le 2e pack
+            const showBestChoice = idx === 1 && visible.length > 1;
+            
+            // Description lisible: "5 séances, Valide 1 mois"
+            const descriptionParts = [];
+            if (sessions != null) descriptionParts.push(`${sessionsShown} séance${sessions > 1 ? 's' : ''}`);
+            if (duration) descriptionParts.push(`Valide ${duration}`);
+            const description = descriptionParts.join(", ");
 
             return (
               <article
                 key={p.id}
-                className={`flex h-full w-full min-w-0 max-w-sm flex-col rounded-2xl border border-brand-medium/20 p-3 shadow-sm transition hover:border-brand-medium/35 hover:shadow-md sm:max-w-md sm:p-4 ${
-                  p.hasDiscount || isUpcomingPromo
-                    ? isUpcomingPromo && !p.hasDiscount
-                      ? "ring-1 ring-sky-200/90"
-                      : "ring-1 ring-emerald-200/80"
-                    : ""
-                } ${publicPanelSurfaceClass}`}
+                className={`group relative flex h-full w-full min-w-0 flex-col overflow-hidden rounded-2xl border border-brand-medium/20 p-5 sm:p-6 shadow-sm transition hover:-translate-y-0.5 hover:border-brand-medium/35 ${publicPanelSurfaceClass}`}
               >
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
-                    <h3 className="text-lg font-semibold leading-snug text-brand-dark break-words">
-                      {p.name}
-                    </h3>
-                    {promoPercent != null ? (
-                      <span
-                        className={`shrink-0 text-sm font-semibold tabular-nums ${
-                          isUpcomingOnly ? "text-sky-800" : "text-emerald-800"
-                        }`}
-                      >
-                        −{promoPercent} %
-                      </span>
-                    ) : null}
-                    {isUpcomingOnly ? (
-                      <span className="shrink-0 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-900">
-                        {promotionLifecycleLabelFr("upcoming")}
-                      </span>
-                    ) : null}
-                  </div>
-                  <Link
-                    href="/inscription"
-                    className={cardCtaClass}
-                    title="Aller au formulaire d'inscription"
-                    aria-label="Choisir ce pack — aller à l'inscription"
-                  >
-                    Choisir
-                  </Link>
-                </div>
+                <div className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-brand-dark/55 via-brand-dark/20 to-transparent" />
 
-                <div
-                  className="mt-4 grid gap-0 text-center [grid-template-columns:minmax(0,0.88fr)_minmax(2.85rem,0.66fr)_minmax(0,0.96fr)]"
-                  role="group"
-                  aria-label={`Prix ${priceShown}, séances ${sessionsShown}, durée ${durationShown}`}
-                >
-                  <div className="min-w-0 px-1 sm:px-2">
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-brand-dark/50">
-                      Prix
-                    </p>
+                {/* Badge "La plus choisie" */}
+                {showBestChoice && (
+                  <div className="mb-4 inline-flex w-fit rounded-full border border-amber-300/60 bg-amber-50 px-3 py-1">
+                    <span className="text-xs font-semibold text-amber-900">La plus choisie</span>
+                  </div>
+                )}
+
+                {/* Titre */}
+                <h3 className="text-[1.75rem] font-semibold leading-tight text-brand-dark">
+                  {p.name}
+                </h3>
+
+                {/* Description (sessions + durée) */}
+                {description && (
+                  <p className="mt-2 text-sm text-brand-dark/70">
+                    {description}
+                  </p>
+                )}
+
+                {/* Prix principal - très visible */}
+                <div className="mt-5 flex items-end gap-2">
+                  <span className="text-[2.65rem] font-bold leading-none text-brand-dark">
                     {hasActiveDiscount ? (
-                      <p className="mt-1 flex flex-wrap items-baseline justify-center gap-x-1.5 gap-y-0 text-base font-bold tabular-nums leading-tight text-brand-dark sm:text-lg">
-                        <span className="text-sm font-medium text-brand-dark/45 line-through">
+                      <>
+                        <span className="mr-2 text-base font-medium text-brand-dark/45 line-through">
                           {p.originalPriceDisplay}
                         </span>
-                        <span>{priceShown}</span>
-                      </p>
-                    ) : isUpcomingOnly ? (
-                      <p className="mt-1 flex flex-wrap items-baseline justify-center gap-x-1.5 gap-y-0 text-base font-bold tabular-nums leading-tight text-brand-dark sm:text-lg">
-                        <span>{priceShown}</span>
-                        {p.upcomingPromoPriceDisplay ? (
-                          <span className="text-sm font-semibold text-sky-800">
-                            → {p.upcomingPromoPriceDisplay}
-                          </span>
-                        ) : null}
-                      </p>
-                    ) : (
-                      <p className="mt-1 break-words text-base font-bold tabular-nums leading-tight text-brand-dark sm:text-lg">
                         {priceShown}
-                      </p>
+                      </>
+                    ) : (
+                      priceShown
                     )}
-                  </div>
-                  <div className="min-w-0 border-l border-brand-medium/25 px-1 sm:px-1.5">
-                    <p className="text-[9px] font-semibold uppercase tracking-wide text-brand-dark/50 sm:text-[10px] sm:tracking-wider">
-                      Séances
-                    </p>
-                    <p className="mt-1 whitespace-nowrap text-base font-bold tabular-nums leading-tight text-brand-dark sm:text-lg">
-                      {sessionsShown}
-                    </p>
-                  </div>
-                  <div className="min-w-0 border-l border-brand-medium/25 px-1 sm:px-2">
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-brand-dark/50">
-                      Durée
-                    </p>
-                    <p className="mt-1 break-words text-base font-bold leading-tight text-brand-dark sm:text-lg">
-                      {durationShown}
-                    </p>
-                  </div>
+                  </span>
+                  <span className="pb-1 text-xs font-semibold tracking-wide text-brand-dark/70">DT</span>
                 </div>
 
-                {quotaLine ? <p className="mt-3 text-sm text-brand-dark/75">{quotaLine}</p> : null}
+                {/* Prix par séance */}
+                {pricePerSessionText && (
+                  <p className="mt-1 text-xs text-brand-dark/60">
+                    {pricePerSessionText}
+                  </p>
+                )}
 
-                {p.features.length > 0 ? (
-                  <ul className="mt-4 space-y-1.5 text-sm text-brand-dark/85">
-                    {p.features.slice(0, 6).map((f) => (
+                {/* Bouton */}
+                <Link
+                  href="/inscription"
+                  className={`mt-6 inline-flex w-full shrink-0 items-center justify-center rounded-full border-2 ${
+                    showBestChoice
+                      ? "border-brand-dark bg-brand-dark text-white hover:bg-brand-dark/90"
+                      : "border-brand-dark text-brand-dark hover:bg-brand-dark/5"
+                  } px-6 py-2.5 text-sm font-semibold transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-dark`}
+                  title={`Choisir ${p.name}`}
+                  aria-label={`Choisir ${p.name}`}
+                >
+                  {p.name === "Séance à l'unité" ? "Réserver cette séance" : "Choisir cette formule"}
+                </Link>
+
+                {/* Features */}
+                {p.features.length > 0 && (
+                  <ul className="mt-5 space-y-2 border-t border-brand-dark/10 pt-5 text-sm text-brand-dark/75">
+                    {p.features.slice(0, 5).map((f) => (
                       <li key={f} className="flex gap-2">
-                        <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-brand-dark/35" />
+                        <span className="mt-1 h-1 w-1 shrink-0 rounded-full bg-brand-dark/35" />
                         <span className="leading-relaxed">{f}</span>
                       </li>
                     ))}
                   </ul>
-                ) : null}
+                )}
               </article>
             );
           })}

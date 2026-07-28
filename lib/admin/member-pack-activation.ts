@@ -86,11 +86,25 @@ export async function activateSelectedPackOnSessionDate(
         memberId: input.memberId,
         packId: input.packId,
         status: { in: ["PENDING_START", "ACTIVE"] },
+        packStartedAt: null,
       },
-      orderBy: [{ purchasedAt: "desc" }, { createdAt: "desc" }],
+      orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
       select: { packStartedAt: true },
     });
-    currentStartedAt = enrollment?.packStartedAt ?? null;
+    currentStartedAt =
+      enrollment?.packStartedAt ??
+      (
+        await tx.memberPackEnrollment.findFirst({
+          where: {
+            memberId: input.memberId,
+            packId: input.packId,
+            status: { in: ["PENDING_START", "ACTIVE"] },
+          },
+          orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
+          select: { packStartedAt: true },
+        })
+      )?.packStartedAt ??
+      null;
   }
 
   let packStartedAt = currentStartedAt;

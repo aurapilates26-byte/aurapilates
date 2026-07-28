@@ -1,8 +1,8 @@
-import Image from "next/image";
 import { Suspense } from "react";
+import { PublicPageHero, publicHeroDescriptionClass, publicHeroSubtitleClass, publicHeroTitleClass } from "@/components/public/public-page-hero";
 import { PublicPlanningDisplay } from "@/components/public/public-planning";
 import { PublicReadySection } from "@/components/public/public-ready-section";
-import { homeText, planningPageText } from "@/lib/text";
+import { planningPageText } from "@/lib/text";
 
 const HERO_FEATURE_ICONS = [
   (
@@ -53,43 +53,24 @@ const TIP_ICONS = [
 export function PlanningPage() {
   return (
     <div className="w-full">
-      <section className="relative min-h-[min(520px,72vh)] w-full pt-14">
-        <Image
-          src={homeText.hero.image}
-          alt={homeText.hero.imageAlt}
-          fill
-          priority
-          sizes="100vw"
-          className="object-cover object-[82%_center]"
-        />
-
-        <div className="relative z-10 mx-auto flex min-h-[min(480px,68vh)] w-full max-w-6xl items-center px-8 py-12 sm:px-10 md:px-12 lg:px-16 xl:px-20">
-          <div className="max-w-xl lg:ml-4 xl:ml-8">
-            <h1 className="font-serif text-[clamp(2.5rem,5vw,3.5rem)] leading-tight tracking-tight text-brand-dark">
-              {planningPageText.title}
-            </h1>
-            <p className="mt-2 font-serif text-[clamp(1.35rem,2.8vw,1.85rem)] leading-snug text-brand-dark/90">
-              {planningPageText.subtitle}
-            </p>
-            <p className="mt-4 max-w-lg text-sm leading-relaxed text-brand-dark/75 sm:text-base">
-              {planningPageText.description}
-            </p>
-            <div className="mt-6 space-y-4">
-              {planningPageText.features.map((feature, index) => (
-                <div key={feature.title} className="flex gap-3">
-                  <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-brand-dark/15 text-brand-dark/70">
-                    {HERO_FEATURE_ICONS[index]}
-                  </span>
-                  <div>
-                    <p className="text-sm font-semibold text-brand-dark">{feature.title}</p>
-                    <p className="mt-0.5 text-sm text-brand-dark/65">{feature.subtitle}</p>
-                  </div>
-                </div>
-              ))}
+      <PublicPageHero>
+        <h1 className={publicHeroTitleClass}>{planningPageText.title}</h1>
+        <p className={publicHeroSubtitleClass}>{planningPageText.subtitle}</p>
+        <p className={publicHeroDescriptionClass}>{planningPageText.description}</p>
+        <div className="mt-6 space-y-4">
+          {planningPageText.features.map((feature, index) => (
+            <div key={feature.title} className="flex gap-3">
+              <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-brand-dark/15 text-brand-dark/70">
+                {HERO_FEATURE_ICONS[index]}
+              </span>
+              <div>
+                <p className="text-sm font-semibold text-brand-dark">{feature.title}</p>
+                <p className="mt-0.5 text-sm text-brand-dark/65">{feature.subtitle}</p>
+              </div>
             </div>
-          </div>
+          ))}
         </div>
-      </section>
+      </PublicPageHero>
 
       <section className="bg-[#faf7f2] px-6 pb-10 pt-8 sm:px-8 lg:px-10">
         <div className="mx-auto w-full max-w-7xl">
@@ -109,7 +90,7 @@ export function PlanningPage() {
             {planningPageText.tips.map((tip, index) => (
               <div
                 key={tip.title}
-                className="flex gap-3 rounded-2xl border border-brand-medium/15 bg-[#f7f4ef] px-5 py-5 shadow-[0_10px_40px_rgba(112,72,60,0.08)]"
+                className="flex gap-3 rounded-2xl border border-brand-medium/15 bg-[#f7f4ef] px-5 py-5 shadow-sm"
               >
                 <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-brand-dark/15 text-brand-dark/70">
                   {TIP_ICONS[index]}

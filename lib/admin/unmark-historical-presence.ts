@@ -59,6 +59,7 @@ export function unmarkHistoricalPresenceErrorMessage(code: string): string {
 export type UnmarkHistoricalPresenceResult = {
   planningId: string;
   sessionDateYmd: string;
+  memberId: string;
   packCredited: boolean;
 };
 
@@ -130,6 +131,7 @@ export async function unmarkHistoricalPresence(reservationId: string): Promise<U
       return {
         planningId: reservation.planningId,
         sessionDateYmd: formatYmdPrismaDate(reservation.sessionDate),
+        memberId: reservation.memberId,
         packCredited,
       };
     },

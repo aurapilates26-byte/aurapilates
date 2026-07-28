@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ConfirmDialog } from "@/components/ui";
 import { useToast } from "@/components/ui/toast-provider";
@@ -11,6 +11,8 @@ import {
 } from "@/lib/studio-booking-rules";
 import { useMemberBookingStore } from "@/store/member/member-booking-store";
 import type { MemberReservationItem } from "@/types/member/booking";
+import { ReservationSegmentedTabs } from "@/components/dashboard/reservations/reservation-segmented-tabs";
+import { buildReservationHistoryCounts } from "@/lib/reservation-history-counts";
 
 const cancelBtnClass =
   "inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-50 text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200 disabled:cursor-not-allowed disabled:opacity-60";
@@ -130,12 +132,11 @@ export function MemberMyReservations({ limit = 3 }: { limit?: number }) {
 
   const loading = !booted;
 
-  const tabBtnBase =
-    "flex-1 rounded-lg px-3 py-2 text-center text-xs font-semibold transition sm:text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-medium/40";
-  const tabBtnActive = "bg-white text-brand-dark shadow-sm border border-brand-medium/25";
-  const tabBtnIdle = "text-brand-dark/70 hover:text-brand-dark hover:bg-white/60";
-
   const listForTab = tab === "upcoming" ? upcomingItems : reservationHistory;
+  const historyCounts = useMemo(
+    () => buildReservationHistoryCounts(reservationHistory),
+    [reservationHistory],
+  );
   const emptyMessage =
     tab === "upcoming" ? "Aucune réservation à venir." : "Aucune réservation dans l'historique.";
 
@@ -146,26 +147,16 @@ export function MemberMyReservations({ limit = 3 }: { limit?: number }) {
       </div>
 
       {!loading ? (
-        <div
-          className="mt-3 flex rounded-xl border border-brand-medium/20 bg-zinc-50/80 p-1 sm:mt-4"
-          role="group"
-          aria-label="Affichage des réservations"
-        >
-          <button
-            type="button"
-            className={`${tabBtnBase} ${tab === "upcoming" ? tabBtnActive : tabBtnIdle}`}
-            onClick={() => setTab("upcoming")}
-          >
-            Prochaines séances
-          </button>
-          <button
-            type="button"
-            className={`${tabBtnBase} ${tab === "history" ? tabBtnActive : tabBtnIdle}`}
-            onClick={() => setTab("history")}
-          >
-            Historique
-          </button>
-        </div>
+        <ReservationSegmentedTabs
+          className="mt-3 sm:mt-4"
+          value={tab}
+          onChange={(next) => {
+            if (next === "upcoming" || next === "history") setTab(next);
+          }}
+          tabs={["upcoming", "history"]}
+          counts={{ upcoming: upcomingItems.length, history: historyCounts.total }}
+          historyCourseBreakdown={historyCounts.byCourse}
+        />
       ) : null}
 
       {!loading && tab === "upcoming" ? (

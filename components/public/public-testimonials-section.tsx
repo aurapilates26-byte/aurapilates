@@ -85,7 +85,7 @@ export function PublicTestimonialsSection() {
             <article
               key={testimonial.name}
               data-testimonial-card
-              className="w-[min(88vw,340px)] shrink-0 snap-center rounded-2xl bg-white p-6 shadow-[0_4px_24px_rgba(90,64,51,0.07)] sm:w-[340px] sm:p-7"
+              className="w-[min(88vw,340px)] shrink-0 snap-center rounded-2xl bg-white p-6 shadow-sm sm:w-[340px] sm:p-7"
             >
               <p className="font-serif text-4xl leading-none text-brand-dark/20" aria-hidden>
                 “

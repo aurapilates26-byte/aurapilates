@@ -2,10 +2,13 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { PaymentMethodBadge } from "@/components/dashboard/payment-method-badge";
-import { PackMetricsGrid } from "@/components/pack-metrics-grid";
 import type { MemberOwnedPackDto } from "@/lib/admin/member-owned-packs";
 import { formatPackPriceDt } from "@/lib/public-pack-display";
-import { useMemberBookingRefresh } from "@/hooks/use-member-booking-refresh";
+import {
+  EMPTY_MEMBER_OWNED_PACKS,
+  subscribeMemberOwnedPacksChanged,
+  useMemberOwnedPacksStore,
+} from "@/store/admin/member-owned-packs-store";
 
 function formatDateFr(value: string | null | undefined) {
   if (!value) return "—";
@@ -26,59 +29,50 @@ function formatPackSessionsValue(count: number | null): string {
   return String(count);
 }
 
-type PackBadgeKind = "active" | "consuming" | "finished" | "closed" | "expired";
+type PackBadgeKind = "consuming" | "finished" | "expired";
 
-function isPackConsuming(pack: MemberOwnedPackDto): boolean {
-  return pack.consumedSessions > 0 || pack.packStartedAt != null;
+function isPackDateExpired(pack: MemberOwnedPackDto): boolean {
+  if (!pack.packExpiresAt) return false;
+  const expiresAt = new Date(pack.packExpiresAt);
+  if (Number.isNaN(expiresAt.getTime())) return false;
+  const expiresDay = new Date(expiresAt.getFullYear(), expiresAt.getMonth(), expiresAt.getDate());
+  const today = new Date();
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  return expiresDay.getTime() < todayStart.getTime();
 }
 
+/** Expiré = date dépassée · Terminé = séances épuisées · En cours = séances restantes (démarré ou pas). */
 function getPackBadgeKind(pack: MemberOwnedPackDto): PackBadgeKind {
-  if (pack.status === "expired") return "expired";
-  if (pack.remainingSessions <= 0) return "finished";
-  if (pack.status === "replaced" && isPackConsuming(pack)) return "closed";
-  if (isPackConsuming(pack)) return "consuming";
-  return "active";
+  const hasRemaining =
+    pack.remainingSessions > 0 ||
+    (pack.totalSessions != null && pack.consumedSessions < pack.totalSessions);
+
+  if (hasRemaining && pack.packStartedAt && isPackDateExpired(pack)) {
+    return "expired";
+  }
+
+  if (hasRemaining) return "consuming";
+
+  if (pack.totalSessions != null && pack.remainingSessions <= 0) return "finished";
+  if (pack.consumedSessions > 0 && pack.remainingSessions <= 0) return "finished";
+  if (pack.status === "expired" || isPackDateExpired(pack)) return "expired";
+  return "finished";
 }
 
 function packBadgeClass(kind: PackBadgeKind): string {
-  if (kind === "active") {
-    return "border-emerald-200 bg-emerald-50 text-emerald-900";
-  }
   if (kind === "consuming") {
     return "border-indigo-200 bg-indigo-50 text-indigo-900";
   }
   if (kind === "finished") {
     return "border-zinc-200 bg-zinc-100 text-zinc-700";
   }
-  if (kind === "closed") {
-    return "border-zinc-200 bg-zinc-100 text-zinc-700";
-  }
   return "border-red-200 bg-red-50 text-red-800";
 }
 
 function packBadgeLabel(kind: PackBadgeKind): string {
-  if (kind === "active") return "Actif";
   if (kind === "consuming") return "En cours";
-  if (kind === "closed") return "Clôturé";
   if (kind === "finished") return "Terminé";
   return "Expiré";
-}
-
-function packStatusHint(pack: MemberOwnedPackDto, kind: PackBadgeKind): string | null {
-  if (kind === "active" && pack.status === "replaced" && pack.consumedSessions <= 0) {
-    return "Aucune séance consommée — pack conservé dans l'historique après renouvellement.";
-  }
-  if (pack.status === "replaced" && pack.consumedSessions > 0) {
-    return "Pack précédent — séances comptées sur la période avant le renouvellement.";
-  }
-  if (kind === "closed") {
-    return "Renouvellement effectué avant épuisement — séances restantes non utilisées.";
-  }
-  return null;
-}
-
-function showRenewalBadge(pack: MemberOwnedPackDto, badgeKind: PackBadgeKind): boolean {
-  return pack.isRenewal && (badgeKind === "active" || badgeKind === "consuming");
 }
 
 function InfoField({ label, children }: { label: string; children: ReactNode }) {
@@ -96,10 +90,15 @@ type MemberOwnedPacksPanelProps = {
 };
 
 export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwnedPacksPanelProps) {
-  const [items, setItems] = useState<MemberOwnedPackDto[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const items = useMemberOwnedPacksStore(
+    useCallback((s) => s.byMemberId[memberId] ?? EMPTY_MEMBER_OWNED_PACKS, [memberId]),
+  );
+  const isLoading = useMemberOwnedPacksStore((s) => Boolean(s.loadingByMemberId[memberId]));
+  const error = useMemberOwnedPacksStore((s) => s.errorByMemberId[memberId] ?? null);
+  const loadPacks = useMemberOwnedPacksStore((s) => s.loadPacks);
+  const revision = useMemberOwnedPacksStore((s) => s.revision);
   const [openEnrollmentIds, setOpenEnrollmentIds] = useState<Set<string>>(() => new Set());
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
 
   const togglePackOpen = (enrollmentId: string) => {
     setOpenEnrollmentIds((prev) => {
@@ -110,47 +109,60 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
     });
   };
 
-  const load = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const response = await fetch(`/api/admin/members/${encodeURIComponent(memberId)}/owned-packs`, {
-        cache: "no-store",
+  useEffect(() => {
+    let cancelled = false;
+    void loadPacks(memberId)
+      .then((next) => {
+        if (cancelled) return;
+        setHasLoadedOnce(true);
+        setOpenEnrollmentIds((prev) => {
+          const kept = new Set([...prev].filter((id) => next.some((p) => p.enrollmentId === id)));
+          if (kept.size > 0) {
+            if (kept.size === prev.size && [...kept].every((id) => prev.has(id))) return prev;
+            return kept;
+          }
+          const firstCurrent = next.find((p) => getPackBadgeKind(p) === "consuming");
+          const nextOpen = firstCurrent ? new Set([firstCurrent.enrollmentId]) : new Set<string>();
+          if (nextOpen.size === prev.size && [...nextOpen].every((id) => prev.has(id))) return prev;
+          return nextOpen;
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setHasLoadedOnce(true);
       });
-      if (!response.ok) {
-        const data = (await response.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(data?.error ?? "Chargement impossible.");
-      }
-      const data = (await response.json()) as { items: MemberOwnedPackDto[] };
-      const next = data.items ?? [];
-      setItems(next);
-      setOpenEnrollmentIds((prev) => {
-        const kept = new Set([...prev].filter((id) => next.some((p) => p.enrollmentId === id)));
-        if (kept.size > 0) return kept;
-        const firstActive = next.find((p) => p.status === "active" || p.status === "pending");
-        return firstActive ? new Set([firstActive.enrollmentId]) : new Set();
-      });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Erreur");
-      setItems([]);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [memberId]);
+    return () => {
+      cancelled = true;
+    };
+  }, [loadPacks, memberId, reloadToken]);
 
   useEffect(() => {
-    void load();
-  }, [load, reloadToken]);
+    return subscribeMemberOwnedPacksChanged((detail) => {
+      if (detail.memberId !== memberId) return;
+      if (detail.items) return;
+      void loadPacks(memberId);
+    });
+  }, [loadPacks, memberId]);
 
-  // Écoute les événements de rafraîchissement (présence marquée, annulation, etc.)
-  // et recharge les packs quand un changement est détecté
-  useMemberBookingRefresh(load);
+  useEffect(() => {
+    if (!items.length) return;
+    setOpenEnrollmentIds((prev) => {
+      const kept = new Set([...prev].filter((id) => items.some((p) => p.enrollmentId === id)));
+      if (kept.size > 0) {
+        if (kept.size === prev.size && [...kept].every((id) => prev.has(id))) return prev;
+        return kept;
+      }
+      const firstCurrent = items.find((p) => getPackBadgeKind(p) === "consuming");
+      const nextOpen = firstCurrent ? new Set([firstCurrent.enrollmentId]) : new Set<string>();
+      if (nextOpen.size === prev.size && [...nextOpen].every((id) => prev.has(id))) return prev;
+      return nextOpen;
+    });
+  }, [items, revision]);
 
-  if (isLoading) {
+  if (isLoading && !hasLoadedOnce && items.length === 0) {
     return <p className="text-sm text-brand-dark/60">Chargement des packs…</p>;
   }
 
-  if (error) {
+  if (error && items.length === 0) {
     return <p className="text-sm text-red-700">{error}</p>;
   }
 
@@ -163,8 +175,15 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
     );
   }
 
-  const activeItems = items.filter((p) => p.status === "active" || p.status === "pending");
-  const historyItems = items.filter((p) => p.status === "expired" || p.status === "replaced");
+  const currentItems = items
+    .filter((p) => getPackBadgeKind(p) === "consuming")
+    .sort((a, b) => new Date(a.purchasedAt).getTime() - new Date(b.purchasedAt).getTime());
+  const historyItems = items
+    .filter((p) => {
+      const kind = getPackBadgeKind(p);
+      return kind === "finished" || kind === "expired";
+    })
+    .sort((a, b) => new Date(b.purchasedAt).getTime() - new Date(a.purchasedAt).getTime());
 
   function renderPackCard(pack: MemberOwnedPackDto) {
     const isOpen = openEnrollmentIds.has(pack.enrollmentId);
@@ -193,107 +212,51 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
               <div className="flex flex-wrap items-center gap-2">
                 <p className="text-base font-semibold text-brand-dark">{pack.packName}</p>
                 <span
-                  className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${packBadgeClass(badgeKind)}`}
+                  className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${packBadgeClass(badgeKind)}`}
                 >
                   {packBadgeLabel(badgeKind)}
                 </span>
-                {showRenewalBadge(pack, badgeKind) ? (
-                  <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900">
-                    Renouvelé
-                  </span>
-                ) : null}
               </div>
-              {packStatusHint(pack, badgeKind) ? (
-                <p className="mt-1.5 text-xs leading-relaxed text-brand-dark/60">
-                  {packStatusHint(pack, badgeKind)}
-                </p>
-              ) : null}
-              <PackMetricsGrid
-                className="mt-3"
-                price={formatPackPriceDt(pack.priceCents) ?? "—"}
-                sessions={formatPackSessionsValue(sessionsTotal)}
-                duration={formatPackDurationLabel(pack.durationDays)}
-              />
+              <p className="mt-1 text-xs text-brand-dark/55">
+                {pack.consumedSessions}
+                {sessionsTotal != null ? ` / ${sessionsTotal}` : ""} séances
+                {!pack.packStartedAt ? " · Pas encore démarré" : ""}
+              </p>
             </div>
-            <span
-              className={`mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-brand-medium/20 bg-white text-brand-dark/70 transition-transform ${
-                isOpen ? "rotate-180" : ""
-              }`}
-              aria-hidden="true"
-            >
-              <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current">
-                <path d="M7.41 8.59 12 13.17l4.59-4.58L18 10l-6 6-6-6z" />
-              </svg>
-            </span>
+            <PaymentMethodBadge method={pack.packPaymentMethod} fallback="Paiement non renseigné" />
           </div>
-          <p className="mt-2 text-[11px] font-medium text-brand-dark/50">
-            {isOpen ? "Masquer le détail du pack" : "Afficher le détail du pack"}
-          </p>
         </summary>
 
-        <div className="space-y-3 border-t border-brand-medium/15 px-4 py-3">
-          <div className="grid grid-cols-2 gap-3">
-            <InfoField label="Acheté le">{formatDateFr(pack.purchasedAt)}</InfoField>
-            <InfoField label="Pack début">
-              {pack.packStartedAt ? formatDateFr(pack.packStartedAt) : "À la première réservation"}
+        <div className="space-y-3 border-t border-brand-medium/10 px-4 py-3">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <InfoField label={pack.isRenewal ? "Date d'achat" : "Date d'ajout"}>
+              {formatDateFr(pack.purchasedAt)}
             </InfoField>
-            <InfoField label="Expiration du pack">
-              {pack.packExpiresAt
-                ? formatDateFr(pack.packExpiresAt)
-                : pack.durationDays
-                  ? "Après la 1ʳᵉ réservation"
-                  : "—"}
+            <InfoField label="1ʳᵉ réservation">
+              {pack.packStartedAt ? formatDateFr(pack.packStartedAt) : "Pas encore démarré"}
             </InfoField>
-            <InfoField label="Montant payé">{pack.totalPaidDinars} DT</InfoField>
-            <InfoField label="Paiement">
-              <PaymentMethodBadge method={pack.packPaymentMethod} fallback="Non renseigné" />
-              {pack.depositPaymentMethod && pack.depositPaymentMethod !== pack.packPaymentMethod ? (
-                <p className="mt-1 text-xs font-normal text-brand-dark/60">
-                  Acompte : <PaymentMethodBadge method={pack.depositPaymentMethod} />
-                </p>
-              ) : null}
+            <InfoField label="Expiration">
+              {pack.packExpiresAt ? formatDateFr(pack.packExpiresAt) : "—"}
+            </InfoField>
+            <InfoField label="Durée">{formatPackDurationLabel(pack.durationDays)}</InfoField>
+            <InfoField label="Séances">
+              {pack.consumedSessions}
+              {sessionsTotal != null ? ` / ${formatPackSessionsValue(sessionsTotal)}` : ""}
+            </InfoField>
+            <InfoField label="Prix">
+              {pack.priceCents != null ? formatPackPriceDt(pack.priceCents) : "—"}
             </InfoField>
           </div>
-          <div className="rounded-xl border border-brand-medium/15 bg-white/80 px-3 py-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-dark/50">
-              Suivi séances pack
-            </p>
-                <div className="mt-3 grid grid-cols-3 gap-2">
-                  <InfoField label="Séances pack">
-                    {pack.totalSessions != null ? pack.totalSessions : "—"}
-                  </InfoField>
-                  <InfoField label="Séances consommées">{pack.consumedSessions}</InfoField>
-                  <InfoField label="Séances restantes">{pack.remainingSessions}</InfoField>
-                </div>
-                {pack.courseQuotaRemaining.length > 0 ? (
-                  <div className="mt-3 space-y-2">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-dark/50">
-                      Détail par cours
-                    </p>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                      {pack.courseQuotaRemaining.map((row) => (
-                        <div
-                          key={row.courseLabel}
-                          className="rounded-lg border border-brand-medium/15 bg-white/90 px-3 py-2 text-sm"
-                        >
-                          <p className="font-semibold text-brand-dark">{row.courseLabel}</p>
-                          <p className="mt-0.5 text-xs text-brand-dark/65">
-                            {row.remaining} / {row.total} séance(s) restante(s)
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                    <p className="text-[11px] leading-relaxed text-brand-dark/55">
-                      Chaque cours consomme son propre quota. Un quota épuisé (ex. Reformer) n&apos;empêche
-                      pas l&apos;utilisation d&apos;un autre pack pour ce cours.
-                    </p>
-                  </div>
-                ) : null}
-            <p className="mt-3 text-[11px] leading-relaxed text-brand-dark/60">
-              Confirmée/Présente consomme une séance. Annulation avant 6 h : non comptabilisée.
-              Annulation tardive : séance comptabilisée.
-            </p>
-          </div>
+
+          {pack.courseQuotaRemaining.length > 0 ? (
+            <div className="grid gap-2 sm:grid-cols-2">
+              {pack.courseQuotaRemaining.map((q) => (
+                <InfoField key={q.courseLabel} label={q.courseLabel}>
+                  {q.consumed} / {q.total}
+                </InfoField>
+              ))}
+            </div>
+          ) : null}
         </div>
       </details>
     );
@@ -301,23 +264,16 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
 
   return (
     <div className="space-y-4">
-      {activeItems.length > 0 ? (
-        <div className="space-y-3">
-          {activeItems.length < items.length ? (
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-dark/50">
-              Packs actifs
-            </p>
-          ) : null}
-          {activeItems.map(renderPackCard)}
+      {currentItems.length > 0 ? (
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-brand-dark/50">En cours</p>
+          <div className="space-y-2">{currentItems.map(renderPackCard)}</div>
         </div>
       ) : null}
-
       {historyItems.length > 0 ? (
-        <div className="space-y-3">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-dark/50">
-            Historique des packs
-          </p>
-          {historyItems.map(renderPackCard)}
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-brand-dark/50">Historique</p>
+          <div className="space-y-2">{historyItems.map(renderPackCard)}</div>
         </div>
       ) : null}
     </div>

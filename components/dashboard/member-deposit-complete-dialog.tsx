@@ -24,6 +24,8 @@ type MemberDepositCompleteDialogProps = {
   member: DepositMember | null;
   isOpen: boolean;
   isSubmitting: boolean;
+  /** QR déjà assigné — finalisation sans rescanner. */
+  existingQrId?: string | null;
   onClose: () => void;
   onConfirm: (qrId: string, paymentMethod: PackPaymentMethodValue) => void;
 };
@@ -32,6 +34,7 @@ export function MemberDepositCompleteDialog({
   member,
   isOpen,
   isSubmitting,
+  existingQrId = null,
   onClose,
   onConfirm,
 }: MemberDepositCompleteDialogProps) {
@@ -41,14 +44,18 @@ export function MemberDepositCompleteDialog({
   const [isFetchingQr, setIsFetchingQr] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PackPaymentMethodValue>("CASH");
 
+  const hasExistingQr = Boolean(existingQrId && existingQrId.trim().length >= 10);
+
   useEffect(() => {
     if (!isOpen) {
       setQrId("");
       setQrKey(null);
       setQrError(null);
       setPaymentMethod("CASH");
+    } else if (existingQrId) {
+      setQrId(existingQrId);
     }
-  }, [isOpen]);
+  }, [isOpen, existingQrId]);
 
   const fetchQrKey = useCallback(async (publicId: string) => {
     const trimmed = publicId.trim();
@@ -117,10 +124,14 @@ export function MemberDepositCompleteDialog({
           </button>
           <Button
             type="button"
-            disabled={isSubmitting || qrId.trim().length < 10 || Boolean(qrError)}
-            onClick={() => onConfirm(qrId.trim(), paymentMethod)}
+            disabled={
+              isSubmitting ||
+              Boolean(qrError) ||
+              (!hasExistingQr && qrId.trim().length < 10)
+            }
+            onClick={() => onConfirm(qrId.trim() || existingQrId?.trim() || "", paymentMethod)}
           >
-            {isSubmitting ? "Validation..." : "Encaisser le solde et activer"}
+            {isSubmitting ? "Validation..." : "Encaisser le solde"}
           </Button>
         </>
       }

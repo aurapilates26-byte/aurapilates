@@ -68,7 +68,7 @@ export function QrIdVerifyClient({
   return (
     <main className="min-h-dvh bg-gradient-to-b from-zinc-50 to-zinc-100 px-4 py-10">
       <section className="mx-auto flex min-h-[78dvh] w-full max-w-md items-center justify-center">
-        <div className="w-full rounded-3xl border border-brand-medium/20 bg-white p-6 shadow-[0_14px_36px_rgba(15,23,42,0.08)] sm:p-7">
+        <div className="w-full rounded-3xl border border-brand-medium/20 bg-white p-6 shadow-sm sm:p-7">
           <div className="mx-auto mb-4 flex w-fit items-center justify-center">
             <Image src="/images/logo.png" alt="Aura Pilates Studio" width={160} height={30} priority className="h-8 w-auto" />
           </div>

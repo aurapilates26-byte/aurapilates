@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button, Input, Modal } from "@/components/ui";
 import { useToast } from "@/components/ui/toast-provider";
+import type { MemberOwnedPackDto } from "@/lib/admin/member-owned-packs";
 import type { AdminPlanningItem, PlanningPeriodConfig } from "@/types/admin/planning";
+import { useMemberOwnedPacksStore } from "@/store/admin/member-owned-packs-store";
 
 type MemberHit = {
   id: string;
@@ -38,6 +40,7 @@ export function PlanningHistoricalPresenceDialog({
   courseLabel,
 }: PlanningHistoricalPresenceDialogProps) {
   const { toast } = useToast();
+  const notifyPacksChanged = useMemberOwnedPacksStore((s) => s.notifyPacksChanged);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<MemberHit[]>([]);
   const [selectedMember, setSelectedMember] = useState<MemberHit | null>(null);
@@ -160,11 +163,18 @@ export function PlanningHistoricalPresenceDialog({
       const data = (await res.json()) as {
         ok?: boolean;
         items?: RosterItem[];
+        ownedPacks?: MemberOwnedPackDto[];
         result?: { alreadyMarked?: boolean; packStartAdjusted?: boolean; packStartedAtYmd?: string };
         error?: string;
       };
       if (!res.ok) throw new Error(data.error ?? "Enregistrement impossible");
       setRoster(data.items ?? []);
+      if (data.ownedPacks) {
+        notifyPacksChanged(member.id, data.ownedPacks);
+      } else {
+        notifyPacksChanged(member.id);
+        void useMemberOwnedPacksStore.getState().loadPacks(member.id);
+      }
       setQuery("");
       setHits([]);
       setSelectedMember(null);
@@ -201,11 +211,18 @@ export function PlanningHistoricalPresenceDialog({
       const data = (await res.json()) as {
         ok?: boolean;
         items?: RosterItem[];
+        ownedPacks?: MemberOwnedPackDto[];
         result?: { packCredited?: boolean };
         error?: string;
       };
       if (!res.ok) throw new Error(data.error ?? "Suppression impossible");
       setRoster(data.items ?? []);
+      if (data.ownedPacks) {
+        notifyPacksChanged(item.memberId, data.ownedPacks);
+      } else {
+        notifyPacksChanged(item.memberId);
+        void useMemberOwnedPacksStore.getState().loadPacks(item.memberId);
+      }
       if (selectedMember?.id === item.memberId) {
         setSelectedMember(null);
       }

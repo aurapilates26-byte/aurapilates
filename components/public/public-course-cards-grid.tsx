@@ -29,7 +29,7 @@ function ChevronRightIcon({ className }: { className?: string }) {
 }
 
 const scrollArrowClass =
-  "pointer-events-auto flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-brand-medium/35 bg-white text-brand-dark shadow-[0_4px_16px_rgba(90,64,51,0.12)] transition hover:bg-brand-light/80 md:h-11 md:w-11";
+  "pointer-events-auto flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-brand-medium/35 bg-white text-brand-dark shadow-sm transition hover:bg-brand-light/80 md:h-11 md:w-11";
 
 const edgeFadeClass =
   "pointer-events-none absolute inset-y-0 z-[1] w-14 from-[#faf7f2] via-[#faf7f2]/90 to-transparent sm:w-20 lg:w-24";

@@ -16,6 +16,7 @@ const SINGLE_CATEGORY_ALLOWED_SLUGS: Record<string, string[]> = {
   "Mat pilates": ["mat-pilates"],
   Yoga: ["cours-de-yoga", "yoga"],
   Danse: ["cours-de-dance", "dance"],
+  "Coaching privé": ["coaching-prive"],
 };
 
 export function getEligibilityForPack(input: {

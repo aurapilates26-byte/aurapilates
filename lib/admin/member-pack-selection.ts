@@ -16,7 +16,8 @@ import {
 } from "@/lib/member-pack-period";
 import { debitMemberPackSession } from "@/lib/member-pack-session-ledger";
 import { activateSelectedPackOnSessionDate } from "@/lib/admin/member-pack-activation";
-import { resetMemberPackBalancesForPack } from "@/lib/admin/member-pack-renewal";
+import { consumeOldestOpenEnrollmentOnDebit } from "@/lib/admin/member-pack-enrollment";
+import { ensureMemberParallelPackStockForDebit } from "@/lib/admin/member-owned-packs";
 import { prisma } from "@/lib/prisma";
 
 type ResolvePackOptions = {
@@ -181,6 +182,7 @@ async function loadPackCandidates(
   memberId: string,
   courseSlug: string,
 ): Promise<PackCandidate[]> {
+  // Ne pas appeler ensure* ici : écritures hors-tx pendant une transaction → conflit / deadlock.
   const member = await tx.member.findUnique({
     where: { id: memberId },
     select: {
@@ -205,6 +207,10 @@ async function loadPackCandidates(
   for (const balance of member.packBalances) {
     if (balance.remaining > 0) packIds.add(balance.packId);
   }
+  for (const enrollment of member.packEnrollments) {
+    packIds.add(enrollment.packId);
+  }
+  if (member.packId) packIds.add(member.packId);
   if (packIds.size === 0) return [];
 
   const latestEnrollmentByPack = new Map<
@@ -220,6 +226,11 @@ async function loadPackCandidates(
       });
     }
   }
+
+  const refreshedBalances = await tx.memberPackBalance.findMany({
+    where: { memberId, packId: { in: [...packIds] } },
+    select: { packId: true, courseSlug: true, remaining: true },
+  });
 
   const packs = await tx.pack.findMany({
     where: { id: { in: [...packIds] }, isActive: true },
@@ -243,24 +254,32 @@ async function loadPackCandidates(
     });
     if (!isCourseAllowedForPack(eligibility, courseSlug)) continue;
 
-    const balances = member.packBalances.filter((b) => b.packId === pack.id);
+    const balances = refreshedBalances.filter((b) => b.packId === pack.id);
     const remainingForCourse = remainingForCourseSlug(balances, pack, courseSlug);
     if (remainingForCourse <= 0) continue;
 
     const enrollment = latestEnrollmentByPack.get(pack.id);
-    const period = resolvePackPeriod({
-      packId: pack.id,
-      memberPackId: member.packId,
-      memberPackStartedAt: member.packStartedAt,
-      enrollmentStartedAt: enrollment?.packStartedAt ?? null,
-      enrollmentExpiresAt: enrollment?.packExpiresAt ?? null,
-    });
+    // Stock parallèle pas encore démarré : ne pas hériter de la date du pack actif (sinon refus à tort).
+    const unstartedEnrollment = member.packEnrollments.find(
+      (e) => e.packId === pack.id && !e.packStartedAt,
+    );
+    const openEnrollment = unstartedEnrollment ?? enrollment;
+
+    const period = unstartedEnrollment
+      ? { packStartedAt: null as Date | null, packExpiresAt: null as Date | null }
+      : resolvePackPeriod({
+          packId: pack.id,
+          memberPackId: member.packId,
+          memberPackStartedAt: member.packStartedAt,
+          enrollmentStartedAt: openEnrollment?.packStartedAt ?? null,
+          enrollmentExpiresAt: openEnrollment?.packExpiresAt ?? null,
+        });
 
     candidates.push({
       packId: pack.id,
       packName: pack.name,
       pack,
-      purchasedAt: enrollment?.purchasedAt ?? new Date(0),
+      purchasedAt: openEnrollment?.purchasedAt ?? enrollment?.purchasedAt ?? new Date(0),
       packStartedAt: period.packStartedAt,
       packExpiresAt: period.packExpiresAt,
       remainingSessions: totalRemaining(balances, pack),
@@ -269,7 +288,7 @@ async function loadPackCandidates(
     });
   }
 
-  return candidates.sort((a, b) => b.purchasedAt.getTime() - a.purchasedAt.getTime());
+  return candidates.sort((a, b) => a.purchasedAt.getTime() - b.purchasedAt.getTime());
 }
 
 function totalSessionsForPack(pack: PackCandidate["pack"]): number | null {
@@ -285,12 +304,16 @@ function consumedSessionsForCandidate(candidate: PackCandidate): number {
   return Math.max(0, total - candidate.remainingSessions);
 }
 
-/** Plus de séances consommées d'abord ; à égalité, pack acheté le plus tôt (FIFO). */
+/**
+ * Choix auto quand plusieurs packs couvrent le cours :
+ * prioriser le pack acheté le plus tôt (FIFO) pour épuiser l'ancien avant le suivant.
+ * À date d'achat égale : celui déjà le plus consommé.
+ */
 function pickDefaultPackCandidate(candidates: PackCandidate[]): PackCandidate {
   return [...candidates].sort((a, b) => {
-    const consumedDiff = consumedSessionsForCandidate(b) - consumedSessionsForCandidate(a);
-    if (consumedDiff !== 0) return consumedDiff;
-    return a.purchasedAt.getTime() - b.purchasedAt.getTime();
+    const purchaseDiff = a.purchasedAt.getTime() - b.purchasedAt.getTime();
+    if (purchaseDiff !== 0) return purchaseDiff;
+    return consumedSessionsForCandidate(b) - consumedSessionsForCandidate(a);
   })[0]!;
 }
 
@@ -307,6 +330,8 @@ function toBookablePackOptionDto(candidate: PackCandidate): BookablePackOptionDt
 
 /** Cours réservables selon les séances restantes réelles (quota Mat/Reformer indépendants). */
 export async function getMemberBookableCourseSlugs(memberId: string): Promise<string[]> {
+  await ensureMemberParallelPackStockForDebit(memberId);
+
   const member = await prisma.member.findUnique({
     where: { id: memberId },
     select: {
@@ -371,6 +396,7 @@ export async function listBookablePacksForMember(
   courseSlug: string,
   sessionDateLocal?: Date | null,
 ): Promise<BookablePackOptionDto[]> {
+  await ensureMemberParallelPackStockForDebit(memberId);
   const candidates = await prisma.$transaction((tx) => loadPackCandidates(tx, memberId, courseSlug));
   const filtered = sessionDateLocal
     ? candidates.filter((c) => isCandidateValidForSessionDate(c, sessionDateLocal))
@@ -453,14 +479,6 @@ export async function preparePackForAdminPresenceDebit(
     sessionDateLocal: input.sessionDateLocal,
   });
 
-  const existingBalances = await tx.memberPackBalance.findMany({
-    where: { memberId: input.memberId, packId: selected.pack.id },
-    select: { id: true },
-  });
-  if (existingBalances.length === 0) {
-    await resetMemberPackBalancesForPack(tx, { memberId: input.memberId, packId: selected.pack.id });
-  }
-
   return selected;
 }
 
@@ -470,12 +488,19 @@ export async function debitSelectedPackSession(
     memberId: string;
     pack: PackCandidate["pack"];
     courseSlug: string;
+    sessionDateDb: Date;
   },
 ): Promise<void> {
   await debitMemberPackSession(tx, {
     memberId: input.memberId,
     pack: input.pack,
     courseSlug: input.courseSlug,
+  });
+  await consumeOldestOpenEnrollmentOnDebit(tx, {
+    memberId: input.memberId,
+    packId: input.pack.id,
+    sessionDateDb: input.sessionDateDb,
+    durationDays: input.pack.durationDays,
   });
 }
 
