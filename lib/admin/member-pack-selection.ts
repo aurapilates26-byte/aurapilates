@@ -69,8 +69,10 @@ function totalRemaining(
   balances: { courseSlug: string | null; remaining: number }[],
   pack: PackQuotaShape,
 ): number {
-  const forPack = balances.filter((b) => b.remaining > 0);
-  if (forPack.length > 0) return forPack.reduce((sum, b) => sum + b.remaining, 0);
+  // Solde initialisé (même à 0) : ne pas réinjecter le quota catalogue.
+  if (balances.length > 0) {
+    return balances.reduce((sum, b) => sum + Math.max(0, b.remaining), 0);
+  }
   if (pack.courseQuotas.length > 0) {
     return pack.courseQuotas.reduce((sum, q) => sum + q.sessionCount, 0);
   }

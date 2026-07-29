@@ -16,7 +16,7 @@ import {
   debitSelectedPackSession,
   preparePackForAdminPresenceDebit,
 } from "@/lib/admin/member-pack-selection";
-import { ensureMemberParallelPackStockForDebit } from "@/lib/admin/member-owned-packs";
+import { ensureMemberParallelPackStockForDebit, refreshMemberPackBalancesForDebit } from "@/lib/admin/member-owned-packs";
 import { isSessionYmdWithinPlanningPeriod } from "@/lib/planning-period-status";
 import { resolvePlanningPeriodConfigForSessionYmd } from "@/lib/admin/planning-period-archive";
 import { prisma } from "@/lib/prisma";
@@ -375,7 +375,7 @@ export async function markHistoricalPresence(input: {
         if (isTransactionWriteConflict(error)) throw new Error("P2034");
         throw error;
       }
-      await ensureMemberParallelPackStockForDebit(input.memberId);
+      await refreshMemberPackBalancesForDebit(input.memberId);
     }
   }
 

@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { packStartDateLocal } from "@/lib/member-pack-period";
 import { syncActiveEnrollmentDates } from "@/lib/admin/member-pack-enrollment";
-import { recomputeMemberPackBalancesForPack } from "@/lib/admin/member-pack-renewal";
+import { recomputeMemberPackBalancesForPack } from "@/lib/admin/member-pack-balance-recompute";
 
 export type ActivateMemberPackOnSessionResult = {
   packStartedAt: Date;

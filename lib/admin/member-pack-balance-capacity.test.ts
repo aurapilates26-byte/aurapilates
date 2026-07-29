@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   computePackCourseRemaining,
   packBalanceCapacityUnits,
-} from "@/lib/admin/member-pack-renewal";
+} from "@/lib/admin/member-pack-renewal-shared";
 
 describe("pack multi-purchase balance capacity", () => {
   it("counts each enrollment as one capacity unit", () => {

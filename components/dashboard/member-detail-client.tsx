@@ -4,11 +4,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { DashboardHeader } from "@/components/dashboard/header";
-import { Button, Checkbox, ConfirmDialog, Input, Modal, SelectMenu, Textarea } from "@/components/ui";
+import { Button, Checkbox, ConfirmDialog, Input, SelectMenu, Textarea } from "@/components/ui";
 import { DatePicker } from "@/components/ui/date-picker";
 import { useToast } from "@/components/ui/toast-provider";
 import type { MemberDetailData, PackFormItem } from "@/lib/admin/member-detail-server";
-import { packRenewalMessageFr, type PackRenewalDecision } from "@/lib/admin/member-pack-renewal";
+import { packRenewalMessageFr, type PackRenewalDecision } from "@/lib/admin/member-pack-renewal-shared";
 import { formatYmdLocal, startOfLocalToday } from "@/lib/calendar-day";
 import { PACK_CATEGORY_OPTIONS, normalizePackCategory } from "@/lib/pack-categories";
 import { planningLevelBadgeClass } from "@/lib/planning-level-badge";
@@ -27,6 +27,11 @@ import {
 } from "@/lib/pack-payment-method";
 import type { AdminMemberReservationItem } from "@/lib/admin/member-reservations-list";
 import { AdminMemberReservationsPanel } from "@/components/dashboard/reservations/admin-member-reservations-panel";
+import {
+  MemberBookSlotConfirmModal,
+  type BookSlotBookableOption,
+  type BookSlotOwnedPackRow,
+} from "@/components/dashboard/member-book-slot-confirm-modal";
 import { MemberOwnedPacksPanel } from "@/components/dashboard/member-owned-packs-panel";
 import { useMemberDetailStore } from "@/store/admin/member-detail-store";
 import { displayMemberEmail } from "@/lib/member-display-email";
@@ -52,18 +57,17 @@ type SlotRow = {
   };
 };
 
-type BookablePackOption = {
-  packId: string;
-  packName: string;
-  remainingSessions: number;
-  remainingForCourse: number;
-  courseCoverageLabel: string;
-};
-
-type BookPackPickerState = {
+type BookConfirmModalState = {
   planningId: string;
+  courseSlug: string;
+  courseLabel: string;
+  startTime: string;
+  endTime: string;
+  coachName: string | null;
+  level: string | null;
   packId: string;
-  options: BookablePackOption[];
+  bookableOptions: BookSlotBookableOption[];
+  ownedPacks: BookSlotOwnedPackRow[];
 };
 
 type PanelMode = "view" | "edit" | "book" | "renew";
@@ -260,7 +264,8 @@ export function MemberDetailClient({
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [slotsError, setSlotsError] = useState<string | null>(null);
   const [bookingPlanningId, setBookingPlanningId] = useState<string | null>(null);
-  const [bookPackPicker, setBookPackPicker] = useState<BookPackPickerState | null>(null);
+  const [bookModalOpeningId, setBookModalOpeningId] = useState<string | null>(null);
+  const [bookConfirmModal, setBookConfirmModal] = useState<BookConfirmModalState | null>(null);
 
   const [upcomingReservations, setUpcomingReservations] = useState<AdminMemberReservationItem[]>([]);
 
@@ -811,6 +816,7 @@ export function MemberDetailClient({
         title: "Réservation enregistrée",
         description: `Inscription ${statusLabel.toLowerCase()} pour le ${formatDateFr(bookDate)}.`,
       });
+      setBookConfirmModal(null);
       const updated = await loadMember();
       populateForm(updated, packs);
       setReservationsReloadToken((t) => t + 1);
@@ -818,7 +824,6 @@ export function MemberDetailClient({
       if (panelMode === "book") {
         await loadSlots(bookDate);
       }
-      router.refresh();
     } catch (e) {
       toast({
         variant: "error",
@@ -827,37 +832,51 @@ export function MemberDetailClient({
       });
     } finally {
       setBookingPlanningId(null);
-      setBookPackPicker(null);
     }
   };
 
-  const handleBookSlot = async (planningId: string, courseSlug: string) => {
+  const handleBookSlot = async (slot: SlotRow) => {
+    if (bookModalOpeningId || bookConfirmModal) return;
+    setBookModalOpeningId(slot.planningId);
     try {
       const params = new URLSearchParams({
-        courseSlug,
+        courseSlug: slot.courseSlug,
         sessionDate: bookDate,
       });
-      const response = await fetch(
-        `/api/admin/members/${encodeURIComponent(memberId)}/bookable-packs?${params.toString()}`,
-        { cache: "no-store" },
-      );
-      if (!response.ok) {
-        const data = (await response.json().catch(() => null)) as { error?: string } | null;
+      const [bookableRes, ownedRes] = await Promise.all([
+        fetch(
+          `/api/admin/members/${encodeURIComponent(memberId)}/bookable-packs?${params.toString()}`,
+          { cache: "no-store" },
+        ),
+        fetch(`/api/admin/members/${encodeURIComponent(memberId)}/owned-packs`, {
+          cache: "no-store",
+        }),
+      ]);
+      if (!bookableRes.ok) {
+        const data = (await bookableRes.json().catch(() => null)) as { error?: string } | null;
         throw new Error(data?.error ?? "Impossible de charger les packs.");
       }
-      const data = (await response.json()) as { items: BookablePackOption[] };
-      const options = data.items ?? [];
+      if (!ownedRes.ok) {
+        const data = (await ownedRes.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(data?.error ?? "Impossible de charger les packs de l'adhérente.");
+      }
+      const bookableData = (await bookableRes.json()) as { items: BookSlotBookableOption[] };
+      const ownedData = (await ownedRes.json()) as { items: BookSlotOwnedPackRow[] };
+      const options = bookableData.items ?? [];
       if (options.length === 0) {
         throw new Error("Aucun pack avec des séances disponibles pour ce cours.");
       }
-      if (options.length === 1) {
-        await submitBook(planningId, options[0].packId);
-        return;
-      }
-      setBookPackPicker({
-        planningId,
-        packId: options[0].packId,
-        options,
+      setBookConfirmModal({
+        planningId: slot.planningId,
+        courseSlug: slot.courseSlug,
+        courseLabel: slot.courseLabel,
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        coachName: slot.coachName,
+        level: slot.level,
+        packId: options[0]!.packId,
+        bookableOptions: options,
+        ownedPacks: ownedData.items ?? [],
       });
     } catch (e) {
       toast({
@@ -865,6 +884,8 @@ export function MemberDetailClient({
         title: "Réservation",
         description: e instanceof Error ? e.message : "Erreur",
       });
+    } finally {
+      setBookModalOpeningId(null);
     }
   };
 
@@ -1462,11 +1483,11 @@ export function MemberDetailClient({
                   !alreadyReserved &&
                   (slot.stats.spotsRemaining > 0 ||
                     (slot.waitlistCapacity != null && (slot.stats.waitSpotsRemaining ?? 0) > 0));
-                const isBooking = bookingPlanningId === slot.planningId;
+                const isOpeningModal = bookModalOpeningId === slot.planningId;
                 return (
                   <li
                     key={slot.planningId}
-                    className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3 text-sm transition ${
+                    className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3 text-sm ${
                       alreadyReserved
                         ? "border-zinc-200 bg-zinc-100/70 opacity-75"
                         : "border-brand-medium/15 bg-zinc-50/40 hover:border-brand-medium/30 hover:bg-white"
@@ -1504,11 +1525,11 @@ export function MemberDetailClient({
                     ) : (
                       <Button
                         type="button"
-                        disabled={!canBook || isBooking}
-                        onClick={() => void handleBookSlot(slot.planningId, slot.courseSlug)}
-                        className="shrink-0"
+                        disabled={!canBook || isOpeningModal || Boolean(bookModalOpeningId)}
+                        onClick={() => void handleBookSlot(slot)}
+                        className="min-w-[6.5rem] shrink-0"
                       >
-                        {isBooking ? "..." : "Réserver"}
+                        {isOpeningModal ? "..." : "Réserver"}
                       </Button>
                     )}
                   </li>
@@ -1585,49 +1606,29 @@ export function MemberDetailClient({
         onConfirm={() => void handleDelete()}
       />
 
-      <Modal
-        isOpen={bookPackPicker != null}
-        title="Choisir le pack"
-        description="Plusieurs packs couvrent ce cours. Sélectionnez celui à débiter pour cette séance."
-        onClose={() => {
-          if (!bookingPlanningId) setBookPackPicker(null);
-        }}
-        footer={
-          <>
-            <button
-              type="button"
-              onClick={() => setBookPackPicker(null)}
-              disabled={Boolean(bookingPlanningId)}
-              className="rounded-full border border-brand-medium/35 bg-white px-4 py-2 text-sm font-medium text-brand-dark transition hover:bg-zinc-50 disabled:opacity-60"
-            >
-              Annuler
-            </button>
-            <Button
-              type="button"
-              disabled={!bookPackPicker || Boolean(bookingPlanningId)}
-              onClick={() => {
-                if (!bookPackPicker) return;
-                void submitBook(bookPackPicker.planningId, bookPackPicker.packId);
-              }}
-            >
-              {bookingPlanningId ? "Réservation..." : "Réserver"}
-            </Button>
-          </>
+      <MemberBookSlotConfirmModal
+        isOpen={bookConfirmModal != null}
+        isSubmitting={Boolean(bookingPlanningId)}
+        sessionDateLabel={formatDateFr(bookDate)}
+        courseLabel={bookConfirmModal?.courseLabel ?? ""}
+        startTime={bookConfirmModal?.startTime ?? ""}
+        endTime={bookConfirmModal?.endTime ?? ""}
+        coachName={bookConfirmModal?.coachName ?? null}
+        level={bookConfirmModal?.level ?? null}
+        ownedPacks={bookConfirmModal?.ownedPacks ?? []}
+        bookableOptions={bookConfirmModal?.bookableOptions ?? []}
+        selectedPackId={bookConfirmModal?.packId ?? ""}
+        onSelectedPackIdChange={(packId) =>
+          setBookConfirmModal((prev) => (prev ? { ...prev, packId } : prev))
         }
-      >
-        {bookPackPicker ? (
-          <SelectMenu
-            id="book-pack"
-            label="Pack à débiter"
-            value={bookPackPicker.packId}
-            onChange={(packId) => setBookPackPicker((prev) => (prev ? { ...prev, packId } : prev))}
-            options={bookPackPicker.options.map((option) => ({
-              value: option.packId,
-              label: `${option.packName} · ${option.remainingForCourse} séance(s) pour ce cours · ${option.courseCoverageLabel}`,
-            }))}
-          />
-        ) : null}
-      </Modal>
+        onClose={() => {
+          if (!bookingPlanningId) setBookConfirmModal(null);
+        }}
+        onConfirm={() => {
+          if (!bookConfirmModal) return;
+          void submitBook(bookConfirmModal.planningId, bookConfirmModal.packId);
+        }}
+      />
     </>
   );
 }

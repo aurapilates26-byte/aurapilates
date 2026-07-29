@@ -3,8 +3,8 @@ import { formatYmdPrismaDate, parseYmdLocal } from "@/lib/calendar-day";
 import { PACK_ERRORS } from "@/lib/create-member-reservation";
 import {
   packBalanceCapacityUnits,
-  setMemberPackBalanceRemaining,
-} from "@/lib/admin/member-pack-renewal";
+} from "@/lib/admin/member-pack-renewal-shared";
+import { setMemberPackBalanceRemaining } from "@/lib/admin/member-pack-renewal";
 import {
   debitSelectedPackSession,
   resolvePackForMemberBooking,

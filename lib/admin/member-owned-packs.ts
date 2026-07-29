@@ -3,7 +3,7 @@ import "server-only";
 import { Prisma, type MemberPackEnrollmentStatus } from "@prisma/client";
 import { startOfLocalToday, formatYmdLocal, parseYmdToPrismaDate } from "@/lib/calendar-day";
 import {
-  allocateConsumedSessionsFifoForPackEnrollments,
+  allocateConsumedSessionsForMemberEnrollments,
   backfillEnrollmentStartFromFirstConsumption,
   countEnrollmentConsumedSessionsByCourseInPeriod,
   countEnrollmentConsumedSessionsInPeriod,
@@ -11,7 +11,11 @@ import {
   findFirstEnrollmentConsumedSessionDate,
   getEnrollmentPaymentTotals,
 } from "@/lib/admin/member-pack-enrollment";
-import { recomputeMemberPackBalancesForPack } from "@/lib/admin/member-pack-renewal";
+import {
+  recomputeAllMemberPackBalancesForMember,
+  recomputeMemberPackBalancesForPack,
+} from "@/lib/admin/member-pack-balance-recompute";
+import { resetMemberPackBalancesForPack } from "@/lib/admin/member-pack-renewal";
 import { addPackDurationToStartDate } from "@/lib/pack-duration";
 import type { PackPaymentMethodValue } from "@/lib/pack-payment-method";
 import { courseLabel } from "@/lib/course-labels";
@@ -332,31 +336,12 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
       a.createdAt.getTime() - b.createdAt.getTime(),
   );
 
-  // Recalcule les soldes = quotas × achats − séances consommées.
-  await syncBalancesFromOpenEnrollments(memberId, enrollmentsAsc);
-
-  // Attribution FIFO (plus ancien achat d'abord) pour l'affichage multi-packs même catalogue.
-  const fifoByEnrollmentId = new Map<string, { byCourse: Map<string, number>; total: number }>();
-  const enrollmentsByPackId = new Map<string, typeof enrollmentsAsc>();
-  for (const enrollment of enrollmentsAsc) {
-    const list = enrollmentsByPackId.get(enrollment.packId) ?? [];
-    list.push(enrollment);
-    enrollmentsByPackId.set(enrollment.packId, list);
-  }
-  for (const [packId, packEnrollments] of enrollmentsByPackId) {
-    const pack = packEnrollments[0]!.pack;
-    const allocated = await allocateConsumedSessionsFifoForPackEnrollments({
-      memberId,
-      packId,
-      enrollmentsAsc: packEnrollments.map((e) => ({ id: e.id })),
-      courseQuotas: pack.courseQuotas,
-      sessionCount: pack.sessionCount,
-      category: pack.category,
-    });
-    for (const [enrollmentId, consumption] of allocated) {
-      fifoByEnrollmentId.set(enrollmentId, consumption);
-    }
-  }
+  // Affichage = attribution FIFO (réservations). Pas de recalcul des soldes ici :
+  // évite les courses Serializable avec présence / réservation (sync uniquement avant débit).
+  const fifoByEnrollmentId = await allocateConsumedSessionsForMemberEnrollments({
+    memberId,
+    enrollmentsAsc,
+  });
 
   const items: MemberOwnedPackDto[] = [];
 
@@ -589,20 +574,18 @@ export async function syncBalancesFromOpenEnrollments(
   }
   if (packIds.length === 0) return;
 
-  // Recalculs atomiques ; retry si collision Serializable (P2034).
+  // ReadCommitted suffit (recalcul idempotent) ; Serializable provoquait P2034 en concurrence.
   let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 5; attempt++) {
     try {
       await prisma.$transaction(
         async (tx) => {
-          for (const packId of packIds) {
-            await recomputeMemberPackBalancesForPack(tx, { memberId, packId });
-          }
+          await recomputeAllMemberPackBalancesForMember(tx, memberId);
         },
         {
-          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-          maxWait: 5000,
-          timeout: 15000,
+          isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+          maxWait: 8000,
+          timeout: 20000,
         },
       );
       return;
@@ -611,7 +594,8 @@ export async function syncBalancesFromOpenEnrollments(
       const retryable =
         error instanceof Prisma.PrismaClientKnownRequestError &&
         (error.code === "P2034" || error.code === "P2002");
-      if (!retryable || attempt === 2) throw error;
+      if (!retryable || attempt === 4) throw error;
+      await new Promise((r) => setTimeout(r, 50 * (attempt + 1)));
     }
   }
   throw lastError;
@@ -622,7 +606,7 @@ const memberPackStockLocks = new Map<string, Promise<void>>();
 /**
  * Prépare le stock débitable avant une réservation / présence :
  * réouvre les packs parallèles inutilisés et recalcule les soldes.
- * Verrou par adhérente pour éviter les courses (P2002) entre fiche + présence.
+ * Verrou par adhérente pour éviter les courses entre fiche + présence.
  */
 export async function ensureMemberParallelPackStockForDebit(memberId: string): Promise<void> {
   const previous = memberPackStockLocks.get(memberId) ?? Promise.resolve();
@@ -636,6 +620,26 @@ export async function ensureMemberParallelPackStockForDebit(memberId: string): P
   try {
     await reopenUnusedReplacedEnrollments(memberId);
     await repairEnrollmentStartsBeforePurchase(memberId);
+    await syncBalancesFromOpenEnrollments(memberId);
+  } finally {
+    release();
+    if (memberPackStockLocks.get(memberId) === gate) {
+      memberPackStockLocks.delete(memberId);
+    }
+  }
+}
+
+/** Recalcule les soldes sans réouverture / réparation (retry présence après P2034). */
+export async function refreshMemberPackBalancesForDebit(memberId: string): Promise<void> {
+  const previous = memberPackStockLocks.get(memberId) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  memberPackStockLocks.set(memberId, gate);
+
+  await previous.catch(() => undefined);
+  try {
     await syncBalancesFromOpenEnrollments(memberId);
   } finally {
     release();

@@ -7,6 +7,10 @@ import { packExpiresAtLocal, packStartDateLocal } from "@/lib/member-pack-period
 import { getEligibilityForPack } from "@/lib/pack-eligibility";
 import { prisma } from "@/lib/prisma";
 import { assignConsumedSessionsFifo } from "@/lib/admin/member-pack-fifo";
+import {
+  attributeConsumedSessionsGlobally,
+  type SessionAttributionEnrollment,
+} from "@/lib/admin/member-pack-session-attribution";
 
 const CONSUMING_RESERVATION_STATUSES = {
   OR: [
@@ -58,7 +62,9 @@ export async function createPackEnrollmentAfterPayment(
       status: "PENDING_START",
     },
   });
-  const { recomputeMemberPackBalancesForPack } = await import("@/lib/admin/member-pack-renewal");
+  const { recomputeMemberPackBalancesForPack } = await import(
+    "@/lib/admin/member-pack-balance-recompute"
+  );
   await recomputeMemberPackBalancesForPack(tx, {
     memberId: input.memberId,
     packId: input.packId,
@@ -433,8 +439,62 @@ function enrollmentConsumedWhere(input: {
 }
 
 /**
- * Charge toutes les séances consommées d'un pack catalogue, puis les répartit
- * en FIFO sur les inscriptions (plus ancien achat d'abord, par cours).
+ * Attribution FIFO globale : chaque séance consommée est rattachée à une seule inscription.
+ * Les séances sans `debitedPackId` ne sont plus comptées sur tous les packs en parallèle.
+ */
+export async function allocateConsumedSessionsForMemberEnrollments(input: {
+  memberId: string;
+  enrollmentsAsc: {
+    id: string;
+    packId: string;
+    pack: {
+      courseQuotas: { courseSlug: string; sessionCount: number }[];
+      sessionCount: number | null;
+      category?: string | null;
+    };
+  }[];
+  /** `true` = inclut BOOKED (soldes débitables). Défaut = affichage (ATTENDED + annulations tardives). */
+  forBalance?: boolean;
+  tx?: Prisma.TransactionClient;
+}): Promise<Map<string, { byCourse: Map<string, number>; total: number }>> {
+  if (input.enrollmentsAsc.length === 0) return new Map();
+
+  const db = input.tx ?? prisma;
+  const statusFilter = input.forBalance
+    ? CONSUMING_RESERVATION_STATUSES
+    : DISPLAY_CONSUMED_RESERVATION_STATUSES;
+
+  const rows = await db.reservation.findMany({
+    where: {
+      memberId: input.memberId,
+      ...statusFilter,
+    },
+    orderBy: [{ sessionDate: "asc" }, { createdAt: "asc" }],
+    select: {
+      debitedPackId: true,
+      planning: { select: { courseSlug: true } },
+    },
+  });
+
+  const enrollmentsAsc: SessionAttributionEnrollment[] = input.enrollmentsAsc.map((e) => ({
+    id: e.id,
+    packId: e.packId,
+    courseQuotas: e.pack.courseQuotas,
+    sessionCount: e.pack.sessionCount,
+    category: e.pack.category,
+  }));
+
+  return attributeConsumedSessionsGlobally({
+    enrollmentsAsc,
+    sessionsAsc: rows.map((row) => ({
+      courseSlug: row.planning.courseSlug,
+      debitedPackId: row.debitedPackId,
+    })),
+  });
+}
+
+/**
+ * @deprecated Préférer `allocateConsumedSessionsForMemberEnrollments` (attribution globale).
  */
 export async function allocateConsumedSessionsFifoForPackEnrollments(input: {
   memberId: string;
@@ -444,43 +504,31 @@ export async function allocateConsumedSessionsFifoForPackEnrollments(input: {
   sessionCount: number | null;
   category?: string | null;
 }): Promise<Map<string, { byCourse: Map<string, number>; total: number }>> {
-  if (input.enrollmentsAsc.length === 0) return new Map();
-
-  const quotaSlugs = input.courseQuotas.map((q) => q.courseSlug);
-  const eligibilitySlugs =
-    quotaSlugs.length > 0
-      ? quotaSlugs
-      : getEligibilityForPack({
-          category: input.category ?? null,
-          courseQuotas: [],
-        }).allowedCourseSlugs;
-
-  const rows = await prisma.reservation.findMany({
-    where: {
-      memberId: input.memberId,
-      AND: [
-        DISPLAY_CONSUMED_RESERVATION_STATUSES,
-        {
-          OR: [
-            { debitedPackId: input.packId },
-            { debitedPackId: null, status: "ATTENDED" },
-          ],
+  const fullEnrollments = await prisma.memberPackEnrollment.findMany({
+    where: { memberId: input.memberId },
+    orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
+    include: {
+      pack: {
+        select: {
+          courseQuotas: { select: { courseSlug: true, sessionCount: true } },
+          sessionCount: true,
+          category: true,
         },
-      ],
-      ...(eligibilitySlugs.length > 0
-        ? { planning: { courseSlug: { in: eligibilitySlugs } } }
-        : {}),
+      },
     },
-    orderBy: [{ sessionDate: "asc" }, { createdAt: "asc" }],
-    select: { planning: { select: { courseSlug: true } } },
   });
 
-  return assignConsumedSessionsFifo({
-    enrollmentsAsc: input.enrollmentsAsc,
-    courseQuotas: input.courseQuotas,
-    sessionCount: input.sessionCount,
-    sessionsAsc: rows.map((row) => ({ courseSlug: row.planning.courseSlug })),
+  const global = await allocateConsumedSessionsForMemberEnrollments({
+    memberId: input.memberId,
+    enrollmentsAsc: fullEnrollments,
   });
+
+  const result = new Map<string, { byCourse: Map<string, number>; total: number }>();
+  for (const enrollment of input.enrollmentsAsc) {
+    const bucket = global.get(enrollment.id);
+    if (bucket) result.set(enrollment.id, bucket);
+  }
+  return result;
 }
 
 /**
