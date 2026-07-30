@@ -1,5 +1,5 @@
 import type { Prisma } from "@prisma/client";
-import { packStartDateLocal } from "@/lib/member-pack-period";
+import { isPackStartBeforePurchase, packStartDateLocal } from "@/lib/member-pack-period";
 import { syncActiveEnrollmentDates } from "@/lib/admin/member-pack-enrollment";
 import { recomputeMemberPackBalancesForPack } from "@/lib/admin/member-pack-balance-recompute";
 
@@ -22,6 +22,33 @@ export async function activateMemberPackOnSessionDate(
     sessionDateLocal: Date;
   },
 ): Promise<ActivateMemberPackOnSessionResult> {
+  const openEnrollment = await tx.memberPackEnrollment.findFirst({
+    where: {
+      memberId: input.memberId,
+      packId: input.packId,
+      status: { in: ["PENDING_START", "ACTIVE"] },
+    },
+    orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
+    select: { purchasedAt: true },
+  });
+  if (
+    openEnrollment &&
+    isPackStartBeforePurchase(input.sessionDateDb, openEnrollment.purchasedAt)
+  ) {
+    const packStartDate =
+      packStartDateLocal(input.currentPackStartedAt) ??
+      new Date(
+        input.sessionDateLocal.getFullYear(),
+        input.sessionDateLocal.getMonth(),
+        input.sessionDateLocal.getDate(),
+      );
+    return {
+      packStartedAt: input.currentPackStartedAt ?? input.sessionDateDb,
+      packStartDate,
+      packStartAdjusted: false,
+    };
+  }
+
   let packStartedAt = input.currentPackStartedAt;
   let packStartAdjusted = false;
 
@@ -78,27 +105,38 @@ export async function activateSelectedPackOnSessionDate(
   },
 ): Promise<void> {
   const isMemberPrimaryPack = input.memberPackId === input.packId;
+
+  // Inscription ouverte la plus ancienne (FIFO) — plancher = purchasedAt.
+  const openEnrollment = await tx.memberPackEnrollment.findFirst({
+    where: {
+      memberId: input.memberId,
+      packId: input.packId,
+      status: { in: ["PENDING_START", "ACTIVE"] },
+    },
+    orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
+    select: { packStartedAt: true, purchasedAt: true },
+  });
+
+  // Séance antérieure à l'achat de l'inscription : ne pas démarrer / reculer le pack.
+  if (
+    openEnrollment &&
+    isPackStartBeforePurchase(input.sessionDateDb, openEnrollment.purchasedAt)
+  ) {
+    return;
+  }
+
   let currentStartedAt = isMemberPrimaryPack ? input.memberPackStartedAt : null;
 
   if (!isMemberPrimaryPack) {
-    const enrollment = await tx.memberPackEnrollment.findFirst({
-      where: {
-        memberId: input.memberId,
-        packId: input.packId,
-        status: { in: ["PENDING_START", "ACTIVE"] },
-        packStartedAt: null,
-      },
-      orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
-      select: { packStartedAt: true },
-    });
     currentStartedAt =
-      enrollment?.packStartedAt ??
+      openEnrollment?.packStartedAt ??
       (
         await tx.memberPackEnrollment.findFirst({
           where: {
             memberId: input.memberId,
             packId: input.packId,
             status: { in: ["PENDING_START", "ACTIVE"] },
+            packStartedAt: { not: null },
           },
           orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
           select: { packStartedAt: true },

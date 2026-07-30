@@ -19,6 +19,10 @@ import { resetMemberPackBalancesForPack } from "@/lib/admin/member-pack-renewal"
 import { addPackDurationToStartDate } from "@/lib/pack-duration";
 import type { PackPaymentMethodValue } from "@/lib/pack-payment-method";
 import { courseLabel } from "@/lib/course-labels";
+import {
+  clampPackStartToPurchasedAt,
+  isPackStartBeforePurchase,
+} from "@/lib/member-pack-period";
 import { prisma } from "@/lib/prisma";
 
 export type MemberOwnedPackStatus = "active" | "expired" | "pending" | "replaced";
@@ -168,10 +172,11 @@ function getEnrollmentPeriodBounds(
   let periodStart: Date | null = null;
   if (hasPreviousSamePack) {
     // Frontière basse = date d'achat (séances du jour d'achat → renouvellement).
-    // `packStartedAt` reste la 1ʳᵉ séance post-achat pour l'affichage / expiration.
     periodStart = purchased;
   } else if (enrollment.packStartedAt) {
-    periodStart = toPrismaDateLocal(enrollment.packStartedAt);
+    const started = toPrismaDateLocal(enrollment.packStartedAt);
+    // Ne jamais ouvrir la fenêtre avant l'achat (évite l'héritage d'un packStartedAt global).
+    periodStart = started.getTime() < purchased.getTime() ? purchased : started;
   }
 
   return { periodStart, periodEndExclusive };
@@ -208,39 +213,44 @@ async function repairEnrollmentStartsBeforePurchase(memberId: string): Promise<v
 
   for (const enrollment of enrollments) {
     if (!enrollment.packStartedAt) continue;
-    const started = toPrismaDateLocal(enrollment.packStartedAt);
-    const purchased = toPrismaDateLocal(enrollment.purchasedAt);
-    if (started.getTime() >= purchased.getTime()) continue;
+    if (!isPackStartBeforePurchase(enrollment.packStartedAt, enrollment.purchasedAt)) continue;
 
-    const { periodStart, periodEndExclusive } = getEnrollmentPeriodBounds(enrollment, enrollmentsAsc);
+    const purchased = toPrismaDateLocal(enrollment.purchasedAt);
+    // Toujours chercher la 1ʳᵉ conso à partir de l'achat — jamais depuis le faux packStartedAt hérité.
+    const { periodEndExclusive } = getEnrollmentPeriodBounds(enrollment, enrollmentsAsc);
     const firstSessionDate = await findFirstEnrollmentConsumedSessionDate({
       memberId,
       packId: enrollment.packId,
       courseQuotas: enrollment.pack.courseQuotas,
-      periodStart,
+      periodStart: purchased,
       periodEndExclusive,
+      purchasedAt: enrollment.purchasedAt,
     });
 
-    if (firstSessionDate) {
+    if (firstSessionDate && !isPackStartBeforePurchase(firstSessionDate, enrollment.purchasedAt)) {
+      const start = clampPackStartToPurchasedAt(firstSessionDate, enrollment.purchasedAt);
       const packExpiresAt =
-        addPackDurationToStartDate(firstSessionDate, enrollment.pack.durationDays) ?? null;
+        addPackDurationToStartDate(start, enrollment.pack.durationDays) ?? null;
       await prisma.memberPackEnrollment.update({
         where: { id: enrollment.id },
         data: {
-          packStartedAt: firstSessionDate,
+          packStartedAt: start,
           packExpiresAt,
           status: enrollment.status === "PENDING_START" ? "ACTIVE" : enrollment.status,
-          closedAt: null,
+          closedAt: enrollment.status === "REPLACED" || enrollment.status === "EXPIRED"
+            ? enrollment.closedAt
+            : null,
         },
       });
     } else {
+      const reopen =
+        enrollment.status === "ACTIVE" || enrollment.status === "PENDING_START";
       await prisma.memberPackEnrollment.update({
         where: { id: enrollment.id },
         data: {
           packStartedAt: null,
           packExpiresAt: null,
-          status: "PENDING_START",
-          closedAt: null,
+          ...(reopen ? { status: "PENDING_START" as const, closedAt: null } : {}),
         },
       });
     }
@@ -427,22 +437,28 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
           durationDays: pack.durationDays,
           periodStart,
           periodEndExclusive,
+          purchasedAt: enrollment.purchasedAt,
         });
         if (backfilled) {
           packStartedAt = backfilled.packStartedAt;
           packExpiresAt = backfilled.packExpiresAt;
           enrollmentStatus = "ACTIVE";
         }
-      } else if (
-        packStartedAt &&
-        toPrismaDateLocal(packStartedAt).getTime() < toPrismaDateLocal(enrollment.purchasedAt).getTime()
-      ) {
-        // Sécurité affichage : ne jamais montrer un début avant l'achat.
-        const repairedStart = periodStart ?? toPrismaDateLocal(enrollment.purchasedAt);
-        packStartedAt = repairedStart;
-        packExpiresAt = pack.durationDays
-          ? addPackDurationToStartDate(repairedStart, pack.durationDays)
-          : packExpiresAt;
+      } else if (packStartedAt && isPackStartBeforePurchase(packStartedAt, enrollment.purchasedAt)) {
+        // Sécurité affichage + persistance : jamais de début avant l'achat (héritage).
+        packStartedAt = null;
+        packExpiresAt = null;
+        const reopen =
+          enrollmentStatus === "ACTIVE" || enrollmentStatus === "PENDING_START";
+        if (reopen) enrollmentStatus = "PENDING_START";
+        await prisma.memberPackEnrollment.update({
+          where: { id: enrollment.id },
+          data: {
+            packStartedAt: null,
+            packExpiresAt: null,
+            ...(reopen ? { status: "PENDING_START" as const, closedAt: null } : {}),
+          },
+        });
       } else if (packStartedAt && !packExpiresAt && pack.durationDays) {
         packExpiresAt = addPackDurationToStartDate(packStartedAt, pack.durationDays);
       }

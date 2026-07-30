@@ -10,6 +10,7 @@ import {
   type PackEligibility,
 } from "@/lib/pack-eligibility";
 import {
+  isPackStartBeforePurchase,
   isSessionDateWithinPackPeriod,
   packExpiresAtLocal,
   packStartDateLocal,
@@ -123,14 +124,28 @@ function resolvePackPeriod(input: {
   memberPackStartedAt: Date | null;
   enrollmentStartedAt: Date | null;
   enrollmentExpiresAt: Date | null;
+  purchasedAt: Date | null;
 }): { packStartedAt: Date | null; packExpiresAt: Date | null } {
   if (input.enrollmentStartedAt) {
+    // Héritage / bug : début avant achat → traiter comme non démarré.
+    if (
+      input.purchasedAt &&
+      isPackStartBeforePurchase(input.enrollmentStartedAt, input.purchasedAt)
+    ) {
+      return { packStartedAt: null, packExpiresAt: null };
+    }
     return {
       packStartedAt: input.enrollmentStartedAt,
       packExpiresAt: input.enrollmentExpiresAt,
     };
   }
   if (input.memberPackId === input.packId && input.memberPackStartedAt) {
+    if (
+      input.purchasedAt &&
+      isPackStartBeforePurchase(input.memberPackStartedAt, input.purchasedAt)
+    ) {
+      return { packStartedAt: null, packExpiresAt: null };
+    }
     return { packStartedAt: input.memberPackStartedAt, packExpiresAt: null };
   }
   return { packStartedAt: null, packExpiresAt: null };
@@ -275,6 +290,7 @@ async function loadPackCandidates(
           memberPackStartedAt: member.packStartedAt,
           enrollmentStartedAt: openEnrollment?.packStartedAt ?? null,
           enrollmentExpiresAt: openEnrollment?.packExpiresAt ?? null,
+          purchasedAt: openEnrollment?.purchasedAt ?? enrollment?.purchasedAt ?? null,
         });
 
     candidates.push({
