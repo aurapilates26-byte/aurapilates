@@ -1473,7 +1473,7 @@ export function MemberDetailClient({
             <p className="mt-4 text-sm text-red-700">{slotsError}</p>
           ) : slots.length === 0 ? (
             <p className="mt-4 text-sm text-brand-dark/60">
-              Aucun créneau disponible pour cette date (cours passés ou jour sans cours).
+              Aucun créneau pour cette date (hors période de planning, jour sans cours, ou créneaux non programmés).
             </p>
           ) : (
             <ul className="mt-5 space-y-3">

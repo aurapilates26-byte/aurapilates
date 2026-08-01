@@ -225,13 +225,28 @@ export async function markHistoricalPresence(input: {
           }
 
           if (existing?.status === "BOOKED") {
+            const selected = await preparePackForAdminPresenceDebit(tx, {
+              memberId: input.memberId,
+              memberPackId: member.packId,
+              memberPackStartedAt: member.packStartedAt,
+              courseSlug: planning.courseSlug,
+              sessionDateDb,
+              sessionDateLocal,
+              preferredPackId: existing.debitedPackId ?? preferredPackId,
+            });
+            await debitSelectedPackSession(tx, {
+              memberId: input.memberId,
+              pack: selected.pack,
+              courseSlug: planning.courseSlug,
+              sessionDateDb,
+            });
             await tx.reservation.update({
               where: { id: existing.id },
               data: {
                 status: "ATTENDED",
                 source: "ADMIN",
                 createdByUserId: input.createdByUserId ?? null,
-                debitedPackId: existing.debitedPackId ?? preferredPackId,
+                debitedPackId: selected.pack.id,
               },
             });
             await tx.attendance.create({
@@ -243,16 +258,32 @@ export async function markHistoricalPresence(input: {
                 markedBy: HISTORICAL_PRESENCE_MARKED_BY.BOOKED,
               },
             });
-            return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: false };
+            return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: true };
           }
 
           if (existing?.status === "CANCELLED" && !existing.packRefundedAt) {
+            const selected = await preparePackForAdminPresenceDebit(tx, {
+              memberId: input.memberId,
+              memberPackId: member.packId,
+              memberPackStartedAt: member.packStartedAt,
+              courseSlug: planning.courseSlug,
+              sessionDateDb,
+              sessionDateLocal,
+              preferredPackId: preferredPackId,
+            });
+            await debitSelectedPackSession(tx, {
+              memberId: input.memberId,
+              pack: selected.pack,
+              courseSlug: planning.courseSlug,
+              sessionDateDb,
+            });
             await tx.reservation.update({
               where: { id: existing.id },
               data: {
                 status: "ATTENDED",
                 source: "ADMIN",
                 createdByUserId: input.createdByUserId ?? null,
+                debitedPackId: selected.pack.id,
               },
             });
             await tx.attendance.create({
@@ -264,7 +295,7 @@ export async function markHistoricalPresence(input: {
                 markedBy: HISTORICAL_PRESENCE_MARKED_BY.CANCELLED,
               },
             });
-            return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: false };
+            return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: true };
           }
 
           const selected = await preparePackForAdminPresenceDebit(tx, {

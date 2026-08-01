@@ -70,7 +70,7 @@ export async function GET(_request: Request, { params }: Params) {
   const consumedSessions = await prisma.reservation.count({
     where: {
       ...reservationWhere,
-      OR: [{ status: { in: ["BOOKED", "ATTENDED"] } }, { status: "CANCELLED", packRefundedAt: null }],
+      status: "ATTENDED",
       ...(isMixed
         ? { planning: { courseSlug: { in: member.pack.courseQuotas.map((q) => q.courseSlug) } } }
         : {}),

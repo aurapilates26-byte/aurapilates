@@ -5,10 +5,7 @@ import {
   packBalanceCapacityUnits,
 } from "@/lib/admin/member-pack-renewal-shared";
 import { setMemberPackBalanceRemaining } from "@/lib/admin/member-pack-renewal";
-import {
-  debitSelectedPackSession,
-  resolvePackForMemberBooking,
-} from "@/lib/admin/member-pack-selection";
+import { resolvePackForMemberBooking } from "@/lib/admin/member-pack-selection";
 
 type PackRow = {
   id: string;
@@ -146,12 +143,7 @@ export async function promoteNextWaitlistReservation(
         sessionDateLocal,
         preferredPackId: waiter.debitedPackId,
       });
-      await debitSelectedPackSession(tx, {
-        memberId: waiter.memberId,
-        pack: selected.pack,
-        courseSlug: params.courseSlug,
-        sessionDateDb: params.sessionDate,
-      });
+      // Promotion liste d'attente → Confirmée : pas de débit (débit à la présence).
       await tx.reservation.update({
         where: { id: waiter.id },
         data: { status: "BOOKED", debitedPackId: selected.pack.id },

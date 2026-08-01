@@ -132,30 +132,29 @@ export async function POST(request: Request) {
           return "conflict" as const;
         }
 
-        if (current.status === ReservationStatus.WAITLIST) {
-          const sessionYmdForPack = formatYmdPrismaDate(new Date(current.sessionDate));
-          const sessionDateLocal = parseYmdLocal(sessionYmdForPack);
-          if (!sessionDateLocal) throw new Error(PACK_ERRORS.noPack);
-          const selected = await preparePackForAdminPresenceDebit(tx, {
-            memberId: current.memberId,
-            memberPackId: current.member.packId,
-            memberPackStartedAt: current.member.packStartedAt,
-            courseSlug: current.planning.courseSlug,
-            sessionDateDb: todayDb,
-            sessionDateLocal,
-            preferredPackId: current.debitedPackId,
-          });
-          await debitSelectedPackSession(tx, {
-            memberId: current.memberId,
-            pack: selected.pack,
-            courseSlug: current.planning.courseSlug,
-            sessionDateDb: todayDb,
-          });
-          await tx.reservation.update({
-            where: { id: reservationId },
-            data: { debitedPackId: selected.pack.id },
-          });
-        }
+        const sessionYmdForPack = formatYmdPrismaDate(new Date(current.sessionDate));
+        const sessionDateLocal = parseYmdLocal(sessionYmdForPack);
+        if (!sessionDateLocal) throw new Error(PACK_ERRORS.noPack);
+        const selected = await preparePackForAdminPresenceDebit(tx, {
+          memberId: current.memberId,
+          memberPackId: current.member.packId,
+          memberPackStartedAt: current.member.packStartedAt,
+          courseSlug: current.planning.courseSlug,
+          sessionDateDb: todayDb,
+          sessionDateLocal,
+          preferredPackId: current.debitedPackId,
+        });
+        // BOOKED ou WAITLIST → présence : débit maintenant (plus au moment de la réservation).
+        await debitSelectedPackSession(tx, {
+          memberId: current.memberId,
+          pack: selected.pack,
+          courseSlug: current.planning.courseSlug,
+          sessionDateDb: todayDb,
+        });
+        await tx.reservation.update({
+          where: { id: reservationId },
+          data: { debitedPackId: selected.pack.id },
+        });
 
         const claim = await tx.reservation.updateMany({
           where: {

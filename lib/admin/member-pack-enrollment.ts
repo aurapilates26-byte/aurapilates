@@ -16,20 +16,15 @@ import {
   type SessionAttributionEnrollment,
 } from "@/lib/admin/member-pack-session-attribution";
 
+/** Séances consommées = présence réelle uniquement (débit à la présence). */
 const CONSUMING_RESERVATION_STATUSES = {
-  OR: [
-    { status: { in: ["BOOKED", "ATTENDED"] as const } },
-    { status: "CANCELLED" as const, packRefundedAt: null },
-  ],
-} satisfies Pick<Prisma.ReservationWhereInput, "OR">;
+  status: "ATTENDED" as const,
+} satisfies Pick<Prisma.ReservationWhereInput, "status">;
 
-/** Présence réelle ou annulation tardive — pour l'affichage « séances consommées ». */
+/** Affichage « séances consommées » — aligné sur ATTENDED. */
 const DISPLAY_CONSUMED_RESERVATION_STATUSES = {
-  OR: [
-    { status: "ATTENDED" as const },
-    { status: "CANCELLED" as const, packRefundedAt: null },
-  ],
-} satisfies Pick<Prisma.ReservationWhereInput, "OR">;
+  status: "ATTENDED" as const,
+} satisfies Pick<Prisma.ReservationWhereInput, "status">;
 
 export async function closeOpenEnrollmentsForPack(
   tx: Prisma.TransactionClient,
@@ -473,7 +468,7 @@ export async function allocateConsumedSessionsForMemberEnrollments(input: {
       category?: string | null;
     };
   }[];
-  /** `true` = inclut BOOKED (soldes débitables). Défaut = affichage (ATTENDED + annulations tardives). */
+  /** `true` = soldes. Les deux modes excluent BOOKED (débit à la présence seulement). */
   forBalance?: boolean;
   tx?: Prisma.TransactionClient;
 }): Promise<Map<string, { byCourse: Map<string, number>; total: number }>> {

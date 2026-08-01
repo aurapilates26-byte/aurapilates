@@ -41,7 +41,17 @@ function resolveRevertKind(
 }
 
 function shouldCreditPack(kind: RevertKind): boolean {
-  return kind === "NEW" || kind === "WAITLIST" || kind === "CANCELLED_REFUNDED" || kind === "LEGACY_NEW";
+  // Toute présence qui a débité le pack doit le recrediter au retrait.
+  return (
+    kind === "NEW" ||
+    kind === "WAITLIST" ||
+    kind === "CANCELLED_REFUNDED" ||
+    kind === "CANCELLED" ||
+    kind === "BOOKED" ||
+    kind === "LEGACY_BOOKED" ||
+    kind === "LEGACY_NEW" ||
+    kind === "ATTENDED_REPAIR"
+  );
 }
 
 function shouldDeleteReservation(kind: RevertKind): boolean {
@@ -77,6 +87,13 @@ export async function unmarkHistoricalPresence(reservationId: string): Promise<U
           createdAt: true,
           attendance: { select: { markedBy: true, markedAt: true } },
           planning: { select: { courseSlug: true } },
+          debitedPack: {
+            select: {
+              id: true,
+              sessionCount: true,
+              courseQuotas: { select: { courseSlug: true, sessionCount: true } },
+            },
+          },
           member: {
             select: {
               packId: true,
@@ -105,10 +122,11 @@ export async function unmarkHistoricalPresence(reservationId: string): Promise<U
       await tx.checkIn.deleteMany({ where: { reservationId } });
       await tx.attendance.delete({ where: { reservationId } });
 
-      if (packCredited && reservation.member.packId && reservation.member.pack) {
+      const packToCredit = reservation.debitedPack ?? reservation.member.pack;
+      if (packCredited && packToCredit) {
         await creditMemberPackSession(tx, {
           memberId: reservation.memberId,
-          pack: reservation.member.pack,
+          pack: packToCredit,
           courseSlug: reservation.planning.courseSlug,
         });
       }

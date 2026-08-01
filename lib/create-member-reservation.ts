@@ -12,10 +12,7 @@ import { isMemberReservationDeskOpen } from "@/lib/studio-booking-rules";
 import { assertMemberCanBookOccurrence } from "@/lib/admin/planning-staggered-publish";
 import { resetMemberPackBalancesForPack } from "@/lib/admin/member-pack-renewal";
 import { activateSelectedPackOnSessionDate } from "@/lib/admin/member-pack-activation";
-import {
-  debitSelectedPackSession,
-  resolvePackForMemberBooking,
-} from "@/lib/admin/member-pack-selection";
+import { resolvePackForMemberBooking } from "@/lib/admin/member-pack-selection";
 import { ensureMemberParallelPackStockForDebit } from "@/lib/admin/member-owned-packs";
 import { prisma } from "@/lib/prisma";
 
@@ -166,15 +163,8 @@ export async function createMemberReservation(params: {
       else if (planning.waitlistCapacity != null && waitlistCount < planning.waitlistCapacity) status = "WAITLIST";
       else throw new Error("FULL");
 
+      // Débit pack uniquement à la présence (ATTENDED), pas à la confirmation BOOKED.
       if (existing?.status === "CANCELLED") {
-        if (status === "BOOKED" && existing.packRefundedAt) {
-          await debitSelectedPackSession(tx, {
-            memberId: params.memberId,
-            pack,
-            courseSlug: planning.courseSlug,
-            sessionDateDb,
-          });
-        }
         const updated = await tx.reservation.update({
           where: { id: existing.id },
           data: {
@@ -182,6 +172,7 @@ export async function createMemberReservation(params: {
             packRefundedAt: null,
             source,
             createdByUserId,
+            // Pack préféré pour un futur débit présence — pas encore débité.
             debitedPackId: pack.id,
           },
         });
@@ -189,15 +180,6 @@ export async function createMemberReservation(params: {
           await tx.member.update({ where: { id: params.memberId }, data: { isActive: true } });
         }
         return updated;
-      }
-
-      if (status === "BOOKED") {
-        await debitSelectedPackSession(tx, {
-          memberId: params.memberId,
-          pack,
-          courseSlug: planning.courseSlug,
-          sessionDateDb,
-        });
       }
 
       const created = await tx.reservation.create({
