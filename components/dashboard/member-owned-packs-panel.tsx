@@ -223,7 +223,10 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
                 {!pack.packStartedAt ? " · Pas encore démarré" : ""}
               </p>
             </div>
-            <PaymentMethodBadge method={pack.packPaymentMethod} fallback="Paiement non renseigné" />
+            <PaymentMethodBadge
+              method={pack.packPaymentMethod}
+              fallback={pack.totalPaidDinars <= 0 ? "Crédit" : "Paiement non renseigné"}
+            />
           </div>
         </summary>
 

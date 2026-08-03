@@ -48,7 +48,8 @@ export async function createPackEnrollmentAfterPayment(
   input: {
     memberId: string;
     packId: string;
-    packPaymentId: string;
+    /** Null = pack à crédit (aucun encaissement encore). */
+    packPaymentId: string | null;
     purchasedAt: Date;
   },
 ): Promise<string> {
