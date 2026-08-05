@@ -4,15 +4,13 @@ import { z } from "zod";
 import { authOptions } from "@/auth";
 import { isStaffRole } from "@/lib/admin/access";
 import {
-  formatYmdLocal,
   formatYmdPrismaDate,
   parseYmdLocal,
   parseYmdToPrismaDate,
-  startOfLocalToday,
 } from "@/lib/calendar-day";
 import { ensureReservationAttendanceRecord } from "@/lib/ensure-reservation-attendance";
 import { broadcastMemberBookingRefresh } from "@/lib/member-booking-stream";
-import { isPresenceMarkingAllowed } from "@/lib/admin/presence-window";
+import { isPresenceMarkingAllowed, minus15Minutes, studioNowClock } from "@/lib/admin/presence-window";
 import { PACK_ERRORS } from "@/lib/create-member-reservation";
 import {
   debitSelectedPackSession,
@@ -69,13 +67,10 @@ export async function POST(request: Request) {
   }
 
   const { reservationId } = parsed.data;
-  const todayYmd = formatYmdLocal(startOfLocalToday());
+  const { ymd: todayYmd, timeHm: nowTime } = studioNowClock();
   const todayDb = parseYmdToPrismaDate(todayYmd);
   if (!todayDb) return errorResponse(ERRORS.PAYLOAD_INVALID, 400);
-  const now = new Date();
-  const nowTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-  const plus15 = new Date(now.getTime() + 15 * 60_000);
-  const nowPlus15 = `${String(plus15.getHours()).padStart(2, "0")}:${String(plus15.getMinutes()).padStart(2, "0")}`;
+  const opensGate = (startTime: string) => minus15Minutes(startTime);
 
   let outcome: Outcome;
   try {
@@ -126,11 +121,22 @@ export async function POST(request: Request) {
           return "conflict" as const;
         }
         if (!canMarkToday) {
-          if (sessionYmd === todayYmd && current.planning.startTime > nowPlus15) {
+          if (sessionYmd === todayYmd && nowTime < opensGate(current.planning.startTime)) {
             return "too_early" as const;
           }
           return "conflict" as const;
         }
+
+        // 1) Claim présence d'abord — si échec, aucun débit.
+        const claim = await tx.reservation.updateMany({
+          where: {
+            id: reservationId,
+            sessionDate: todayDb,
+            status: { in: RESERVATION_ELIGIBLE_STATUSES },
+          },
+          data: { status: ReservationStatus.ATTENDED },
+        });
+        if (claim.count === 0) return "conflict" as const;
 
         const sessionYmdForPack = formatYmdPrismaDate(new Date(current.sessionDate));
         const sessionDateLocal = parseYmdLocal(sessionYmdForPack);
@@ -144,7 +150,7 @@ export async function POST(request: Request) {
           sessionDateLocal,
           preferredPackId: current.debitedPackId,
         });
-        // BOOKED ou WAITLIST → présence : débit maintenant (plus au moment de la réservation).
+        // 2) Débit pack à la présence (rollback auto si erreur → transaction).
         await debitSelectedPackSession(tx, {
           memberId: current.memberId,
           pack: selected.pack,
@@ -155,20 +161,6 @@ export async function POST(request: Request) {
           where: { id: reservationId },
           data: { debitedPackId: selected.pack.id },
         });
-
-        const claim = await tx.reservation.updateMany({
-          where: {
-            id: reservationId,
-            sessionDate: todayDb,
-            status: { in: RESERVATION_ELIGIBLE_STATUSES },
-            planning: {
-              startTime: { lte: nowPlus15 },
-            },
-          },
-          data: { status: ReservationStatus.ATTENDED },
-        });
-
-        if (claim.count === 0) return "conflict" as const;
       }
 
       await ensureReservationAttendanceRecord(tx, reservationId);

@@ -14,10 +14,21 @@ export const HISTORICAL_PRESENCE_MARKED_BY = {
   ATTENDED_REPAIR: "ADMIN_HISTORICAL:ATTENDED_REPAIR",
 } as const;
 
-type RevertKind = keyof typeof HISTORICAL_PRESENCE_MARKED_BY | "LEGACY_NEW" | "LEGACY_BOOKED";
+/** Présence marquée le jour J via l'écran Présence (ou réparation auto). */
+export const LIVE_PRESENCE_MARKED_BY = "STAFF_KEY" as const;
 
-function isHistoricalMarkedBy(markedBy: string): boolean {
-  return markedBy === "ADMIN_HISTORICAL" || markedBy.startsWith("ADMIN_HISTORICAL:");
+type RevertKind =
+  | keyof typeof HISTORICAL_PRESENCE_MARKED_BY
+  | "LEGACY_NEW"
+  | "LEGACY_BOOKED"
+  | "STAFF_LIVE";
+
+function isUnmarkableMarkedBy(markedBy: string): boolean {
+  return (
+    markedBy === LIVE_PRESENCE_MARKED_BY ||
+    markedBy === "ADMIN_HISTORICAL" ||
+    markedBy.startsWith("ADMIN_HISTORICAL:")
+  );
 }
 
 function resolveRevertKind(
@@ -37,6 +48,8 @@ function resolveRevertKind(
     return delta <= 5000 ? "LEGACY_NEW" : "LEGACY_BOOKED";
   }
 
+  if (markedBy === LIVE_PRESENCE_MARKED_BY) return "STAFF_LIVE";
+
   throw new Error("NOT_HISTORICAL");
 }
 
@@ -50,7 +63,8 @@ function shouldCreditPack(kind: RevertKind): boolean {
     kind === "BOOKED" ||
     kind === "LEGACY_BOOKED" ||
     kind === "LEGACY_NEW" ||
-    kind === "ATTENDED_REPAIR"
+    kind === "ATTENDED_REPAIR" ||
+    kind === "STAFF_LIVE"
   );
 }
 
@@ -114,7 +128,7 @@ export async function unmarkHistoricalPresence(reservationId: string): Promise<U
       if (!reservation.attendance) throw new Error("NO_ATTENDANCE");
 
       const { markedBy, markedAt } = reservation.attendance;
-      if (!isHistoricalMarkedBy(markedBy)) throw new Error("NOT_HISTORICAL");
+      if (!isUnmarkableMarkedBy(markedBy)) throw new Error("NOT_HISTORICAL");
 
       const kind = resolveRevertKind(markedBy, reservation.createdAt, markedAt);
       const packCredited = shouldCreditPack(kind);
@@ -133,16 +147,25 @@ export async function unmarkHistoricalPresence(reservationId: string): Promise<U
 
       if (shouldDeleteReservation(kind)) {
         await tx.reservation.delete({ where: { id: reservationId } });
-      } else if (kind === "BOOKED" || kind === "LEGACY_BOOKED") {
-        await tx.reservation.update({ where: { id: reservationId }, data: { status: "BOOKED" } });
+      } else if (kind === "BOOKED" || kind === "LEGACY_BOOKED" || kind === "STAFF_LIVE") {
+        await tx.reservation.update({
+          where: { id: reservationId },
+          data: { status: "BOOKED", debitedPackId: null },
+        });
       } else if (kind === "WAITLIST") {
-        await tx.reservation.update({ where: { id: reservationId }, data: { status: "WAITLIST" } });
+        await tx.reservation.update({
+          where: { id: reservationId },
+          data: { status: "WAITLIST", debitedPackId: null },
+        });
       } else if (kind === "CANCELLED") {
-        await tx.reservation.update({ where: { id: reservationId }, data: { status: "CANCELLED" } });
+        await tx.reservation.update({
+          where: { id: reservationId },
+          data: { status: "CANCELLED", debitedPackId: null },
+        });
       } else if (kind === "CANCELLED_REFUNDED") {
         await tx.reservation.update({
           where: { id: reservationId },
-          data: { status: "CANCELLED", packRefundedAt: new Date() },
+          data: { status: "CANCELLED", packRefundedAt: new Date(), debitedPackId: null },
         });
       }
 

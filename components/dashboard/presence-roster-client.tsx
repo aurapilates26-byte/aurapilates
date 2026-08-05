@@ -4,6 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { DashboardHeader } from "@/components/dashboard/header";
 import { useToast } from "@/components/ui/toast-provider";
 import { planningLevelLabelFr } from "@/lib/planning-public-labels";
+import {
+  getPresenceSessionPhase,
+  isPresenceMarkingAllowed,
+  minus15Minutes,
+  studioNowClock,
+} from "@/lib/admin/presence-window";
 import { Input } from "@/components/ui";
 
 type RosterMember = {
@@ -91,28 +97,21 @@ const statusLabels: Record<string, string> = {
 const presenceBtnBase =
   "inline-flex h-9 shrink-0 items-center justify-center rounded-full px-3.5 text-xs font-semibold leading-none transition";
 
-function minus15(clock: string) {
-  const [hhRaw, mmRaw] = clock.split(":");
-  const hh = Number(hhRaw ?? 0);
-  const mm = Number(mmRaw ?? 0);
-  const total = hh * 60 + mm - 15;
-  const day = 24 * 60;
-  const clamped = ((total % day) + day) % day;
-  const outH = String(Math.floor(clamped / 60)).padStart(2, "0");
-  const outM = String(clamped % 60).padStart(2, "0");
-  return `${outH}:${outM}`;
-}
-
-function getSessionPhase(
-  startTime: string,
-  endTime: string,
-  nowTime: string | undefined,
-): "upcoming" | "active" | "ended" {
-  if (!nowTime) return "active";
-  const opensAt = minus15(startTime);
-  if (nowTime < opensAt) return "upcoming";
-  if (endTime >= nowTime) return "active";
-  return "ended";
+/** Horloge studio (Tunis) rafraîchie côté client — pas l'heure du PC (ex. CEST ≠ Tunis). */
+function useStudioNowClock(refreshMs = 5_000): { ymd: string; timeHm: string } {
+  const [clock, setClock] = useState(() => studioNowClock());
+  useEffect(() => {
+    const tick = () => setClock(studioNowClock());
+    tick();
+    const id = window.setInterval(tick, refreshMs);
+    const onFocus = () => tick();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [refreshMs]);
+  return clock;
 }
 
 const sessionPhaseLabels: Record<"upcoming" | "active" | "ended", string> = {
@@ -222,6 +221,8 @@ function PresenceMarkButton({
 
 export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId: string }) {
   const { toast } = useToast();
+  const studioClock = useStudioNowClock();
+  const liveNowTime = studioClock.timeHm;
   const [qrPublicId, setQrPublicId] = useState(initialQrPublicId);
   const [memberNameFilter, setMemberNameFilter] = useState("");
   const [memberPhoneFilter, setMemberPhoneFilter] = useState("");
@@ -428,18 +429,17 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
     };
   }, [memberNameFilter, memberPhoneFilter, qrPublicId, runManualSearch]);
 
-  const presenceOpensAt = useCallback((startTime: string) => minus15(startTime), []);
+  const presenceOpensAt = useCallback((startTime: string) => minus15Minutes(startTime), []);
 
   const todayClasses = roster?.classes ?? [];
 
   const canMarkInSession = useCallback(
     (startTime: string, status: RosterRow["status"]) => {
       if (status !== "BOOKED" && status !== "WAITLIST") return false;
-      const opensAt = presenceOpensAt(startTime);
-      if (roster?.nowTime && roster.nowTime < opensAt) return false;
+      if (!isPresenceMarkingAllowed(startTime, liveNowTime)) return false;
       return true;
     },
-    [presenceOpensAt, roster?.nowTime],
+    [liveNowTime],
   );
 
   const markPresent = async (reservationId: string) => {
@@ -554,6 +554,14 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
             ? "Membre sélectionné. Modifiez les champs ou cliquez sur Réinitialiser pour une nouvelle recherche."
             : "Saisissez au moins 2 caractères : les suggestions apparaissent pendant la saisie."}
         </p>
+        <p className="mt-2 text-xs font-medium text-brand-dark/80">
+          Heure studio (Tunis) :{" "}
+          <span className="font-semibold tabular-nums text-brand-dark">{liveNowTime}</span>
+          <span className="font-normal text-brand-dark/55">
+            {" "}
+            · le marquage suit cette heure, pas celle de l&apos;horloge Windows
+          </span>
+        </p>
 
         {selectedMember && inputsMatchSelectedMember() ? (
           <p className="mt-2 text-sm font-medium text-brand-dark">
@@ -628,9 +636,9 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
             ) : null}
 
             {todayClasses.map((classItem) => {
-              const phase = getSessionPhase(classItem.startTime, classItem.endTime, roster?.nowTime);
+              const phase = getPresenceSessionPhase(classItem.startTime, classItem.endTime, liveNowTime);
               const opensAt = presenceOpensAt(classItem.startTime);
-              const markingLocked = Boolean(roster?.nowTime && roster.nowTime < opensAt);
+              const markingLocked = !isPresenceMarkingAllowed(classItem.startTime, liveNowTime);
 
               return (
                 <section
@@ -659,8 +667,9 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                     </p>
                     {markingLocked ? (
                       <div className="rounded-lg border border-sky-200 bg-sky-50/80 px-3 py-2 text-xs leading-relaxed text-sky-950">
-                        Marquage disponible à partir de{" "}
-                        <span className="font-semibold">{opensAt}</span> (15 min avant le début du cours).
+                        Heure studio <span className="font-semibold tabular-nums">{liveNowTime}</span> — marquage
+                        disponible à partir de <span className="font-semibold">{opensAt}</span> (15 min avant{" "}
+                        {classItem.startTime}).
                       </div>
                     ) : null}
                     <div className="flex flex-wrap items-center gap-3 text-xs text-brand-dark/70">

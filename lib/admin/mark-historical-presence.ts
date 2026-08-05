@@ -225,6 +225,15 @@ export async function markHistoricalPresence(input: {
           }
 
           if (existing?.status === "BOOKED") {
+            // Claim ATTENDED d'abord — débit ensuite (rollback si échec).
+            await tx.reservation.update({
+              where: { id: existing.id },
+              data: {
+                status: "ATTENDED",
+                source: "ADMIN",
+                createdByUserId: input.createdByUserId ?? null,
+              },
+            });
             const selected = await preparePackForAdminPresenceDebit(tx, {
               memberId: input.memberId,
               memberPackId: member.packId,
@@ -242,12 +251,7 @@ export async function markHistoricalPresence(input: {
             });
             await tx.reservation.update({
               where: { id: existing.id },
-              data: {
-                status: "ATTENDED",
-                source: "ADMIN",
-                createdByUserId: input.createdByUserId ?? null,
-                debitedPackId: selected.pack.id,
-              },
+              data: { debitedPackId: selected.pack.id },
             });
             await tx.attendance.create({
               data: {
@@ -262,6 +266,14 @@ export async function markHistoricalPresence(input: {
           }
 
           if (existing?.status === "CANCELLED" && !existing.packRefundedAt) {
+            await tx.reservation.update({
+              where: { id: existing.id },
+              data: {
+                status: "ATTENDED",
+                source: "ADMIN",
+                createdByUserId: input.createdByUserId ?? null,
+              },
+            });
             const selected = await preparePackForAdminPresenceDebit(tx, {
               memberId: input.memberId,
               memberPackId: member.packId,
@@ -279,12 +291,7 @@ export async function markHistoricalPresence(input: {
             });
             await tx.reservation.update({
               where: { id: existing.id },
-              data: {
-                status: "ATTENDED",
-                source: "ADMIN",
-                createdByUserId: input.createdByUserId ?? null,
-                debitedPackId: selected.pack.id,
-              },
+              data: { debitedPackId: selected.pack.id },
             });
             await tx.attendance.create({
               data: {
@@ -309,6 +316,14 @@ export async function markHistoricalPresence(input: {
           });
 
           if (existing?.status === "WAITLIST") {
+            await tx.reservation.update({
+              where: { id: existing.id },
+              data: {
+                status: "ATTENDED",
+                source: "ADMIN",
+                createdByUserId: input.createdByUserId ?? null,
+              },
+            });
             await debitSelectedPackSession(tx, {
               memberId: input.memberId,
               pack: selected.pack,
@@ -317,12 +332,7 @@ export async function markHistoricalPresence(input: {
             });
             await tx.reservation.update({
               where: { id: existing.id },
-              data: {
-                status: "ATTENDED",
-                source: "ADMIN",
-                createdByUserId: input.createdByUserId ?? null,
-                debitedPackId: selected.pack.id,
-              },
+              data: { debitedPackId: selected.pack.id },
             });
             await tx.attendance.create({
               data: {
@@ -337,6 +347,15 @@ export async function markHistoricalPresence(input: {
           }
 
           if (existing?.status === "CANCELLED" && existing.packRefundedAt) {
+            await tx.reservation.update({
+              where: { id: existing.id },
+              data: {
+                status: "ATTENDED",
+                source: "ADMIN",
+                createdByUserId: input.createdByUserId ?? null,
+                packRefundedAt: null,
+              },
+            });
             await debitSelectedPackSession(tx, {
               memberId: input.memberId,
               pack: selected.pack,
@@ -345,13 +364,7 @@ export async function markHistoricalPresence(input: {
             });
             await tx.reservation.update({
               where: { id: existing.id },
-              data: {
-                status: "ATTENDED",
-                source: "ADMIN",
-                createdByUserId: input.createdByUserId ?? null,
-                packRefundedAt: null,
-                debitedPackId: selected.pack.id,
-              },
+              data: { debitedPackId: selected.pack.id },
             });
             await tx.attendance.create({
               data: {
@@ -365,12 +378,6 @@ export async function markHistoricalPresence(input: {
             return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: true };
           }
 
-          await debitSelectedPackSession(tx, {
-            memberId: input.memberId,
-            pack: selected.pack,
-            courseSlug: planning.courseSlug,
-            sessionDateDb,
-          });
           const created = await tx.reservation.create({
             data: {
               memberId: input.memberId,
@@ -380,8 +387,17 @@ export async function markHistoricalPresence(input: {
               source: "ADMIN",
               createdByUserId: input.createdByUserId ?? null,
               packRefundedAt: null,
-              debitedPackId: selected.pack.id,
             },
+          });
+          await debitSelectedPackSession(tx, {
+            memberId: input.memberId,
+            pack: selected.pack,
+            courseSlug: planning.courseSlug,
+            sessionDateDb,
+          });
+          await tx.reservation.update({
+            where: { id: created.id },
+            data: { debitedPackId: selected.pack.id },
           });
           await tx.attendance.create({
             data: {
