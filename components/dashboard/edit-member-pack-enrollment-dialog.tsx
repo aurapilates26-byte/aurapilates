@@ -5,7 +5,7 @@ import { Button, Modal, SelectMenu } from "@/components/ui";
 import { useToast } from "@/components/ui/toast-provider";
 import { PersonalDiscountFields } from "@/components/dashboard/member-form/personal-discount-fields";
 import type { MemberOwnedPackDto } from "@/lib/admin/member-owned-packs";
-import { PACK_CATEGORY_OPTIONS, normalizePackCategory } from "@/lib/pack-categories";
+import { normalizePackCategory, packCategoryMenuLabel } from "@/lib/pack-categories";
 import {
   buildPackChangePriceSummary,
   formatPackChangeDifferenceLabel,
@@ -41,13 +41,6 @@ type PackOption = {
   courseQuotas?: { courseSlug: string; sessionCount: number }[];
   isActive?: boolean;
 };
-
-export function canEditMemberOwnedPack(pack: MemberOwnedPackDto): boolean {
-  if (pack.enrollmentStatus === "REPLACED" || pack.enrollmentStatus === "EXPIRED") return false;
-  if (pack.packStartedAt) return false;
-  if (pack.consumedSessions > 0) return false;
-  return true;
-}
 
 type EditMemberPackEnrollmentDialogProps = {
   open: boolean;
@@ -124,7 +117,6 @@ export function EditMemberPackEnrollmentDialog({
 
   const [packs, setCatalogPacks] = useState<PackOption[]>([]);
   const [loadingPacks, setLoadingPacks] = useState(false);
-  const [category, setCategory] = useState("");
   const [packId, setPackId] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PackPaymentMethodValue | "">("");
   const [saving, setSaving] = useState(false);
@@ -147,7 +139,6 @@ export function EditMemberPackEnrollmentDialog({
 
   useEffect(() => {
     if (!open || !pack) return;
-    setCategory(pack.category ? normalizePackCategory(pack.category) : "");
     setPackId(pack.packId);
     setPaymentMethod(
       pack.packPaymentMethod === "CASH" ||
@@ -279,18 +270,24 @@ export function EditMemberPackEnrollmentDialog({
     discountForm.discountValue,
   ]);
 
+  const lockedCategory = useMemo(
+    () => (pack?.category ? normalizePackCategory(pack.category) : ""),
+    [pack?.category],
+  );
+
   const packsForSelect = useMemo(() => {
-    const cat = normalizePackCategory(category);
     let list = packs.filter((p) => p.isActive !== false);
-    if (cat) {
-      list = list.filter((p) => p.category && normalizePackCategory(p.category) === cat);
+    if (lockedCategory) {
+      list = list.filter(
+        (p) => p.category && normalizePackCategory(p.category) === lockedCategory,
+      );
     }
     if (packId && !list.some((p) => p.id === packId)) {
       const selected = packs.find((p) => p.id === packId);
       if (selected) list = [selected, ...list];
     }
     return list;
-  }, [packs, category, packId]);
+  }, [packs, lockedCategory, packId]);
 
   const save = async () => {
     if (!pack) return;
@@ -369,8 +366,9 @@ export function EditMemberPackEnrollmentDialog({
     >
       <div className="space-y-4">
         <p className="text-xs leading-relaxed text-brand-dark/65">
-          Réservé aux packs <strong>pas encore démarrés</strong> (aucune séance consommée). Utile si
-          le mauvais pack a été sélectionné à l&apos;achat.
+          Corriger le pack catalogue de cette inscription. La <strong>catégorie</strong> reste
+          fixe ; vous pouvez choisir un autre pack de la même catégorie, même si des séances ont
+          déjà été consommées ou si le pack est terminé / expiré.
         </p>
 
         {pack ? (
@@ -382,24 +380,15 @@ export function EditMemberPackEnrollmentDialog({
         ) : null}
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:items-end">
-          <SelectMenu
-            id="edit-owned-pack-category"
-            label="Catégorie"
-            value={category}
-            onChange={(value) => {
-              setCategory(value);
-              setError(null);
-              const cat = normalizePackCategory(value);
-              const selected = packs.find((p) => p.id === packId);
-              if (selected && normalizePackCategory(selected.category ?? "") !== cat) {
-                setPackId("");
-              }
-            }}
-            options={[
-              { value: "", label: "Toutes / choisir" },
-              ...PACK_CATEGORY_OPTIONS.map((o) => ({ value: o.value, label: o.label })),
-            ]}
-          />
+          <div className="rounded-xl border border-brand-medium/15 bg-zinc-50/60 px-3 py-2.5">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-dark/50">
+              Catégorie
+            </p>
+            <p className="mt-1.5 text-sm font-medium text-brand-dark">
+              {lockedCategory ? packCategoryMenuLabel(lockedCategory) : "—"}
+            </p>
+            <p className="mt-0.5 text-[11px] text-brand-dark/55">Non modifiable</p>
+          </div>
 
           <SelectMenu
             id="edit-owned-pack"

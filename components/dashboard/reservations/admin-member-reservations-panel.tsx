@@ -19,7 +19,6 @@ import {
 } from "@/components/dashboard/reservations/reservation-admin-list-item";
 import { reservationStatusBadgeClass } from "@/components/dashboard/reservations/reservation-status-styles";
 import {
-  canEditMemberOwnedPack,
   EditMemberPackEnrollmentDialog,
   PackEnrollmentEditButton,
 } from "@/components/dashboard/edit-member-pack-enrollment-dialog";
@@ -256,9 +255,7 @@ export function AdminMemberReservationsPanel({
                   </div>
                   <div className="flex shrink-0 items-center gap-1.5">
                     <PaymentMethodBadge method={pack.packPaymentMethod} fallback="Paiement non renseigné" />
-                    {canEditMemberOwnedPack(pack) ? (
-                      <PackEnrollmentEditButton onClick={() => setPackToEdit(pack)} />
-                    ) : null}
+                    <PackEnrollmentEditButton onClick={() => setPackToEdit(pack)} />
                   </div>
                 </div>
                 <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">

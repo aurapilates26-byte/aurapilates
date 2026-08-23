@@ -16,13 +16,14 @@ import {
   type PersonalDiscountInput,
 } from "@/lib/admin/pack-payment";
 import { prisma } from "@/lib/prisma";
+import { normalizePackCategory } from "@/lib/pack-categories";
 
 export function changeMemberPackEnrollmentErrorMessage(code: string): string {
   if (code === "NOT_FOUND") return "Inscription pack introuvable";
   if (code === "PACK_NOT_FOUND") return "Pack introuvable";
   if (code === "PACK_INACTIVE") return "Ce pack n'est plus actif";
-  if (code === "ALREADY_STARTED") {
-    return "Impossible de modifier un pack déjà démarré ou partiellement consommé";
+  if (code === "CATEGORY_MISMATCH") {
+    return "Le nouveau pack doit rester dans la même catégorie";
   }
   if (code === "INVALID_PAYMENT_METHOD") return "Mode de paiement invalide";
   if (code === "NO_CHANGE") return "Aucune modification";
@@ -83,10 +84,6 @@ export async function changeMemberPackEnrollment(input: ChangeMemberPackEnrollme
         },
       });
       if (!enrollment) throw new Error("NOT_FOUND");
-      if (enrollment.status === "REPLACED" || enrollment.status === "EXPIRED") {
-        throw new Error("ALREADY_STARTED");
-      }
-      if (enrollment.packStartedAt) throw new Error("ALREADY_STARTED");
 
       const siblingEnrollments = await tx.memberPackEnrollment.findMany({
         where: { memberId: input.memberId, packId: enrollment.packId },
@@ -115,7 +112,7 @@ export async function changeMemberPackEnrollment(input: ChangeMemberPackEnrollme
         periodStart,
         periodEndExclusive,
       });
-      if (consumed > 0) throw new Error("ALREADY_STARTED");
+      const hasUsage = consumed > 0 || enrollment.packStartedAt != null;
 
       const newPack = await tx.pack.findUnique({
         where: { id: input.packId },
@@ -123,12 +120,17 @@ export async function changeMemberPackEnrollment(input: ChangeMemberPackEnrollme
           id: true,
           name: true,
           isActive: true,
+          category: true,
           sessionCount: true,
           courseQuotas: { select: { courseSlug: true, sessionCount: true } },
         },
       });
       if (!newPack) throw new Error("PACK_NOT_FOUND");
       if (!newPack.isActive && newPack.id !== enrollment.packId) throw new Error("PACK_INACTIVE");
+
+      const enrollmentCategory = normalizePackCategory(enrollment.pack.category ?? "");
+      const newPackCategory = normalizePackCategory(newPack.category ?? "");
+      if (enrollmentCategory !== newPackCategory) throw new Error("CATEGORY_MISMATCH");
 
       const paymentMethod =
         input.paymentMethod === undefined
@@ -180,14 +182,15 @@ export async function changeMemberPackEnrollment(input: ChangeMemberPackEnrollme
       if (packChanged) {
         await tx.memberPackEnrollment.update({
           where: { id: enrollment.id },
-          data: {
-            packId: newPack.id,
-            // Nouveau catalogue : repartir de zéro (ne pas hériter d'un historique d'un autre pack).
-            packStartedAt: null,
-            packExpiresAt: null,
-            status: "PENDING_START",
-            closedAt: null,
-          },
+          data: hasUsage
+            ? { packId: newPack.id }
+            : {
+                packId: newPack.id,
+                packStartedAt: null,
+                packExpiresAt: null,
+                status: "PENDING_START",
+                closedAt: null,
+              },
         });
 
         if (enrollment.packPaymentId) {
@@ -256,33 +259,59 @@ export async function changeMemberPackEnrollment(input: ChangeMemberPackEnrollme
 
         const member = await tx.member.findUnique({
           where: { id: input.memberId },
-          select: { packId: true },
+          select: { packId: true, packStartedAt: true },
         });
         if (member?.packId === oldPackId || member?.packId === newPack.id) {
           await tx.member.update({
             where: { id: input.memberId },
-            data: { packId: newPack.id, packStartedAt: null },
+            data: hasUsage
+              ? { packId: newPack.id }
+              : { packId: newPack.id, packStartedAt: null },
           });
         }
 
-        const otherOpenSameOldPack = await tx.memberPackEnrollment.count({
-          where: {
-            memberId: input.memberId,
-            packId: oldPackId,
-            id: { not: enrollment.id },
-            status: { in: ["PENDING_START", "ACTIVE"] },
-          },
-        });
-        if (otherOpenSameOldPack === 0) {
-          await tx.memberPackBalance.deleteMany({
+        if (hasUsage) {
+          const sessionDateFilter =
+            periodStart != null
+              ? {
+                  gte: periodStart,
+                  ...(periodEndExclusive ? { lt: periodEndExclusive } : {}),
+                }
+              : undefined;
+
+          await tx.reservation.updateMany({
+            where: {
+              memberId: input.memberId,
+              debitedPackId: oldPackId,
+              ...(sessionDateFilter ? { sessionDate: sessionDateFilter } : {}),
+            },
+            data: { debitedPackId: newPack.id },
+          });
+
+          await tx.memberPackBalance.updateMany({
             where: { memberId: input.memberId, packId: oldPackId },
+            data: { packId: newPack.id },
+          });
+        } else {
+          const otherOpenSameOldPack = await tx.memberPackEnrollment.count({
+            where: {
+              memberId: input.memberId,
+              packId: oldPackId,
+              id: { not: enrollment.id },
+              status: { in: ["PENDING_START", "ACTIVE"] },
+            },
+          });
+          if (otherOpenSameOldPack === 0) {
+            await tx.memberPackBalance.deleteMany({
+              where: { memberId: input.memberId, packId: oldPackId },
+            });
+          }
+
+          await resetMemberPackBalancesForPack(tx, {
+            memberId: input.memberId,
+            packId: newPack.id,
           });
         }
-
-        await resetMemberPackBalancesForPack(tx, {
-          memberId: input.memberId,
-          packId: newPack.id,
-        });
       } else if (willTouchPayment && enrollment.packPaymentId) {
         const existingPayment = await tx.packPayment.findUnique({
           where: { id: enrollment.packPaymentId },
