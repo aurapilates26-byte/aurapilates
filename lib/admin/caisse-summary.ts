@@ -10,6 +10,10 @@ import {
   yearMonthFromDate,
   parseYearMonth,
 } from "@/lib/admin/pack-payment";
+import {
+  listProspectPaymentsForMonth,
+  sumProspectPaymentsForMonth,
+} from "@/lib/admin/session-prospect";
 import { getPlanningPeriodConfigEnriched } from "@/lib/admin/planning-period-config";
 import { startOfLocalToday } from "@/lib/calendar-day";
 import type { CaisseMonthSnapshot } from "@/types/admin/caisse";
@@ -28,21 +32,26 @@ export async function fetchCaisseMonthSnapshot(yearMonth: string): Promise<Caiss
 
   await syncMissingPackPaymentsFromMembers();
 
-  const [incomeTotalDinars, manualExpenseTotalDinars, payments, expenses, coachPayroll, periodEnriched] =
+  const [incomeTotalDinars, prospectIncomeDinars, manualExpenseTotalDinars, payments, prospectPayments, expenses, coachPayroll, periodEnriched] =
     await Promise.all([
     sumPackPaymentsForMonth(normalized),
+    sumProspectPaymentsForMonth(normalized),
     sumCashExpensesForMonth(normalized),
     listPackPaymentsForMonth(normalized),
+    listProspectPaymentsForMonth(normalized),
     listCashExpensesForMonth(normalized),
     computeCoachPayrollForMonth(normalized),
     getPlanningPeriodConfigEnriched(),
   ]);
+
+  const totalIncomeDinars = incomeTotalDinars + prospectIncomeDinars;
 
   const coachPayrollTotalDinars = coachPayroll.totalDinars;
   const expenseTotalDinars = manualExpenseTotalDinars + coachPayrollTotalDinars;
 
   const ledger = buildCaisseLedger({
     payments,
+    prospectPayments,
     expenses,
     coachSessionCharges: coachPayroll.sessionCharges,
     coachMonthlyCharges: coachPayroll.monthlyCharges,
@@ -50,7 +59,7 @@ export async function fetchCaisseMonthSnapshot(yearMonth: string): Promise<Caiss
   });
 
   const breakdown = buildCaisseBreakdown({
-    incomeTotalDinars,
+    incomeTotalDinars: totalIncomeDinars,
     coachPayrollTotalDinars,
     sessionPayrollTotalDinars: coachPayroll.sessionPayrollTotalDinars,
     monthlyPayrollTotalDinars: coachPayroll.monthlyPayrollTotalDinars,
@@ -63,9 +72,9 @@ export async function fetchCaisseMonthSnapshot(yearMonth: string): Promise<Caiss
 
   return {
     yearMonth: normalized,
-    incomeTotalDinars,
+    incomeTotalDinars: totalIncomeDinars,
     expenseTotalDinars,
-    balanceDinars: incomeTotalDinars - expenseTotalDinars,
+    balanceDinars: totalIncomeDinars - expenseTotalDinars,
     manualExpenseTotalDinars,
     coachPayrollTotalDinars,
     planningBookingWindow: coachPayroll.bookingWindow,
@@ -85,6 +94,7 @@ export async function fetchCaisseMonthSnapshot(yearMonth: string): Promise<Caiss
           ? "Aucune séance coach ce mois-ci : la période planning active ne recoupe pas ce mois calendaire."
           : null,
     payments,
+    prospectPayments,
     expenses,
     coachPayroll: coachPayroll.lines,
     coachSessionCharges: coachPayroll.sessionCharges,

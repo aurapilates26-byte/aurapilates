@@ -127,15 +127,19 @@ export default async function DashboardPage() {
               : null;
 
           /**
-           * Séances consommées = présence (ATTENDED) uniquement.
-           * Confirmée (BOOKED) n'est plus débitée à la réservation.
+           * Séances comptées sur le pack (période packStartedAt → fin du pack) :
+           * BOOKED / ATTENDED comme avant, plus CANCELLED pour rester aligné avec l'historique membre
+           * (une annulation retire le statut BOOKED mais la ligne reste visible dans Historique).
            */
           const sessionsAllocated =
             packStartDate && sessionCount != null
               ? await prisma.reservation.count({
                   where: {
                     memberId: member.id,
-                    status: "ATTENDED",
+                    OR: [
+                      { status: { in: ["BOOKED", "ATTENDED"] } },
+                      { status: "CANCELLED", packRefundedAt: null },
+                    ],
                     sessionDate: {
                       gte: packStartDate,
                       ...(expiresAt ? { lte: expiresAt } : {}),
@@ -166,7 +170,7 @@ export default async function DashboardPage() {
             const booked = await prisma.reservation.findMany({
               where: {
                 memberId: member.id,
-                status: "ATTENDED",
+                OR: [{ status: { in: ["BOOKED", "ATTENDED"] } }, { status: "CANCELLED", packRefundedAt: null }],
                 sessionDate: {
                   gte: packStartDate,
                   ...(expiresAt ? { lte: expiresAt } : {}),

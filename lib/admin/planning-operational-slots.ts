@@ -3,19 +3,18 @@ import "server-only";
 import type { Prisma } from "@prisma/client";
 import {
   formatYmdLocal,
+  formatYmdPrismaDate,
   parseYmdLocal,
   parseYmdToPrismaDate,
   prismaDayOfWeekFromLocalDate,
 } from "@/lib/calendar-day";
+import { getPlanningPeriodConfig } from "@/lib/admin/planning-period-config";
 import {
-  draftPeriodConfigOrNull,
-  getAdminPlanningPeriodWindow,
-} from "@/lib/admin/planning-period-draft";
-import {
-  isAdminOperationalSlotInScope,
-  resolveAdminOperationalScopesForDate,
-} from "@/lib/admin/planning-operational-scopes";
+  isPlanningOccurrenceVisibleToPublic,
+  readStaggeredPublicationContext,
+} from "@/lib/admin/planning-staggered-publish";
 import { planningSlotOccurrenceDates } from "@/lib/planning-slot-occurrences";
+import { isSessionYmdWithinPlanningPeriod } from "@/lib/planning-period-status";
 import { prisma } from "@/lib/prisma";
 
 const coachSelect = { select: { firstName: true, lastName: true, imageUrl: true } } as const;
@@ -38,9 +37,8 @@ export function planningSlotOccursOnSessionYmd(
 }
 
 /**
- * Créneaux opérationnels admin pour une date : période publiée et/ou brouillon
- * (même portées que GET /api/admin/planning?scope=published|draft).
- * Indépendant de la visibilité adhérente / site public.
+ * Créneaux opérationnels admin pour une date : alignés sur la période publiée
+ * (même logique que GET /api/admin/planning?scope=published) + visibilité échelonnée staff.
  */
 export async function getAdminOperationalPlanningSlotsForDate(
   sessionYmd: string,
@@ -48,57 +46,48 @@ export async function getAdminOperationalPlanningSlotsForDate(
   const day = parseYmdLocal(sessionYmd);
   if (!day) return [];
 
-  const window = await getAdminPlanningPeriodWindow();
-  const published = window.published;
-  const draft = draftPeriodConfigOrNull(window.draft);
+  const period = await getPlanningPeriodConfig();
+  if (!isSessionYmdWithinPlanningPeriod(sessionYmd, period)) {
+    return [];
+  }
 
-  const scopes = resolveAdminOperationalScopesForDate(sessionYmd, published, draft);
-  if (scopes.length === 0) return [];
+  const periodStart = parseYmdToPrismaDate(period.periodStartYmd);
+  const periodEnd = parseYmdToPrismaDate(period.periodEndYmd);
+  if (!periodStart || !periodEnd) return [];
 
   const dayOfWeek = prismaDayOfWeekFromLocalDate(day);
-  const orConditions: Prisma.PlanningWhereInput[] = [];
-
-  if (scopes.includes("published")) {
-    const periodStart = parseYmdToPrismaDate(published.periodStartYmd);
-    const periodEnd = parseYmdToPrismaDate(published.periodEndYmd);
-    if (periodStart && periodEnd) {
-      orConditions.push({
-        isDraft: false,
-        anchorSessionYmd: { gte: periodStart, lte: periodEnd },
-      });
-    }
-  }
-
-  if (scopes.includes("draft") && draft) {
-    const draftStart = parseYmdToPrismaDate(draft.periodStartYmd);
-    const draftEnd = parseYmdToPrismaDate(draft.periodEndYmd);
-    if (draftStart && draftEnd) {
-      orConditions.push({
-        isDraft: true,
-        anchorSessionYmd: { gte: draftStart, lte: draftEnd },
-      });
-    }
-  }
-
-  if (orConditions.length === 0) return [];
+  const staggeredCtx = (await readStaggeredPublicationContext()) ?? {
+    mode: "normal" as const,
+    published: period,
+    draft: null,
+    partialLegacySundayYmd: null,
+  };
 
   const candidates = await prisma.planning.findMany({
     where: {
       dayOfWeek,
-      OR: orConditions,
+      ...(staggeredCtx.mode === "partial"
+        ? {}
+        : {
+            isDraft: false,
+            anchorSessionYmd: { gte: periodStart, lte: periodEnd },
+          }),
     },
     include: { coach: coachSelect },
     orderBy: [{ startTime: "asc" }],
   });
 
-  const byId = new Map<string, OperationalPlanningSlot>();
-  for (const slot of candidates) {
-    if (!planningSlotOccursOnSessionYmd(slot, sessionYmd)) continue;
-    if (!isAdminOperationalSlotInScope(slot, scopes, published, draft)) continue;
-    byId.set(slot.id, slot);
-  }
-
-  return [...byId.values()].sort((a, b) => a.startTime.localeCompare(b.startTime));
+  return candidates.filter((slot) => {
+    if (staggeredCtx.mode === "normal") {
+      if (slot.isDraft) return false;
+      if (!slot.anchorSessionYmd) return false;
+      const anchorYmd = formatYmdPrismaDate(slot.anchorSessionYmd);
+      if (!isSessionYmdWithinPlanningPeriod(anchorYmd, period)) return false;
+    }
+    if (!planningSlotOccursOnSessionYmd(slot, sessionYmd)) return false;
+    if (!isPlanningOccurrenceVisibleToPublic(staggeredCtx, slot, sessionYmd)) return false;
+    return true;
+  });
 }
 
 export function pickActiveOperationalSlot(

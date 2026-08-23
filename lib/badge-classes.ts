@@ -16,6 +16,8 @@ export const badgeClasses = {
   availability: `${planningSessionPillLayout} border-amber-200 bg-amber-50 text-amber-900`,
   /** Liste d’attente, file d’attente */
   waitlist: `${planningSessionPillLayout} border-orange-200 bg-orange-50 text-orange-900`,
+  /** Prospect — séance d'essai (non adhérente) */
+  prospect: `${planningSessionPillLayout} border-violet-200 bg-violet-50 text-violet-900 cursor-pointer hover:bg-violet-100`,
   /** Statut d’inscription (membre) */
   reservationStatus: `${planningSessionPillLayout} border-brand-medium/25 bg-white text-brand-dark/80`,
   /** Pack / éligibilité */

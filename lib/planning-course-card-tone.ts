@@ -1,32 +1,19 @@
-/**
- * Fonds de carte planning (grille admin) — palette émotionnelle AURA.
- * Crème #F6E9E2 · Rose poudré #EBC4C6 · Rose ancien #D4A1A8 ·
- * Mauve rosé #B57A83 · Baie #7A3E4D · Chocolat #4A2E2A
- * Tons lavés pour garder le contraste du texte brand-dark.
- */
+/** Fond de carte planning selon le type de cours (grille admin). */
 export function planningCourseCardToneClass(courseSlug: string): string {
   switch (courseSlug) {
     case "pilates-reformer":
-      // Rose poudré — cours signature
-      return "border-[#D4A1A8]/55 bg-[#EBC4C6]/45";
+      return "border-amber-200/90 bg-amber-50/90";
     case "mat-pilates":
-      // Crème → rose poudré léger
-      return "border-[#EBC4C6]/50 bg-[#F6E9E2]/95";
+      return "border-stone-200/90 bg-stone-50/90";
     case "yoga":
-    case "cours-de-yoga":
-      // Rose ancien
-      return "border-[#B57A83]/40 bg-[#D4A1A8]/28";
+      return "border-sky-200/90 bg-sky-50/90";
     case "dance":
-    case "cours-de-dance":
-      // Mauve rosé
-      return "border-[#B57A83]/50 bg-[#B57A83]/22";
+      return "border-pink-200/90 bg-pink-50/90";
     case "coaching-prive":
-      // Baie (lavé)
-      return "border-[#7A3E4D]/35 bg-[#7A3E4D]/12";
+      return "border-orange-200/90 bg-orange-50/90";
     case "sans-cours":
-      // Crème neutre
-      return "border-[#EBC4C6]/35 bg-[#F6E9E2]/80";
+      return "border-zinc-200/90 bg-zinc-100/90";
     default:
-      return "border-[#D4A1A8]/30 bg-[#F6E9E2]/70";
+      return "border-brand-medium/25 bg-brand-light/40";
   }
 }

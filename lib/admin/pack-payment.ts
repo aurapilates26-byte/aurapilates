@@ -71,6 +71,17 @@ function computePersonalDiscountDinars(
   return Math.min(amountBeforePersonalDiscount, personalDiscount.value);
 }
 
+export function resolveFinalPackPaymentAmount(
+  amountBeforePersonalDiscount: number,
+  personalDiscount: PersonalDiscountInput | null | undefined,
+): { amountDinars: number; personalDiscountDinars: number } {
+  const personalDiscountDinars = computePersonalDiscountDinars(amountBeforePersonalDiscount, personalDiscount);
+  return {
+    amountDinars: Math.max(0, amountBeforePersonalDiscount - personalDiscountDinars),
+    personalDiscountDinars,
+  };
+}
+
 const packPaymentInclude = {
   member: {
     select: { firstName: true, lastName: true, expectedPackAmountDinars: true },

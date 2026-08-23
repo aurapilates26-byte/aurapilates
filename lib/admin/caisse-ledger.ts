@@ -10,6 +10,8 @@ function kindLabel(kind: CaisseLedgerKind): string {
   switch (kind) {
     case "INCOME_PACK":
       return "Vente pack";
+    case "INCOME_PROSPECT":
+      return "Prospect";
     case "EXPENSE_COACH_SESSION":
       return "Coach (séance)";
     case "EXPENSE_COACH_MONTHLY":
@@ -23,6 +25,7 @@ function kindLabel(kind: CaisseLedgerKind): string {
 
 export function buildCaisseLedger(input: {
   payments: PackPaymentDto[];
+  prospectPayments?: import("@/types/admin/prospect-payment").ProspectPaymentDto[];
   expenses: CashExpenseDto[];
   coachSessionCharges: CoachSessionChargeDto[];
   coachMonthlyCharges: CoachMonthlyChargeDto[];
@@ -59,6 +62,27 @@ export function buildCaisseLedger(input: {
       amountDinars: p.amountDinars,
       direction: "in",
       detail: `${p.packName}${promo}${personal}${paymentKindLabel}${methodLabel}${note} · ${p.source === "AUTO" ? "auto" : "manuel"}`,
+    });
+  }
+
+  for (const p of input.prospectPayments ?? []) {
+    const methodLabel =
+      p.paymentMethod === "CASH" || p.paymentMethod === "CHECK" || p.paymentMethod === "TPE"
+        ? ` · ${packPaymentMethodLabel(p.paymentMethod)}`
+        : "";
+    const packLabel = p.packName ? ` · ${p.packName}` : "";
+    const personal =
+      p.personalDiscountType && p.personalDiscountDinars > 0
+        ? ` · remise perso ${p.personalDiscountType === "PERCENT" ? `${p.personalDiscountValue}%` : `${p.personalDiscountValue} DT`}`
+        : "";
+    entries.push({
+      id: `prospect-${p.id}`,
+      kind: "INCOME_PROSPECT",
+      dateYmd: p.paidAtYmd,
+      label: `${p.firstName} ${p.lastName}`.trim(),
+      amountDinars: p.amountDinars,
+      direction: "in",
+      detail: `Prospect · ${p.courseLabel}${packLabel}${personal} · séance ${p.sessionDateYmd.split("-").reverse().join("/")}${methodLabel}`,
     });
   }
 

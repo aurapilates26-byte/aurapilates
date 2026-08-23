@@ -5,6 +5,7 @@ import type {
   CoachPayrollLineDto,
   CoachSessionChargeDto,
 } from "@/types/admin/coach-payroll";
+import type { ProspectPaymentDto } from "@/types/admin/prospect-payment";
 import type { PackPaymentDto } from "@/types/admin/pack-payment";
 import type { PlanningBookingWindow, PlanningPeriodStatus } from "@/types/admin/planning";
 
@@ -33,6 +34,8 @@ export type CaisseMonthSnapshot = {
   planningPeriodCoachHint: string | null;
   /** Ventes pack (auto à la création / renouvellement adhérente). */
   payments: PackPaymentDto[];
+  /** Séances d'essai prospect payées à l'unité (sans pack). */
+  prospectPayments: ProspectPaymentDto[];
   /** Charges saisies manuellement. */
   expenses: CashExpenseDto[];
   /** Détail par coach actif pour le mois. */

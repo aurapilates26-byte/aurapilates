@@ -4,13 +4,16 @@ import { z } from "zod";
 import { authOptions } from "@/auth";
 import { isStaffRole } from "@/lib/admin/access";
 import {
+  formatYmdLocal,
   formatYmdPrismaDate,
   parseYmdLocal,
   parseYmdToPrismaDate,
+  startOfLocalToday,
 } from "@/lib/calendar-day";
 import { ensureReservationAttendanceRecord } from "@/lib/ensure-reservation-attendance";
+import { unmarkAdminPresence, unmarkLivePresenceErrorMessage } from "@/lib/admin/unmark-live-presence";
 import { broadcastMemberBookingRefresh } from "@/lib/member-booking-stream";
-import { isPresenceMarkingAllowed, minus15Minutes, studioNowClock } from "@/lib/admin/presence-window";
+import { isPresenceMarkingAllowed } from "@/lib/admin/presence-window";
 import { PACK_ERRORS } from "@/lib/create-member-reservation";
 import {
   debitSelectedPackSession,
@@ -67,10 +70,13 @@ export async function POST(request: Request) {
   }
 
   const { reservationId } = parsed.data;
-  const { ymd: todayYmd, timeHm: nowTime } = studioNowClock();
+  const todayYmd = formatYmdLocal(startOfLocalToday());
   const todayDb = parseYmdToPrismaDate(todayYmd);
   if (!todayDb) return errorResponse(ERRORS.PAYLOAD_INVALID, 400);
-  const opensGate = (startTime: string) => minus15Minutes(startTime);
+  const now = new Date();
+  const nowTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  const plus15 = new Date(now.getTime() + 15 * 60_000);
+  const nowPlus15 = `${String(plus15.getHours()).padStart(2, "0")}:${String(plus15.getMinutes()).padStart(2, "0")}`;
 
   let outcome: Outcome;
   try {
@@ -121,49 +127,59 @@ export async function POST(request: Request) {
           return "conflict" as const;
         }
         if (!canMarkToday) {
-          if (sessionYmd === todayYmd && nowTime < opensGate(current.planning.startTime)) {
+          if (sessionYmd === todayYmd && current.planning.startTime > nowPlus15) {
             return "too_early" as const;
           }
           return "conflict" as const;
         }
 
-        // 1) Claim présence d'abord — si échec, aucun débit.
+        if (current.status === ReservationStatus.WAITLIST) {
+          const sessionYmdForPack = formatYmdPrismaDate(new Date(current.sessionDate));
+          const sessionDateLocal = parseYmdLocal(sessionYmdForPack);
+          if (!sessionDateLocal) throw new Error(PACK_ERRORS.noPack);
+          const selected = await preparePackForAdminPresenceDebit(tx, {
+            memberId: current.memberId,
+            memberPackId: current.member.packId,
+            memberPackStartedAt: current.member.packStartedAt,
+            courseSlug: current.planning.courseSlug,
+            sessionDateDb: todayDb,
+            sessionDateLocal,
+            preferredPackId: current.debitedPackId,
+          });
+          await debitSelectedPackSession(tx, {
+            memberId: current.memberId,
+            pack: selected.pack,
+            courseSlug: current.planning.courseSlug,
+            sessionDateDb: todayDb,
+          });
+          await tx.reservation.update({
+            where: { id: reservationId },
+            data: { debitedPackId: selected.pack.id },
+          });
+        }
+
         const claim = await tx.reservation.updateMany({
           where: {
             id: reservationId,
             sessionDate: todayDb,
             status: { in: RESERVATION_ELIGIBLE_STATUSES },
+            planning: {
+              startTime: { lte: nowPlus15 },
+            },
           },
           data: { status: ReservationStatus.ATTENDED },
         });
-        if (claim.count === 0) return "conflict" as const;
 
-        const sessionYmdForPack = formatYmdPrismaDate(new Date(current.sessionDate));
-        const sessionDateLocal = parseYmdLocal(sessionYmdForPack);
-        if (!sessionDateLocal) throw new Error(PACK_ERRORS.noPack);
-        const selected = await preparePackForAdminPresenceDebit(tx, {
-          memberId: current.memberId,
-          memberPackId: current.member.packId,
-          memberPackStartedAt: current.member.packStartedAt,
-          courseSlug: current.planning.courseSlug,
-          sessionDateDb: todayDb,
-          sessionDateLocal,
-          preferredPackId: current.debitedPackId,
-        });
-        // 2) Débit pack à la présence (rollback auto si erreur → transaction).
-        await debitSelectedPackSession(tx, {
-          memberId: current.memberId,
-          pack: selected.pack,
-          courseSlug: current.planning.courseSlug,
-          sessionDateDb: todayDb,
-        });
-        await tx.reservation.update({
-          where: { id: reservationId },
-          data: { debitedPackId: selected.pack.id },
-        });
+        if (claim.count === 0) return "conflict" as const;
       }
 
-      await ensureReservationAttendanceRecord(tx, reservationId);
+      const previousStatus =
+        current.status === ReservationStatus.WAITLIST
+          ? ("WAITLIST" as const)
+          : current.status === ReservationStatus.BOOKED
+            ? ("BOOKED" as const)
+            : undefined;
+      await ensureReservationAttendanceRecord(tx, reservationId, { previousStatus });
       return "ok" as const;
     });
   } catch (error) {
@@ -198,4 +214,27 @@ export async function POST(request: Request) {
 
   broadcastMemberBookingRefresh();
   return Response.json({ ok: true });
+}
+
+export async function DELETE(request: Request) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user || !isStaffRole(session.user.role)) {
+    return errorResponse(ERRORS.FORBIDDEN, 403);
+  }
+
+  const raw = await request.json().catch(() => null);
+  const parsed = bodySchema.safeParse(raw);
+  if (!parsed.success) {
+    return errorResponse(ERRORS.PAYLOAD_INVALID, 400);
+  }
+
+  try {
+    const result = await unmarkAdminPresence(parsed.data.reservationId);
+    broadcastMemberBookingRefresh();
+    return Response.json({ ok: true, result });
+  } catch (e) {
+    const code = e instanceof Error ? e.message : "UNKNOWN";
+    if (code === "NOT_FOUND") return errorResponse(unmarkLivePresenceErrorMessage(code), 404);
+    return errorResponse(unmarkLivePresenceErrorMessage(code), 409);
+  }
 }

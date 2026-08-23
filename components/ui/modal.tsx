@@ -16,24 +16,18 @@ export function Modal({ isOpen, title, description, children, footer, panelClass
   useEffect(() => {
     if (!isOpen) return;
 
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
     };
 
     window.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", onKeyDown);
-    };
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/40 px-4">
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/40 p-4 sm:p-6">
       <button
         type="button"
         aria-label="Fermer"
@@ -41,7 +35,7 @@ export function Modal({ isOpen, title, description, children, footer, panelClass
         className="absolute inset-0 cursor-default"
       />
       <div
-        className={`relative w-full max-w-lg rounded-2xl border border-brand-medium/20 bg-white p-6 shadow-2xl ${panelClassName ?? ""}`}
+        className={`relative max-h-[min(90vh,900px)] w-full overflow-y-auto rounded-2xl border border-brand-medium/20 bg-white p-5 shadow-2xl sm:p-6 ${panelClassName ?? "max-w-lg"}`}
       >
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">

@@ -1,12 +1,22 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { DashboardHeader } from "@/components/dashboard/header";
 import { Input } from "@/components/ui";
 import { badgeClasses } from "@/lib/badge-classes";
 import { planningLevelBadgeClass } from "@/lib/planning-level-badge";
 import { planningLevelLabelFr } from "@/lib/planning-public-labels";
 import { useToast } from "@/components/ui/toast-provider";
+import { AddProspectDialog } from "@/components/dashboard/reservations/add-prospect-dialog";
+import type { ProspectRow } from "@/components/dashboard/reservations/prospect-types";
+import {
+  buildConvertedProspectByMemberId,
+  ConvertedProspectBadge,
+  filterVisibleProspects,
+  ProspectRowActions,
+} from "@/components/dashboard/reservations/prospect-row-actions";
+import { RecordProspectTrialPaymentDialog } from "@/components/dashboard/reservations/record-prospect-trial-payment-dialog";
 
 type SlotRow = {
   planningId: string;
@@ -23,6 +33,7 @@ type SlotRow = {
     attended: number;
     waitlist: number;
     cancelled: number;
+    prospects: number;
     spotsRemaining: number;
     waitSpotsRemaining: number | null;
   };
@@ -62,6 +73,7 @@ type RosterResponse = {
     waitlistCapacity: number | null;
   };
   reservations: RosterRow[];
+  prospects: ProspectRow[];
 };
 
 type SearchItem = {
@@ -102,9 +114,42 @@ function statusBadgeClass(status: RosterRow["status"]) {
   return "inline-flex rounded-full border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-xs font-semibold text-zinc-700";
 }
 
+const prospectStatusLabels: Record<string, string> = {
+  ACTIVE: "Prospect",
+  PAID_TRIAL: "Prospect",
+  CONVERTED: "Convertie",
+};
+
+function prospectBadgeClass(_status: ProspectRow["status"]) {
+  return "inline-flex rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-xs font-semibold text-violet-900";
+}
+
+/** Séance encaissée = la personne était présente à la séance d'essai. */
+function prospectPresenceLabel(status: ProspectRow["status"]): string {
+  if (status === "PAID_TRIAL") return "Oui";
+  return "—";
+}
+
+function prospectPresenceClass(status: ProspectRow["status"]): string {
+  if (status === "PAID_TRIAL") return "text-brand-dark/80";
+  return "text-brand-dark/60";
+}
+
 function cancelledPackInfoLabel(r: RosterRow) {
   if (r.status !== "CANCELLED") return null;
   return r.packRefundedAt ? "Séance rendue au pack" : "Annulation tardive (non rendue)";
+}
+
+function matchesRosterFilter(
+  firstName: string | null | undefined,
+  lastName: string | null | undefined,
+  phone: string | null | undefined,
+  query: string,
+) {
+  if (!query) return true;
+  const fullName = `${firstName ?? ""} ${lastName ?? ""}`.trim().toLowerCase();
+  const phoneNorm = (phone ?? "").toLowerCase();
+  return fullName.includes(query) || phoneNorm.includes(query);
 }
 
 function toYmd(d: Date) {
@@ -141,6 +186,7 @@ function formatYmdDisplay(ymd: string) {
 
 export function AdminReservationsClient() {
   const { toast } = useToast();
+  const router = useRouter();
   const todayYmd = useMemo(() => toYmd(new Date()), []);
 
   const [date, setDate] = useState(todayYmd);
@@ -159,6 +205,11 @@ export function AdminReservationsClient() {
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [rosterByKey, setRosterByKey] = useState<Record<string, RosterResponse | null>>({});
   const [rosterLoadingKey, setRosterLoadingKey] = useState<string | null>(null);
+
+  const [addProspectTarget, setAddProspectTarget] = useState<{ planningId: string; dateYmd: string; courseLabel: string } | null>(null);
+  const [addProspectSubmitting, setAddProspectSubmitting] = useState(false);
+  const [trialPaymentProspect, setTrialPaymentProspect] = useState<ProspectRow | null>(null);
+  const [trialPaymentSubmitting, setTrialPaymentSubmitting] = useState(false);
 
   const searchAbortRef = useRef<AbortController | null>(null);
 
@@ -330,10 +381,102 @@ export function AdminReservationsClient() {
 
   const rosterFilterQuery = useMemo(() => memberQuery.trim().toLowerCase(), [memberQuery]);
 
+  const refreshSlotAndRoster = useCallback(
+    async (planningId: string, targetDate: string) => {
+      await loadSlots();
+      await loadRoster(planningId, targetDate);
+    },
+    [loadRoster, loadSlots],
+  );
+
+  const handleConfirmAddProspect = useCallback(
+    async (data: { firstName: string; lastName: string; phone: string }) => {
+      if (!addProspectTarget) return;
+      setAddProspectSubmitting(true);
+      try {
+        const res = await fetch("/api/admin/reservations/prospects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            planningId: addProspectTarget.planningId,
+            sessionDate: addProspectTarget.dateYmd,
+            ...data,
+          }),
+        });
+        const payload = (await res.json().catch(() => null)) as { error?: string } | null;
+        if (!res.ok) throw new Error(payload?.error ?? "Ajout impossible.");
+        setAddProspectTarget(null);
+        const key = `${addProspectTarget.dateYmd}:${addProspectTarget.planningId}`;
+        setExpandedKey(key);
+        await refreshSlotAndRoster(addProspectTarget.planningId, addProspectTarget.dateYmd);
+        toast({ variant: "success", title: "Prospect ajouté", description: "La place a été réservée pour la séance d'essai." });
+      } catch (e) {
+        toast({ variant: "error", title: "Erreur", description: e instanceof Error ? e.message : "Erreur." });
+      } finally {
+        setAddProspectSubmitting(false);
+      }
+    },
+    [addProspectTarget, refreshSlotAndRoster, toast],
+  );
+
+  const handleConfirmTrialPayment = useCallback(
+    async (data: {
+      packId: string;
+      paymentMethod: string;
+      personalDiscount?: { type: "PERCENT" | "AMOUNT"; value: number; reason?: string };
+    }) => {
+      if (!trialPaymentProspect) return;
+      setTrialPaymentSubmitting(true);
+      try {
+        const res = await fetch(
+          `/api/admin/reservations/prospects/${encodeURIComponent(trialPaymentProspect.id)}/trial-payment`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(data),
+          },
+        );
+        const payload = (await res.json().catch(() => null)) as { error?: string } | null;
+        if (!res.ok) throw new Error(payload?.error ?? "Encaissement impossible.");
+
+        const targetKey = expandedKey;
+        setTrialPaymentProspect(null);
+        if (targetKey) {
+          const [dateYmd, planningId] = targetKey.split(":");
+          if (dateYmd && planningId) await refreshSlotAndRoster(planningId, dateYmd);
+        }
+        toast({
+          variant: "success",
+          title: "Séance encaissée",
+          description: "Enregistrée en caisse sous « Prospect ».",
+        });
+      } catch (e) {
+        toast({ variant: "error", title: "Erreur", description: e instanceof Error ? e.message : "Erreur." });
+      } finally {
+        setTrialPaymentSubmitting(false);
+      }
+    },
+    [expandedKey, refreshSlotAndRoster, toast, trialPaymentProspect],
+  );
+
+  const openProspectConvert = useCallback(
+    (p: ProspectRow) => {
+      router.push(
+        `/dashboard/adherents?prospectId=${encodeURIComponent(p.id)}&from=reservations`,
+      );
+    },
+    [router],
+  );
+  const openProspectCollect = useCallback((p: ProspectRow) => setTrialPaymentProspect(p), []);
+
   function renderRosterAccordion(dateYmd: string, s: SlotRow) {
     const key = `${dateYmd}:${s.planningId}`;
     const expanded = expandedKey === key;
     const roster = rosterByKey[key];
+    const convertedByMemberId = roster ? buildConvertedProspectByMemberId(roster.prospects ?? []) : new Map();
+    const visibleProspects = roster
+      ? filterVisibleProspects(roster.prospects ?? [], roster.reservations)
+      : [];
 
     return (
       <div className="mt-2">
@@ -343,46 +486,77 @@ export function AdminReservationsClient() {
               <p className="text-sm text-brand-dark/65">Chargement...</p>
             ) : !roster ? (
               <p className="text-sm text-brand-dark/65">Aucune réservation sur ce créneau.</p>
+            ) : visibleProspects.length === 0 && roster.reservations.length === 0 ? (
+              <p className="text-sm text-brand-dark/65">Aucune réservation sur ce créneau.</p>
             ) : (
               <>
                 {/* Desktop table */}
-                <div className="hidden overflow-x-auto lg:block">
-                  <table className="w-full min-w-[920px] text-sm">
+                <div className="hidden overflow-x-auto overflow-y-hidden lg:block">
+                  <table className="w-full text-sm">
                     <thead>
-                      <tr className="border-b border-brand-medium/15 bg-white/60 text-left text-xs font-semibold text-brand-dark/70">
-                        <th className="px-4 py-3">Membre</th>
-                        <th className="px-4 py-3">Téléphone</th>
-                        <th className="px-4 py-3">Statut</th>
-                        <th className="px-4 py-3">Présence</th>
+                      <tr className="border-b border-brand-medium/15 bg-white/60 text-xs font-semibold text-brand-dark/70">
+                        <th className="px-4 py-3 text-left">Membre</th>
+                        <th className="px-4 py-3 text-center">Téléphone</th>
+                        <th className="px-4 py-3 text-center">Cours</th>
+                        <th className="px-4 py-3 text-center">Statut</th>
+                        <th className="px-4 py-3 text-center">Présence</th>
+                        <th className="px-4 py-3 text-center">Action</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-brand-medium/15 bg-white">
                       {roster.reservations
-                        .filter((r) => {
-                          if (!rosterFilterQuery) return true;
-                          const fullName = `${r.member.firstName ?? ""} ${r.member.lastName ?? ""}`.trim().toLowerCase();
-                          const phone = (r.member.phone ?? "").toLowerCase();
-                          return fullName.includes(rosterFilterQuery) || phone.includes(rosterFilterQuery);
-                        })
+                        .filter((r) =>
+                          matchesRosterFilter(r.member.firstName, r.member.lastName, r.member.phone, rosterFilterQuery),
+                        )
                         .map((r) => (
                           <tr key={r.id}>
-                            <td className="px-4 py-3 font-medium text-brand-dark">
+                            <td className="px-4 py-3 text-left font-medium text-brand-dark">
                               <div>{`${r.member.firstName ?? ""} ${r.member.lastName ?? ""}`.trim() || "—"}</div>
                               <div className="text-xs font-normal text-brand-dark/60">{r.member.email ?? "—"}</div>
                             </td>
-                            <td className="px-4 py-3 text-brand-dark/80">{r.member.phone ?? "—"}</td>
-                            <td className="px-4 py-3">
-                              <div className="space-y-1">
+                            <td className="px-4 py-3 text-center text-brand-dark/80">{r.member.phone ?? "—"}</td>
+                            <td className="px-4 py-3 text-center text-brand-dark/70">{s.courseLabel}</td>
+                            <td className="px-4 py-3 text-center">
+                              <div className="flex flex-col items-center gap-1">
                                 <span className={statusBadgeClass(r.status)}>{statusLabels[r.status] ?? r.status}</span>
                                 {r.status === "CANCELLED" ? (
                                   <div className="text-[11px] font-medium text-brand-dark/65">{cancelledPackInfoLabel(r)}</div>
                                 ) : null}
                               </div>
                             </td>
-                            <td className="px-4 py-3 text-brand-dark/80">
-                              {r.attendance
-                                ? `Oui (${new Date(r.attendance.markedAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })})`
-                                : "Non"}
+                            <td className="px-4 py-3 text-center text-brand-dark/80">
+                              {r.attendance ? "Oui" : "Non"}
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              {convertedByMemberId.has(r.member.id) ? <ConvertedProspectBadge /> : "—"}
+                            </td>
+                          </tr>
+                        ))}
+                      {visibleProspects
+                        .filter((p) => matchesRosterFilter(p.firstName, p.lastName, p.phone, rosterFilterQuery))
+                        .map((p) => (
+                          <tr key={`prospect-${p.id}`} className="bg-violet-50/30">
+                            <td className="px-4 py-3 text-left font-medium text-brand-dark">
+                              {`${p.firstName} ${p.lastName}`.trim()}
+                            </td>
+                            <td className="px-4 py-3 text-center text-brand-dark/80">{p.phone}</td>
+                            <td className="px-4 py-3 text-center text-brand-dark/70">{p.courseLabel}</td>
+                            <td className="px-4 py-3 text-center">
+                              <span className={prospectBadgeClass(p.status)}>
+                                {prospectStatusLabels[p.status] ?? p.status}
+                              </span>
+                            </td>
+                            <td className={`px-4 py-3 text-center ${prospectPresenceClass(p.status)}`}>
+                              {prospectPresenceLabel(p.status)}
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              <div className="flex flex-wrap items-center justify-center gap-1.5">
+                                <ProspectRowActions
+                                  prospect={p}
+                                  onCollect={() => openProspectCollect(p)}
+                                  onConvert={() => openProspectConvert(p)}
+                                />
+                              </div>
                             </td>
                           </tr>
                         ))}
@@ -393,12 +567,9 @@ export function AdminReservationsClient() {
                 {/* Mobile cards */}
                 <div className="overflow-hidden rounded-xl bg-white lg:hidden">
                   {roster.reservations
-                    .filter((r) => {
-                      if (!rosterFilterQuery) return true;
-                      const fullName = `${r.member.firstName ?? ""} ${r.member.lastName ?? ""}`.trim().toLowerCase();
-                      const phone = (r.member.phone ?? "").toLowerCase();
-                      return fullName.includes(rosterFilterQuery) || phone.includes(rosterFilterQuery);
-                    })
+                    .filter((r) =>
+                      matchesRosterFilter(r.member.firstName, r.member.lastName, r.member.phone, rosterFilterQuery),
+                    )
                     .map((r) => (
                       <article key={r.id} className="border-b border-brand-medium/10 p-2 last:border-b-0 sm:p-4">
                         <div className="flex items-start justify-between gap-3">
@@ -419,11 +590,43 @@ export function AdminReservationsClient() {
                         <p className="mt-2 text-xs text-brand-dark/70">
                           Présence :{" "}
                           <span className="font-semibold text-brand-dark/80">
-                            {r.attendance
-                              ? `Oui (${new Date(r.attendance.markedAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })})`
-                              : "Non"}
+                            {r.attendance ? "Oui" : "Non"}
                           </span>
                         </p>
+                        {convertedByMemberId.has(r.member.id) ? (
+                          <div className="mt-2">
+                            <ConvertedProspectBadge />
+                          </div>
+                        ) : null}
+                      </article>
+                    ))}
+                  {visibleProspects
+                    .filter((p) => matchesRosterFilter(p.firstName, p.lastName, p.phone, rosterFilterQuery))
+                    .map((p) => (
+                      <article key={`prospect-${p.id}`} className="border-b border-violet-100 bg-violet-50/40 p-2 last:border-b-0 sm:p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="font-semibold text-brand-dark">{`${p.firstName} ${p.lastName}`.trim()}</p>
+                            <p className="mt-1 text-xs text-brand-dark/60">{p.phone}</p>
+                            <p className="mt-1 text-xs text-brand-dark/70">{p.courseLabel}</p>
+                          </div>
+                          <span className={`shrink-0 ${prospectBadgeClass(p.status)}`}>
+                            {prospectStatusLabels[p.status] ?? p.status}
+                          </span>
+                        </div>
+                        <p className="mt-2 text-xs text-brand-dark/70">
+                          Présence :{" "}
+                          <span className={`font-semibold ${prospectPresenceClass(p.status)}`}>
+                            {prospectPresenceLabel(p.status)}
+                          </span>
+                        </p>
+                        <div className="mt-2">
+                          <ProspectRowActions
+                            prospect={p}
+                            onCollect={() => openProspectCollect(p)}
+                            onConvert={() => openProspectConvert(p)}
+                          />
+                        </div>
                       </article>
                     ))}
                 </div>
@@ -509,13 +712,33 @@ export function AdminReservationsClient() {
                   </div>
                   <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                     <span className={badgeClasses.availability}>
-                      Places : {s.stats.booked + s.stats.attended}/{s.capacity} (libre : {s.stats.spotsRemaining})
+                      Places : {s.stats.booked + s.stats.attended + (s.stats.prospects ?? 0)}/{s.capacity} (libre :{" "}
+                      {s.stats.spotsRemaining})
                     </span>
                     {s.waitlistCapacity != null ? (
                       <span className={badgeClasses.waitlist}>
                         Attente : {s.stats.waitlist}/{s.waitlistCapacity}
                       </span>
                     ) : null}
+                    <button
+                      type="button"
+                      disabled={s.stats.spotsRemaining <= 0}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (s.stats.spotsRemaining <= 0) {
+                          toast({ variant: "error", title: "Complet", description: "Plus de place disponible sur ce créneau." });
+                          return;
+                        }
+                        setAddProspectTarget({
+                          planningId: s.planningId,
+                          dateYmd: dayYmd,
+                          courseLabel: s.courseLabel,
+                        });
+                      }}
+                      className={`${badgeClasses.prospect} disabled:cursor-not-allowed disabled:opacity-50`}
+                    >
+                      + Prospect
+                    </button>
                   </div>
                 </div>
                 {renderRosterAccordion(dayYmd, s)}
@@ -636,6 +859,22 @@ export function AdminReservationsClient() {
           </div>
         </section>
       </div>
+
+      <AddProspectDialog
+        isOpen={addProspectTarget != null}
+        courseLabel={addProspectTarget?.courseLabel ?? ""}
+        isSubmitting={addProspectSubmitting}
+        onClose={() => setAddProspectTarget(null)}
+        onConfirm={handleConfirmAddProspect}
+      />
+
+      <RecordProspectTrialPaymentDialog
+        prospect={trialPaymentProspect}
+        isOpen={trialPaymentProspect != null}
+        isSubmitting={trialPaymentSubmitting}
+        onClose={() => setTrialPaymentProspect(null)}
+        onConfirm={handleConfirmTrialPayment}
+      />
     </>
   );
 }

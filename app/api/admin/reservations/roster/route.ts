@@ -6,6 +6,7 @@ import { courseLabel } from "@/lib/course-labels";
 import { formatYmdLocal, parseYmdLocal, parseYmdToPrismaDate, startOfLocalToday } from "@/lib/calendar-day";
 import { getAdminOperationalPlanningSlotsForDate } from "@/lib/admin/planning-operational-slots";
 import { repairAttendedReservationsWithoutAttendance } from "@/lib/ensure-reservation-attendance";
+import { SESSION_PROSPECT_OCCUPYING_STATUSES } from "@/lib/admin/session-prospect-stats";
 import { prisma } from "@/lib/prisma";
 
 function errorResponse(message: string, status: number) {
@@ -69,6 +70,27 @@ export async function GET(request: Request) {
     reservations = await loadReservations();
   }
 
+  const prospects = await prisma.sessionProspect.findMany({
+    where: {
+      planningId: planning.id,
+      sessionDate: dayDb,
+      status: { in: [...SESSION_PROSPECT_OCCUPYING_STATUSES, "CONVERTED"] },
+    },
+    orderBy: [{ createdAt: "asc" }],
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      phone: true,
+      courseSlug: true,
+      status: true,
+      trialPaidAt: true,
+      trialPaymentDinars: true,
+      convertedMemberId: true,
+      createdAt: true,
+    },
+  });
+
   return Response.json({
     date: ymd,
     slot: {
@@ -97,6 +119,19 @@ export async function GET(request: Request) {
       attendance: r.attendance
         ? { markedAt: r.attendance.markedAt.toISOString(), markedBy: r.attendance.markedBy }
         : null,
+    })),
+    prospects: prospects.map((p) => ({
+      id: p.id,
+      firstName: p.firstName,
+      lastName: p.lastName,
+      phone: p.phone,
+      courseSlug: p.courseSlug,
+      courseLabel: courseLabel(p.courseSlug),
+      status: p.status,
+      trialPaidAt: p.trialPaidAt ? p.trialPaidAt.toISOString() : null,
+      trialPaymentDinars: p.trialPaymentDinars,
+      convertedMemberId: p.convertedMemberId,
+      createdAt: p.createdAt.toISOString(),
     })),
   });
 }

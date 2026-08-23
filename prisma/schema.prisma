@@ -98,6 +98,12 @@ enum CashExpenseKind {
   VARIABLE
 }
 
+enum SessionProspectStatus {
+  ACTIVE
+  CONVERTED
+  PAID_TRIAL
+}
+
 model User {
   id             String    @id @default(cuid())
   name           String?
@@ -112,6 +118,7 @@ model User {
   coachProfile      Coach?
   createdQrCodes    QrCode[]       @relation("QrCodeCreatedBy")
   createdReservations Reservation[] @relation("ReservationCreatedBy")
+  createdSessionProspects SessionProspect[] @relation("SessionProspectCreatedBy")
   recordedPackPayments PackPayment[] @relation("PackPaymentRecordedBy")
   recordedCashExpenses CashExpense[]  @relation("CashExpenseRecordedBy")
 
@@ -160,6 +167,7 @@ model Member {
   packPayments    PackPayment[]
   pendingPacks    MemberPendingPack[]
   packEnrollments MemberPackEnrollment[]
+  convertedFromProspects SessionProspect[] @relation("ProspectConvertedMember")
 
   @@index([packId])
   @@map("members")
@@ -254,6 +262,7 @@ model Pack {
   pendingForMembers MemberPendingPack[]
   packEnrollments  MemberPackEnrollment[]
   debitedReservations Reservation[] @relation("ReservationDebitedPack")
+  trialProspectPayments SessionProspect[] @relation("ProspectTrialPack")
 
   @@map("packs")
 }
@@ -468,6 +477,7 @@ model Planning {
   draftMirrors     Planning[] @relation("PlanningDraftMirror")
   reservations     Reservation[]
   attendance       Attendance[]
+  sessionProspects SessionProspect[]
 
   @@index([dayOfWeek])
   @@index([coachId])
@@ -475,6 +485,40 @@ model Planning {
   @@index([dayOfWeek, startTime])
   @@index([isDraft])
   @@map("planning")
+}
+
+/// Séance d'essai pour une personne non adhérente (occupe une place du créneau).
+model SessionProspect {
+  id                  String                @id @default(cuid())
+  planningId          String
+  sessionDate         DateTime              @db.Date
+  firstName           String
+  lastName            String
+  phone               String
+  courseSlug          String
+  status              SessionProspectStatus @default(ACTIVE)
+  convertedMemberId   String?
+  trialPaymentDinars  Int?
+  trialPaymentMethod  PackPaymentMethod?
+  trialPaidAt         DateTime?
+  trialPackId         String?
+  trialListPriceDinars Int?
+  trialPersonalDiscountType PersonalDiscountType?
+  trialPersonalDiscountValue Int?
+  trialPersonalDiscountReason String?
+  trialPersonalDiscountDinars Int @default(0)
+  createdByUserId     String?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+
+  planning        Planning @relation(fields: [planningId], references: [id], onDelete: Cascade)
+  convertedMember Member?  @relation("ProspectConvertedMember", fields: [convertedMemberId], references: [id], onDelete: SetNull)
+  trialPack       Pack?    @relation("ProspectTrialPack", fields: [trialPackId], references: [id], onDelete: SetNull)
+  createdByUser   User?    @relation("SessionProspectCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([planningId, sessionDate])
+  @@index([status])
+  @@map("session_prospects")
 }
 
 model Reservation {

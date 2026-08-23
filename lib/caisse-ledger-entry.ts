@@ -5,6 +5,8 @@ function kindLabel(kind: CaisseLedgerKind): string {
   switch (kind) {
     case "INCOME_PACK":
       return "Vente pack";
+    case "INCOME_PROSPECT":
+      return "Prospect";
     case "EXPENSE_COACH_SESSION":
       return "Coach (séance)";
     case "EXPENSE_COACH_MONTHLY":

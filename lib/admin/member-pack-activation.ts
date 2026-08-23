@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client";
-import { isPackStartBeforePurchase, packStartDateLocal } from "@/lib/member-pack-period";
+import { packExpiresAtLocal, packStartDateLocal } from "@/lib/member-pack-period";
 import { syncActiveEnrollmentDates } from "@/lib/admin/member-pack-enrollment";
-import { recomputeMemberPackBalancesForPack } from "@/lib/admin/member-pack-balance-recompute";
+import { resetMemberPackBalancesForPack } from "@/lib/admin/member-pack-renewal";
 
 export type ActivateMemberPackOnSessionResult = {
   packStartedAt: Date;
@@ -22,33 +22,6 @@ export async function activateMemberPackOnSessionDate(
     sessionDateLocal: Date;
   },
 ): Promise<ActivateMemberPackOnSessionResult> {
-  const openEnrollment = await tx.memberPackEnrollment.findFirst({
-    where: {
-      memberId: input.memberId,
-      packId: input.packId,
-      status: { in: ["PENDING_START", "ACTIVE"] },
-    },
-    orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
-    select: { purchasedAt: true },
-  });
-  if (
-    openEnrollment &&
-    isPackStartBeforePurchase(input.sessionDateDb, openEnrollment.purchasedAt)
-  ) {
-    const packStartDate =
-      packStartDateLocal(input.currentPackStartedAt) ??
-      new Date(
-        input.sessionDateLocal.getFullYear(),
-        input.sessionDateLocal.getMonth(),
-        input.sessionDateLocal.getDate(),
-      );
-    return {
-      packStartedAt: input.currentPackStartedAt ?? input.sessionDateDb,
-      packStartDate,
-      packStartAdjusted: false,
-    };
-  }
-
   let packStartedAt = input.currentPackStartedAt;
   let packStartAdjusted = false;
 
@@ -105,38 +78,27 @@ export async function activateSelectedPackOnSessionDate(
   },
 ): Promise<void> {
   const isMemberPrimaryPack = input.memberPackId === input.packId;
-
-  // Inscription ouverte la plus ancienne (FIFO) — plancher = purchasedAt.
-  const openEnrollment = await tx.memberPackEnrollment.findFirst({
-    where: {
-      memberId: input.memberId,
-      packId: input.packId,
-      status: { in: ["PENDING_START", "ACTIVE"] },
-    },
-    orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
-    select: { packStartedAt: true, purchasedAt: true },
-  });
-
-  // Séance antérieure à l'achat de l'inscription : ne pas démarrer / reculer le pack.
-  if (
-    openEnrollment &&
-    isPackStartBeforePurchase(input.sessionDateDb, openEnrollment.purchasedAt)
-  ) {
-    return;
-  }
-
   let currentStartedAt = isMemberPrimaryPack ? input.memberPackStartedAt : null;
 
   if (!isMemberPrimaryPack) {
+    const enrollment = await tx.memberPackEnrollment.findFirst({
+      where: {
+        memberId: input.memberId,
+        packId: input.packId,
+        status: { in: ["PENDING_START", "ACTIVE"] },
+        packStartedAt: null,
+      },
+      orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
+      select: { packStartedAt: true },
+    });
     currentStartedAt =
-      openEnrollment?.packStartedAt ??
+      enrollment?.packStartedAt ??
       (
         await tx.memberPackEnrollment.findFirst({
           where: {
             memberId: input.memberId,
             packId: input.packId,
             status: { in: ["PENDING_START", "ACTIVE"] },
-            packStartedAt: { not: null },
           },
           orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
           select: { packStartedAt: true },
@@ -188,12 +150,65 @@ type PackForBalanceSync = {
   courseQuotas: { courseSlug: string; sessionCount: number }[];
 };
 
-/** Recalcule les soldes pack (quotas × achats − séances consommées). */
+/** Recalcule les soldes pack à partir des réservations consommées sur la période en cours. */
 export async function syncMemberPackBalancesFromReservations(
   tx: Prisma.TransactionClient,
   memberId: string,
   pack: PackForBalanceSync,
-  _packStartedAt: Date,
+  packStartedAt: Date,
 ): Promise<void> {
-  await recomputeMemberPackBalancesForPack(tx, { memberId, packId: pack.id });
+  await resetMemberPackBalancesForPack(tx, { memberId, packId: pack.id });
+
+  const packStartDate = packStartDateLocal(packStartedAt);
+  const expiresAt = packExpiresAtLocal(packStartedAt, pack.durationDays);
+  const isMixed = pack.courseQuotas.length > 0;
+
+  if (isMixed) {
+    const usedRows = packStartDate
+      ? await tx.reservation.findMany({
+          where: {
+            memberId,
+            OR: [{ status: { in: ["BOOKED", "ATTENDED"] } }, { status: "CANCELLED", packRefundedAt: null }],
+            sessionDate: { gte: packStartDate, ...(expiresAt ? { lte: expiresAt } : {}) },
+            planning: { courseSlug: { in: pack.courseQuotas.map((q) => q.courseSlug) } },
+          },
+          select: { planning: { select: { courseSlug: true } } },
+        })
+      : [];
+    const usedBySlug = new Map<string, number>();
+    for (const r of usedRows) {
+      usedBySlug.set(r.planning.courseSlug, (usedBySlug.get(r.planning.courseSlug) ?? 0) + 1);
+    }
+    await tx.memberPackBalance.deleteMany({ where: { memberId, packId: pack.id } });
+    await tx.memberPackBalance.createMany({
+      data: pack.courseQuotas.map((q) => ({
+        memberId,
+        packId: pack.id,
+        courseSlug: q.courseSlug,
+        remaining: Math.max(0, q.sessionCount - (usedBySlug.get(q.courseSlug) ?? 0)),
+      })),
+    });
+    return;
+  }
+
+  if (pack.sessionCount != null) {
+    const used = packStartDate
+      ? await tx.reservation.count({
+          where: {
+            memberId,
+            OR: [{ status: { in: ["BOOKED", "ATTENDED"] } }, { status: "CANCELLED", packRefundedAt: null }],
+            sessionDate: { gte: packStartDate, ...(expiresAt ? { lte: expiresAt } : {}) },
+          },
+        })
+      : 0;
+    await tx.memberPackBalance.deleteMany({ where: { memberId, packId: pack.id } });
+    await tx.memberPackBalance.create({
+      data: {
+        memberId,
+        packId: pack.id,
+        courseSlug: null,
+        remaining: Math.max(0, pack.sessionCount - used),
+      },
+    });
+  }
 }

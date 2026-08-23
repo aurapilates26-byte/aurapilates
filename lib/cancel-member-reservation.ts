@@ -1,6 +1,10 @@
 import { broadcastMemberBookingRefresh } from "@/lib/member-booking-stream";
 import { formatYmdPrismaDate, parseYmdLocal } from "@/lib/calendar-day";
-import { promoteNextWaitlistReservation } from "@/lib/member-pack-session-ledger";
+import {
+  creditMemberPackSession,
+  promoteNextWaitlistReservation,
+} from "@/lib/member-pack-session-ledger";
+import { reopenSingleSessionPackAfterFullRefund } from "@/lib/admin/member-pack-enrollment";
 import { isMemberCancellationRefundable } from "@/lib/studio-booking-rules";
 import { getStudioBookingRules } from "@/lib/studio-booking-rules-server";
 import { prisma } from "@/lib/prisma";
@@ -29,6 +33,13 @@ export async function cancelMemberReservation(params: {
     where: { id: reservationId, memberId },
     include: {
       planning: { select: { startTime: true, courseSlug: true } },
+      debitedPack: {
+        select: {
+          id: true,
+          sessionCount: true,
+          courseQuotas: { select: { courseSlug: true, sessionCount: true } },
+        },
+      },
     },
   });
 
@@ -114,6 +125,38 @@ export async function cancelMemberReservation(params: {
           };
         }
         return { ok: false as const, conflict: true as const };
+      }
+
+      const memberRow = await tx.member.findUnique({
+        where: { id: memberId },
+        select: {
+          packId: true,
+          pack: {
+            select: {
+              id: true,
+              sessionCount: true,
+              courseQuotas: { select: { courseSlug: true, sessionCount: true } },
+            },
+          },
+        },
+      });
+
+      const packToCredit =
+        reservation.debitedPack ??
+        (memberRow?.packId && memberRow.pack ? memberRow.pack : null);
+
+      if (wasBooked && refundable && reservation.packRefundedAt == null && packToCredit) {
+        await creditMemberPackSession(tx, {
+          memberId,
+          pack: packToCredit,
+          courseSlug: reservation.planning.courseSlug,
+        });
+        await reopenSingleSessionPackAfterFullRefund(tx, {
+          memberId,
+          packId: packToCredit.id,
+          sessionCount: packToCredit.sessionCount,
+          courseQuotas: packToCredit.courseQuotas,
+        });
       }
 
       if (wasBooked) {

@@ -3,28 +3,24 @@ import "server-only";
 import { Prisma, type MemberPackEnrollmentStatus } from "@prisma/client";
 import { formatYmdLocal, parseYmdToPrismaDate } from "@/lib/calendar-day";
 import { addPackDurationToStartDate } from "@/lib/pack-duration";
-import {
-  isPackStartBeforePurchase,
-  packExpiresAtLocal,
-  packStartDateLocal,
-} from "@/lib/member-pack-period";
+import { packExpiresAtLocal, packStartDateLocal } from "@/lib/member-pack-period";
 import { getEligibilityForPack } from "@/lib/pack-eligibility";
 import { prisma } from "@/lib/prisma";
-import { assignConsumedSessionsFifo } from "@/lib/admin/member-pack-fifo";
-import {
-  attributeConsumedSessionsGlobally,
-  type SessionAttributionEnrollment,
-} from "@/lib/admin/member-pack-session-attribution";
 
-/** Séances consommées = présence réelle uniquement (débit à la présence). */
 const CONSUMING_RESERVATION_STATUSES = {
-  status: "ATTENDED" as const,
-} satisfies Pick<Prisma.ReservationWhereInput, "status">;
+  OR: [
+    { status: { in: ["BOOKED", "ATTENDED"] as const } },
+    { status: "CANCELLED" as const, packRefundedAt: null },
+  ],
+} satisfies Pick<Prisma.ReservationWhereInput, "OR">;
 
-/** Affichage « séances consommées » — aligné sur ATTENDED. */
+/** Présence réelle ou annulation tardive — pour l'affichage « séances consommées ». */
 const DISPLAY_CONSUMED_RESERVATION_STATUSES = {
-  status: "ATTENDED" as const,
-} satisfies Pick<Prisma.ReservationWhereInput, "status">;
+  OR: [
+    { status: "ATTENDED" as const },
+    { status: "CANCELLED" as const, packRefundedAt: null },
+  ],
+} satisfies Pick<Prisma.ReservationWhereInput, "OR">;
 
 export async function closeOpenEnrollmentsForPack(
   tx: Prisma.TransactionClient,
@@ -48,8 +44,7 @@ export async function createPackEnrollmentAfterPayment(
   input: {
     memberId: string;
     packId: string;
-    /** Null = pack à crédit (aucun encaissement encore). */
-    packPaymentId: string | null;
+    packPaymentId: string;
     purchasedAt: Date;
   },
 ): Promise<string> {
@@ -61,13 +56,6 @@ export async function createPackEnrollmentAfterPayment(
       purchasedAt: input.purchasedAt,
       status: "PENDING_START",
     },
-  });
-  const { recomputeMemberPackBalancesForPack } = await import(
-    "@/lib/admin/member-pack-balance-recompute"
-  );
-  await recomputeMemberPackBalancesForPack(tx, {
-    memberId: input.memberId,
-    packId: input.packId,
   });
   return row.id;
 }
@@ -103,17 +91,20 @@ export async function syncActiveEnrollmentDates(
     }));
   if (!enrollment) return;
 
-  // Séance / début antérieur à l'achat : ne pas écrire (évite clamp → faux démarrage le jour d'achat).
-  if (isPackStartBeforePurchase(input.packStartedAt, enrollment.purchasedAt)) {
-    return;
-  }
+  // Ne jamais démarrer une inscription avant sa date d'achat (évite de coller le début du pack précédent sur le renouvellement).
+  const purchasedYmd = formatYmdLocal(enrollment.purchasedAt);
+  const startedYmd = formatYmdLocal(input.packStartedAt);
+  const clampedStart =
+    startedYmd < purchasedYmd
+      ? parseYmdToPrismaDate(purchasedYmd)!
+      : input.packStartedAt;
 
-  const packExpiresAt = addPackDurationToStartDate(input.packStartedAt, input.durationDays) ?? null;
+  const packExpiresAt = addPackDurationToStartDate(clampedStart, input.durationDays) ?? null;
 
   await tx.memberPackEnrollment.update({
     where: { id: enrollment.id },
     data: {
-      packStartedAt: input.packStartedAt,
+      packStartedAt: clampedStart,
       packExpiresAt,
       status: "ACTIVE",
       closedAt: null,
@@ -142,14 +133,9 @@ export async function consumeOldestOpenEnrollmentOnDebit(
       packStartedAt: null,
     },
     orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
-    select: { id: true, purchasedAt: true },
+    select: { id: true },
   });
   if (!unstarted) return;
-
-  // Séance antérieure à l'achat : ne pas démarrer ce pack sur une date impossible.
-  if (isPackStartBeforePurchase(input.sessionDateDb, unstarted.purchasedAt)) {
-    return;
-  }
 
   const packExpiresAt = addPackDurationToStartDate(input.sessionDateDb, input.durationDays) ?? null;
   await tx.memberPackEnrollment.update({
@@ -161,6 +147,105 @@ export async function consumeOldestOpenEnrollmentOnDebit(
       closedAt: null,
     },
   });
+}
+
+async function countPackConsumingReservations(
+  tx: Prisma.TransactionClient,
+  memberId: string,
+  packId: string,
+): Promise<number> {
+  return tx.reservation.count({
+    where: {
+      memberId,
+      AND: [
+        CONSUMING_RESERVATION_STATUSES,
+        {
+          OR: [
+            { debitedPackId: packId },
+            { debitedPackId: null, status: { in: ["BOOKED", "ATTENDED"] } },
+          ],
+        },
+      ],
+    },
+  });
+}
+
+/**
+ * Si plus aucune réservation ne consomme le pack, efface packStartedAt (inscription + membre)
+ * pour que « 1ʳᵉ réservation » redevienne « Pas encore démarré ».
+ */
+export async function resetPackStartWhenNoConsumption(
+  tx: Prisma.TransactionClient,
+  input: { memberId: string; packId: string; enrollmentId?: string },
+): Promise<boolean> {
+  const stillConsuming = await countPackConsumingReservations(tx, input.memberId, input.packId);
+  if (stillConsuming > 0) return false;
+
+  await tx.memberPackEnrollment.updateMany({
+    where: {
+      memberId: input.memberId,
+      packId: input.packId,
+      status: { in: ["PENDING_START", "ACTIVE"] },
+      packStartedAt: { not: null },
+      ...(input.enrollmentId ? { id: input.enrollmentId } : {}),
+    },
+    data: {
+      packStartedAt: null,
+      packExpiresAt: null,
+      status: "PENDING_START",
+      closedAt: null,
+    },
+  });
+
+  const member = await tx.member.findUnique({
+    where: { id: input.memberId },
+    select: { packId: true, packStartedAt: true },
+  });
+  if (member?.packId === input.packId && member.packStartedAt) {
+    await tx.member.update({
+      where: { id: input.memberId },
+      data: { packStartedAt: null },
+    });
+  }
+
+  return true;
+}
+
+/**
+ * Pack « 1 séance » : après remboursement intégral, efface packStartedAt pour que le pack
+ * ne reste pas « Terminé » (l'affichage / le solde traitent packStartedAt comme consommation).
+ */
+export async function reopenSingleSessionPackAfterFullRefund(
+  tx: Prisma.TransactionClient,
+  input: {
+    memberId: string;
+    packId: string;
+    sessionCount: number | null;
+    courseQuotas: { courseSlug: string; sessionCount: number }[];
+  },
+): Promise<boolean> {
+  const reset = await resetPackStartWhenNoConsumption(tx, {
+    memberId: input.memberId,
+    packId: input.packId,
+  });
+  if (!reset) return false;
+
+  if (input.courseQuotas.length > 0) return true;
+  if (input.sessionCount !== 1) return true;
+
+  await tx.memberPackBalance.deleteMany({
+    where: { memberId: input.memberId, packId: input.packId },
+  });
+  await tx.memberPackBalance.create({
+    data: {
+      memberId: input.memberId,
+      packId: input.packId,
+      courseSlug: null,
+      remaining: 1,
+    },
+  });
+
+  return true;
 }
 
 /** Backfill depuis pack_payments pour les adhérentes existantes (une fois par membre). */
@@ -253,29 +338,15 @@ export async function ensureMemberPackEnrollmentsBackfilled(memberId: string): P
 
         if (isCurrentPack && member.packStartedAt) {
           const durationDays = durationByPackId.get(packId) ?? null;
-          // Ne jamais hériter d'un début global antérieur à l'achat de cette inscription.
-          if (isPackStartBeforePurchase(member.packStartedAt, latest.purchasedAt)) {
-            await tx.memberPackEnrollment.update({
-              where: { id: latest.id },
-              data: {
-                packStartedAt: null,
-                packExpiresAt: null,
-                status: "PENDING_START",
-                closedAt: null,
-              },
-            });
-          } else {
-            const start = member.packStartedAt;
-            const packExpiresAt = addPackDurationToStartDate(start, durationDays);
-            await tx.memberPackEnrollment.update({
-              where: { id: latest.id },
-              data: {
-                packStartedAt: start,
-                packExpiresAt: packExpiresAt ?? null,
-                status: "ACTIVE",
-              },
-            });
-          }
+          const packExpiresAt = addPackDurationToStartDate(member.packStartedAt, durationDays);
+          await tx.memberPackEnrollment.update({
+            where: { id: latest.id },
+            data: {
+              packStartedAt: member.packStartedAt,
+              packExpiresAt: packExpiresAt ?? null,
+              status: "ACTIVE",
+            },
+          });
         } else if (!isCurrentPack || !member.packStartedAt) {
           if (sorted.length > 1 || !isCurrentPack) {
             const lastStatus = isCurrentPack ? "PENDING_START" : "REPLACED";
@@ -455,99 +526,6 @@ function enrollmentConsumedWhere(input: {
 }
 
 /**
- * Attribution FIFO globale : chaque séance consommée est rattachée à une seule inscription.
- * Les séances sans `debitedPackId` ne sont plus comptées sur tous les packs en parallèle.
- */
-export async function allocateConsumedSessionsForMemberEnrollments(input: {
-  memberId: string;
-  enrollmentsAsc: {
-    id: string;
-    packId: string;
-    pack: {
-      courseQuotas: { courseSlug: string; sessionCount: number }[];
-      sessionCount: number | null;
-      category?: string | null;
-    };
-  }[];
-  /** `true` = soldes. Les deux modes excluent BOOKED (débit à la présence seulement). */
-  forBalance?: boolean;
-  tx?: Prisma.TransactionClient;
-}): Promise<Map<string, { byCourse: Map<string, number>; total: number }>> {
-  if (input.enrollmentsAsc.length === 0) return new Map();
-
-  const db = input.tx ?? prisma;
-  const statusFilter = input.forBalance
-    ? CONSUMING_RESERVATION_STATUSES
-    : DISPLAY_CONSUMED_RESERVATION_STATUSES;
-
-  const rows = await db.reservation.findMany({
-    where: {
-      memberId: input.memberId,
-      ...statusFilter,
-    },
-    orderBy: [{ sessionDate: "asc" }, { createdAt: "asc" }],
-    select: {
-      debitedPackId: true,
-      planning: { select: { courseSlug: true } },
-    },
-  });
-
-  const enrollmentsAsc: SessionAttributionEnrollment[] = input.enrollmentsAsc.map((e) => ({
-    id: e.id,
-    packId: e.packId,
-    courseQuotas: e.pack.courseQuotas,
-    sessionCount: e.pack.sessionCount,
-    category: e.pack.category,
-  }));
-
-  return attributeConsumedSessionsGlobally({
-    enrollmentsAsc,
-    sessionsAsc: rows.map((row) => ({
-      courseSlug: row.planning.courseSlug,
-      debitedPackId: row.debitedPackId,
-    })),
-  });
-}
-
-/**
- * @deprecated Préférer `allocateConsumedSessionsForMemberEnrollments` (attribution globale).
- */
-export async function allocateConsumedSessionsFifoForPackEnrollments(input: {
-  memberId: string;
-  packId: string;
-  enrollmentsAsc: { id: string }[];
-  courseQuotas: { courseSlug: string; sessionCount: number }[];
-  sessionCount: number | null;
-  category?: string | null;
-}): Promise<Map<string, { byCourse: Map<string, number>; total: number }>> {
-  const fullEnrollments = await prisma.memberPackEnrollment.findMany({
-    where: { memberId: input.memberId },
-    orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
-    include: {
-      pack: {
-        select: {
-          courseQuotas: { select: { courseSlug: true, sessionCount: true } },
-          sessionCount: true,
-          category: true,
-        },
-      },
-    },
-  });
-
-  const global = await allocateConsumedSessionsForMemberEnrollments({
-    memberId: input.memberId,
-    enrollmentsAsc: fullEnrollments,
-  });
-
-  const result = new Map<string, { byCourse: Map<string, number>; total: number }>();
-  for (const enrollment of input.enrollmentsAsc) {
-    const bucket = global.get(enrollment.id);
-    if (bucket) result.set(enrollment.id, bucket);
-  }
-  return result;
-}
-
-/**
  * Compte les séances consommées sur la période d'une inscription pack.
  * `periodStart` null = pas de borne basse (présences historiques avant la date d'achat).
  * `periodEndExclusive` = début du renouvellement suivant (`packStartedAt` / achat) ou clôture.
@@ -627,24 +605,9 @@ export async function findFirstEnrollmentConsumedSessionDate(input: {
   courseQuotas: { courseSlug: string; sessionCount: number }[];
   periodStart: Date | null;
   periodEndExclusive: Date | null;
-  /** Plancher obligatoire (date d'achat) : ignore les séances héritées d'un pack précédent. */
-  purchasedAt?: Date | null;
 }): Promise<Date | null> {
-  const purchaseFloor = input.purchasedAt ? formatYmdLocal(input.purchasedAt) : null;
-  const periodFloor = input.periodStart ? formatYmdLocal(input.periodStart) : null;
-  const effectiveStartYmd =
-    purchaseFloor && periodFloor
-      ? purchaseFloor > periodFloor
-        ? purchaseFloor
-        : periodFloor
-      : (purchaseFloor ?? periodFloor);
-  const periodStart = effectiveStartYmd ? parseYmdToPrismaDate(effectiveStartYmd) : input.periodStart;
-
   const row = await prisma.reservation.findFirst({
-    where: enrollmentConsumedWhere({
-      ...input,
-      periodStart,
-    }),
+    where: enrollmentConsumedWhere(input),
     orderBy: [{ sessionDate: "asc" }, { createdAt: "asc" }],
     select: { sessionDate: true },
   });
@@ -660,7 +623,6 @@ export async function backfillEnrollmentStartFromFirstConsumption(input: {
   durationDays: string | null;
   periodStart: Date | null;
   periodEndExclusive: Date | null;
-  purchasedAt?: Date | null;
 }): Promise<{ packStartedAt: Date; packExpiresAt: Date | null } | null> {
   const firstSessionDate = await findFirstEnrollmentConsumedSessionDate({
     memberId: input.memberId,
@@ -668,12 +630,8 @@ export async function backfillEnrollmentStartFromFirstConsumption(input: {
     courseQuotas: input.courseQuotas,
     periodStart: input.periodStart,
     periodEndExclusive: input.periodEndExclusive,
-    purchasedAt: input.purchasedAt,
   });
   if (!firstSessionDate) return null;
-  if (input.purchasedAt && isPackStartBeforePurchase(firstSessionDate, input.purchasedAt)) {
-    return null;
-  }
 
   const packExpiresAt = addPackDurationToStartDate(firstSessionDate, input.durationDays) ?? null;
   await prisma.memberPackEnrollment.update({

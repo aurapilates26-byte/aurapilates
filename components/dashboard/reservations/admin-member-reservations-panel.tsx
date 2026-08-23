@@ -18,7 +18,13 @@ import {
   type ReservationAdminListItemData,
 } from "@/components/dashboard/reservations/reservation-admin-list-item";
 import { reservationStatusBadgeClass } from "@/components/dashboard/reservations/reservation-status-styles";
+import {
+  canEditMemberOwnedPack,
+  EditMemberPackEnrollmentDialog,
+  PackEnrollmentEditButton,
+} from "@/components/dashboard/edit-member-pack-enrollment-dialog";
 import { PaymentMethodBadge } from "@/components/dashboard/payment-method-badge";
+import type { MemberOwnedPackDto } from "@/lib/admin/member-owned-packs";
 import {
   EMPTY_MEMBER_OWNED_PACKS,
   subscribeMemberOwnedPacksChanged,
@@ -70,16 +76,24 @@ type AdminMemberReservationsPanelProps = {
   reloadToken?: number;
   /** Slugs des quotas cours du pack (ex. reformer + mat) pour le détail Historique. */
   courseQuotaSlugs?: string[];
+  personalDiscount?: {
+    type: "PERCENT" | "AMOUNT";
+    value: number;
+    reason?: string | null;
+  } | null;
   onUpcomingChange?: (items: AdminMemberReservationItem[]) => void;
   onReservationsMutated?: () => void;
+  onPackEnrollmentSaved?: () => void;
 };
 
 export function AdminMemberReservationsPanel({
   memberId,
   reloadToken = 0,
   courseQuotaSlugs,
+  personalDiscount = null,
   onUpcomingChange,
   onReservationsMutated,
+  onPackEnrollmentSaved,
 }: AdminMemberReservationsPanelProps) {
   const { toast } = useToast();
   const [tab, setTab] = useState<ReservationsListTab>("upcoming");
@@ -92,6 +106,7 @@ export function AdminMemberReservationsPanel({
   const [loading, setLoading] = useState(true);
   const [actionKey, setActionKey] = useState<string | null>(null);
   const [reservationToCancel, setReservationToCancel] = useState<AdminMemberReservationItem | null>(null);
+  const [packToEdit, setPackToEdit] = useState<MemberOwnedPackDto | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -239,7 +254,12 @@ export function AdminMemberReservationsPanel({
                       {pack.totalPaidDinars > 0 ? ` · ${pack.totalPaidDinars} DT` : ""}
                     </p>
                   </div>
-                  <PaymentMethodBadge method={pack.packPaymentMethod} fallback="Paiement non renseigné" />
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <PaymentMethodBadge method={pack.packPaymentMethod} fallback="Paiement non renseigné" />
+                    {canEditMemberOwnedPack(pack) ? (
+                      <PackEnrollmentEditButton onClick={() => setPackToEdit(pack)} />
+                    ) : null}
+                  </div>
                 </div>
                 <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
                   <div className="rounded-lg border border-brand-medium/15 bg-zinc-50/70 px-3 py-2">
@@ -330,6 +350,15 @@ export function AdminMemberReservationsPanel({
           setReservationToCancel(null);
         }}
         onConfirm={() => void handleCancel()}
+      />
+
+      <EditMemberPackEnrollmentDialog
+        open={Boolean(packToEdit)}
+        memberId={memberId}
+        pack={packToEdit}
+        personalDiscount={personalDiscount}
+        onClose={() => setPackToEdit(null)}
+        onSaved={onPackEnrollmentSaved}
       />
     </section>
   );

@@ -6,9 +6,10 @@ import {
   formatYmdLocal,
   formatYmdPrismaDate,
   parseYmdToPrismaDate,
+  startOfLocalToday,
 } from "@/lib/calendar-day";
 import { getAdminOperationalPlanningSlotsForDate, type OperationalPlanningSlot } from "@/lib/admin/planning-operational-slots";
-import { minus15Minutes, studioNowClock } from "@/lib/admin/presence-window";
+import { localNowTimeString, minus15Minutes } from "@/lib/admin/presence-window";
 import { repairAttendedReservationsWithoutAttendance } from "@/lib/ensure-reservation-attendance";
 import { prisma } from "@/lib/prisma";
 
@@ -260,9 +261,11 @@ export async function GET(request: Request) {
     return errorResponse("Membre introuvable", 404);
   }
 
-  const { ymd: sessionDateYmd, timeHm: nowTime } = studioNowClock();
+  const sessionDate = startOfLocalToday();
+  const sessionDateYmd = formatYmdLocal(sessionDate);
   const sessionDateDb = parseYmdToPrismaDate(sessionDateYmd);
   if (!sessionDateDb) return errorResponse("Date invalide", 400);
+  const nowTime = localNowTimeString();
 
   const operationalToday = await getAdminOperationalPlanningSlotsForDate(sessionDateYmd);
   const memberLookupId = qr?.assignedMemberId ?? member?.id ?? null;

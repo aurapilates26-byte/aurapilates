@@ -4,12 +4,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { DashboardHeader } from "@/components/dashboard/header";
 import { useToast } from "@/components/ui/toast-provider";
 import { planningLevelLabelFr } from "@/lib/planning-public-labels";
-import {
-  getPresenceSessionPhase,
-  isPresenceMarkingAllowed,
-  minus15Minutes,
-  studioNowClock,
-} from "@/lib/admin/presence-window";
 import { Input } from "@/components/ui";
 
 type RosterMember = {
@@ -97,21 +91,28 @@ const statusLabels: Record<string, string> = {
 const presenceBtnBase =
   "inline-flex h-9 shrink-0 items-center justify-center rounded-full px-3.5 text-xs font-semibold leading-none transition";
 
-/** Horloge studio (Tunis) rafraîchie côté client — pas l'heure du PC (ex. CEST ≠ Tunis). */
-function useStudioNowClock(refreshMs = 5_000): { ymd: string; timeHm: string } {
-  const [clock, setClock] = useState(() => studioNowClock());
-  useEffect(() => {
-    const tick = () => setClock(studioNowClock());
-    tick();
-    const id = window.setInterval(tick, refreshMs);
-    const onFocus = () => tick();
-    window.addEventListener("focus", onFocus);
-    return () => {
-      window.clearInterval(id);
-      window.removeEventListener("focus", onFocus);
-    };
-  }, [refreshMs]);
-  return clock;
+function minus15(clock: string) {
+  const [hhRaw, mmRaw] = clock.split(":");
+  const hh = Number(hhRaw ?? 0);
+  const mm = Number(mmRaw ?? 0);
+  const total = hh * 60 + mm - 15;
+  const day = 24 * 60;
+  const clamped = ((total % day) + day) % day;
+  const outH = String(Math.floor(clamped / 60)).padStart(2, "0");
+  const outM = String(clamped % 60).padStart(2, "0");
+  return `${outH}:${outM}`;
+}
+
+function getSessionPhase(
+  startTime: string,
+  endTime: string,
+  nowTime: string | undefined,
+): "upcoming" | "active" | "ended" {
+  if (!nowTime) return "active";
+  const opensAt = minus15(startTime);
+  if (nowTime < opensAt) return "upcoming";
+  if (endTime >= nowTime) return "active";
+  return "ended";
 }
 
 const sessionPhaseLabels: Record<"upcoming" | "active" | "ended", string> = {
@@ -163,33 +164,63 @@ function CheckIcon({ className }: { className?: string }) {
   );
 }
 
+function TrashIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className ?? "h-4 w-4"} fill="currentColor" aria-hidden>
+      <path d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z" />
+    </svg>
+  );
+}
+
 function PresenceMarkButton({
   isPresent,
   canMark,
   loading,
+  deleting,
   markingLocked,
   opensAt,
+  memberName,
   onMark,
+  onUnmark,
 }: {
   isPresent: boolean;
   canMark: boolean;
   loading: boolean;
+  deleting: boolean;
   markingLocked: boolean;
   opensAt?: string;
+  memberName: string;
   onMark: () => void;
+  onUnmark: () => void;
 }) {
   if (isPresent) {
     return (
-      <span
-        className={`${presenceBtnBase} gap-1.5 border border-emerald-600 bg-emerald-50 text-emerald-800`}
-        role="status"
-        aria-label="Présente"
-      >
-        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-600 text-white">
-          <CheckIcon className="h-3 w-3" />
+      <div className="flex items-center gap-2">
+        <span
+          className={`${presenceBtnBase} gap-1.5 border border-emerald-600 bg-emerald-50 text-emerald-800`}
+          role="status"
+          aria-label="Présente"
+        >
+          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-600 text-white">
+            <CheckIcon className="h-3 w-3" />
+          </span>
+          Présente
         </span>
-        Présente
-      </span>
+        <button
+          type="button"
+          disabled={deleting || loading}
+          onClick={onUnmark}
+          aria-label={`Supprimer la présence de ${memberName}`}
+          title="Supprimer la présence"
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-red-200 bg-red-50 text-red-700 transition hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {deleting ? (
+            <span className="text-[10px] font-semibold">…</span>
+          ) : (
+            <TrashIcon className="h-4 w-4" />
+          )}
+        </button>
+      </div>
     );
   }
 
@@ -221,8 +252,6 @@ function PresenceMarkButton({
 
 export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId: string }) {
   const { toast } = useToast();
-  const studioClock = useStudioNowClock();
-  const liveNowTime = studioClock.timeHm;
   const [qrPublicId, setQrPublicId] = useState(initialQrPublicId);
   const [memberNameFilter, setMemberNameFilter] = useState("");
   const [memberPhoneFilter, setMemberPhoneFilter] = useState("");
@@ -238,6 +267,7 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [markingId, setMarkingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const suggestTimer = useRef<number | null>(null);
 
   const fetchRosterCurrentSlot = useCallback(async () => {
@@ -429,18 +459,29 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
     };
   }, [memberNameFilter, memberPhoneFilter, qrPublicId, runManualSearch]);
 
-  const presenceOpensAt = useCallback((startTime: string) => minus15Minutes(startTime), []);
+  const presenceOpensAt = useCallback((startTime: string) => minus15(startTime), []);
 
   const todayClasses = roster?.classes ?? [];
 
   const canMarkInSession = useCallback(
     (startTime: string, status: RosterRow["status"]) => {
       if (status !== "BOOKED" && status !== "WAITLIST") return false;
-      if (!isPresenceMarkingAllowed(startTime, liveNowTime)) return false;
+      const opensAt = presenceOpensAt(startTime);
+      if (roster?.nowTime && roster.nowTime < opensAt) return false;
       return true;
     },
-    [liveNowTime],
+    [presenceOpensAt, roster?.nowTime],
   );
+
+  const refreshRosterAfterPresenceChange = useCallback(async () => {
+    if (qrPublicId.trim()) {
+      await fetchRosterByQr(qrPublicId.trim());
+    } else if (manualMemberId) {
+      await fetchRosterByMember(manualMemberId);
+    } else {
+      await fetchRosterCurrentSlot();
+    }
+  }, [fetchRosterByMember, fetchRosterByQr, fetchRosterCurrentSlot, manualMemberId, qrPublicId]);
 
   const markPresent = async (reservationId: string) => {
     setMarkingId(reservationId);
@@ -474,13 +515,7 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
           ? "Ce membre était déjà marqué présent pour ce créneau."
           : "Check-in enregistré et réservation mise à jour.",
       });
-      if (qrPublicId.trim()) {
-        await fetchRosterByQr(qrPublicId.trim());
-      } else if (manualMemberId) {
-        await fetchRosterByMember(manualMemberId);
-      } else {
-        await fetchRosterCurrentSlot();
-      }
+      await refreshRosterAfterPresenceChange();
     } catch (e) {
       toast({
         variant: "error",
@@ -489,6 +524,39 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
       });
     } finally {
       setMarkingId(null);
+    }
+  };
+
+  const removePresence = async (reservationId: string, memberName: string) => {
+    setDeletingId(reservationId);
+    try {
+      const res = await fetch("/api/admin/presence/mark", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ reservationId }),
+      });
+      const data = (await res.json().catch(() => null)) as {
+        error?: string;
+        result?: { packCredited?: boolean };
+      };
+      if (!res.ok) throw new Error(data?.error ?? "Suppression impossible.");
+      toast({
+        variant: "success",
+        title: "Présence supprimée",
+        description: data.result?.packCredited
+          ? `${memberName} supprimée · 1 séance rendue au pack.`
+          : `${memberName} supprimée de la séance.`,
+      });
+      await refreshRosterAfterPresenceChange();
+    } catch (e) {
+      toast({
+        variant: "error",
+        title: "Erreur",
+        description: e instanceof Error ? e.message : "Erreur.",
+      });
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -553,14 +621,6 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
           {selectedMember && inputsMatchSelectedMember()
             ? "Membre sélectionné. Modifiez les champs ou cliquez sur Réinitialiser pour une nouvelle recherche."
             : "Saisissez au moins 2 caractères : les suggestions apparaissent pendant la saisie."}
-        </p>
-        <p className="mt-2 text-xs font-medium text-brand-dark/80">
-          Heure studio (Tunis) :{" "}
-          <span className="font-semibold tabular-nums text-brand-dark">{liveNowTime}</span>
-          <span className="font-normal text-brand-dark/55">
-            {" "}
-            · le marquage suit cette heure, pas celle de l&apos;horloge Windows
-          </span>
         </p>
 
         {selectedMember && inputsMatchSelectedMember() ? (
@@ -636,9 +696,9 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
             ) : null}
 
             {todayClasses.map((classItem) => {
-              const phase = getPresenceSessionPhase(classItem.startTime, classItem.endTime, liveNowTime);
+              const phase = getSessionPhase(classItem.startTime, classItem.endTime, roster?.nowTime);
               const opensAt = presenceOpensAt(classItem.startTime);
-              const markingLocked = !isPresenceMarkingAllowed(classItem.startTime, liveNowTime);
+              const markingLocked = Boolean(roster?.nowTime && roster.nowTime < opensAt);
 
               return (
                 <section
@@ -667,9 +727,8 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                     </p>
                     {markingLocked ? (
                       <div className="rounded-lg border border-sky-200 bg-sky-50/80 px-3 py-2 text-xs leading-relaxed text-sky-950">
-                        Heure studio <span className="font-semibold tabular-nums">{liveNowTime}</span> — marquage
-                        disponible à partir de <span className="font-semibold">{opensAt}</span> (15 min avant{" "}
-                        {classItem.startTime}).
+                        Marquage disponible à partir de{" "}
+                        <span className="font-semibold">{opensAt}</span> (15 min avant le début du cours).
                       </div>
                     ) : null}
                     <div className="flex flex-wrap items-center gap-3 text-xs text-brand-dark/70">
@@ -711,6 +770,8 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                         const isScannedMember = roster?.scannedMember?.id === row.member.id;
                         const canMark = canMarkInSession(classItem.startTime, row.status);
                         const isPresent = row.status === "ATTENDED";
+                        const memberName =
+                          `${row.member.firstName ?? ""} ${row.member.lastName ?? ""}`.trim() || "Membre";
 
                         return (
                           <li
@@ -721,7 +782,7 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                           >
                             <div className="w-full">
                               <p className="font-medium text-brand-dark">
-                                {`${row.member.firstName ?? ""} ${row.member.lastName ?? ""}`.trim() || "Membre"}
+                                {memberName}
                                 {isScannedMember ? (
                                   <span className="ml-2 text-xs font-semibold text-brand-dark/70">(scannée)</span>
                                 ) : null}
@@ -742,9 +803,12 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                                 isPresent={isPresent}
                                 canMark={canMark}
                                 loading={markingId === row.id}
+                                deleting={deletingId === row.id}
                                 markingLocked={markingLocked}
                                 opensAt={opensAt}
+                                memberName={memberName}
                                 onMark={() => void markPresent(row.id)}
+                                onUnmark={() => void removePresence(row.id, memberName)}
                               />
                             </div>
                           </li>

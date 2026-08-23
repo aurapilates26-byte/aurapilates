@@ -1,6 +1,7 @@
 /** Ligne du journal comptable mensuel (tri chronologique). */
 export type CaisseLedgerKind =
   | "INCOME_PACK"
+  | "INCOME_PROSPECT"
   | "EXPENSE_COACH_SESSION"
   | "EXPENSE_COACH_MONTHLY"
   | "EXPENSE_MANUAL_FIXED"

@@ -1,28 +1,23 @@
 import "server-only";
 
-import { Prisma, type MemberPackEnrollmentStatus } from "@prisma/client";
+import type { MemberPackEnrollmentStatus, Prisma } from "@prisma/client";
 import { startOfLocalToday, formatYmdLocal, parseYmdToPrismaDate } from "@/lib/calendar-day";
 import {
-  allocateConsumedSessionsForMemberEnrollments,
   backfillEnrollmentStartFromFirstConsumption,
   countEnrollmentConsumedSessionsByCourseInPeriod,
   countEnrollmentConsumedSessionsInPeriod,
   ensureMemberPackEnrollmentsBackfilled,
   findFirstEnrollmentConsumedSessionDate,
   getEnrollmentPaymentTotals,
+  reopenSingleSessionPackAfterFullRefund,
+  resetPackStartWhenNoConsumption,
 } from "@/lib/admin/member-pack-enrollment";
 import {
-  recomputeAllMemberPackBalancesForMember,
-  recomputeMemberPackBalancesForPack,
-} from "@/lib/admin/member-pack-balance-recompute";
-import { resetMemberPackBalancesForPack } from "@/lib/admin/member-pack-renewal";
+  resetMemberPackBalancesForPack,
+} from "@/lib/admin/member-pack-renewal";
 import { addPackDurationToStartDate } from "@/lib/pack-duration";
 import type { PackPaymentMethodValue } from "@/lib/pack-payment-method";
 import { courseLabel } from "@/lib/course-labels";
-import {
-  clampPackStartToPurchasedAt,
-  isPackStartBeforePurchase,
-} from "@/lib/member-pack-period";
 import { prisma } from "@/lib/prisma";
 
 export type MemberOwnedPackStatus = "active" | "expired" | "pending" | "replaced";
@@ -64,23 +59,22 @@ async function migratePendingPacksToParallel(
   });
 
   for (const row of pending) {
-    await recomputeMemberPackBalancesForPack(tx, { memberId, packId: row.packId });
+    await resetMemberPackBalancesForPack(tx, { memberId, packId: row.packId });
     await tx.memberPendingPack.delete({ where: { id: row.id } });
   }
 }
 
-/** Ajoute un pack sans écraser le solde des achats déjà présents du même catalogue. */
+/** Ajoute un pack sans retirer les soldes des packs déjà actifs. */
 export async function addParallelMemberPack(
   tx: Prisma.TransactionClient,
   input: { memberId: string; packId: string },
 ): Promise<void> {
   await migratePendingPacksToParallel(tx, input.memberId);
+  await resetMemberPackBalancesForPack(tx, input);
   await tx.member.update({
     where: { id: input.memberId },
     data: { packId: input.packId, packStartedAt: null },
   });
-  // Solde = quotas × nombre d'inscriptions (recalculé après création d'enrollment côté paiement).
-  await recomputeMemberPackBalancesForPack(tx, input);
 }
 
 function mapEnrollmentStatusToDisplay(
@@ -132,20 +126,22 @@ type EnrollmentPeriodRow = {
   purchasedAt: Date;
   closedAt: Date | null;
   packStartedAt: Date | null;
+  status?: string;
 };
 
 /**
  * Bornes de consommation d'une inscription (FIFO par date d'achat).
  * - Fin : date d'achat du renouvellement suivant du même pack catalogue (pas un `packStartedAt`
  *   antérieur à cet achat — sinon le renouvellement « vole » les séances du pack précédent).
- * - Début : `packStartedAt` s'il est cohérent (>= achat pour un renouvellement) ; sinon `purchasedAt`
- *   pour un renouvellement ; sinon aucune borne basse pour le 1ᵉʳ pack (historique).
+ * - Début : jamais avant `purchasedAt`. Pack pas encore démarré → borne = achat (évite d'absorber
+ *   l'historique d'un autre pack après une modification admin).
  */
 function getEnrollmentPeriodBounds(
   enrollment: EnrollmentPeriodRow,
   enrollmentsAsc: EnrollmentPeriodRow[],
 ): { periodStart: Date | null; periodEndExclusive: Date | null } {
   const index = enrollmentsAsc.findIndex((row) => row.id === enrollment.id);
+  const purchased = toPrismaDateLocal(enrollment.purchasedAt);
 
   let periodEndExclusive: Date | null = null;
   for (let i = index + 1; i < enrollmentsAsc.length; i++) {
@@ -160,7 +156,6 @@ function getEnrollmentPeriodBounds(
     periodEndExclusive = toPrismaDateLocal(enrollment.closedAt);
   }
 
-  const purchased = toPrismaDateLocal(enrollment.purchasedAt);
   let hasPreviousSamePack = false;
   for (let i = index - 1; i >= 0; i--) {
     if (enrollmentsAsc[i]!.packId === enrollment.packId) {
@@ -170,14 +165,15 @@ function getEnrollmentPeriodBounds(
   }
 
   let periodStart: Date | null = null;
-  if (hasPreviousSamePack) {
-    // Frontière basse = date d'achat (séances du jour d'achat → renouvellement).
+  if (hasPreviousSamePack || enrollment.status === "PENDING_START") {
+    // Renouvellement ou pack non démarré : borner à l'achat (évite d'absorber un autre historique).
     periodStart = purchased;
   } else if (enrollment.packStartedAt) {
     const started = toPrismaDateLocal(enrollment.packStartedAt);
-    // Ne jamais ouvrir la fenêtre avant l'achat (évite l'héritage d'un packStartedAt global).
-    periodStart = started.getTime() < purchased.getTime() ? purchased : started;
+    // Ne jamais compter avant la date d'achat (ex. packStartedAt hérité / erroné).
+    periodStart = started.getTime() >= purchased.getTime() ? started : purchased;
   }
+  // sinon 1ᵉʳ pack ACTIVE sans début : pas de borne basse (historique legacy)
 
   return { periodStart, periodEndExclusive };
 }
@@ -209,48 +205,44 @@ async function repairEnrollmentStartsBeforePurchase(memberId: string): Promise<v
     purchasedAt: e.purchasedAt,
     closedAt: e.closedAt,
     packStartedAt: e.packStartedAt,
+    status: e.status,
   }));
 
   for (const enrollment of enrollments) {
     if (!enrollment.packStartedAt) continue;
-    if (!isPackStartBeforePurchase(enrollment.packStartedAt, enrollment.purchasedAt)) continue;
-
+    const started = toPrismaDateLocal(enrollment.packStartedAt);
     const purchased = toPrismaDateLocal(enrollment.purchasedAt);
-    // Toujours chercher la 1ʳᵉ conso à partir de l'achat — jamais depuis le faux packStartedAt hérité.
-    const { periodEndExclusive } = getEnrollmentPeriodBounds(enrollment, enrollmentsAsc);
+    if (started.getTime() >= purchased.getTime()) continue;
+
+    const { periodStart, periodEndExclusive } = getEnrollmentPeriodBounds(enrollment, enrollmentsAsc);
     const firstSessionDate = await findFirstEnrollmentConsumedSessionDate({
       memberId,
       packId: enrollment.packId,
       courseQuotas: enrollment.pack.courseQuotas,
-      periodStart: purchased,
+      periodStart,
       periodEndExclusive,
-      purchasedAt: enrollment.purchasedAt,
     });
 
-    if (firstSessionDate && !isPackStartBeforePurchase(firstSessionDate, enrollment.purchasedAt)) {
-      const start = clampPackStartToPurchasedAt(firstSessionDate, enrollment.purchasedAt);
+    if (firstSessionDate) {
       const packExpiresAt =
-        addPackDurationToStartDate(start, enrollment.pack.durationDays) ?? null;
+        addPackDurationToStartDate(firstSessionDate, enrollment.pack.durationDays) ?? null;
       await prisma.memberPackEnrollment.update({
         where: { id: enrollment.id },
         data: {
-          packStartedAt: start,
+          packStartedAt: firstSessionDate,
           packExpiresAt,
           status: enrollment.status === "PENDING_START" ? "ACTIVE" : enrollment.status,
-          closedAt: enrollment.status === "REPLACED" || enrollment.status === "EXPIRED"
-            ? enrollment.closedAt
-            : null,
+          closedAt: null,
         },
       });
     } else {
-      const reopen =
-        enrollment.status === "ACTIVE" || enrollment.status === "PENDING_START";
       await prisma.memberPackEnrollment.update({
         where: { id: enrollment.id },
         data: {
           packStartedAt: null,
           packExpiresAt: null,
-          ...(reopen ? { status: "PENDING_START" as const, closedAt: null } : {}),
+          status: "PENDING_START",
+          closedAt: null,
         },
       });
     }
@@ -346,12 +338,8 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
       a.createdAt.getTime() - b.createdAt.getTime(),
   );
 
-  // Affichage = attribution FIFO (réservations). Pas de recalcul des soldes ici :
-  // évite les courses Serializable avec présence / réservation (sync uniquement avant débit).
-  const fifoByEnrollmentId = await allocateConsumedSessionsForMemberEnrollments({
-    memberId,
-    enrollmentsAsc,
-  });
+  // Recalcule les soldes = somme des séances restantes sur les inscriptions ouvertes du même pack.
+  await syncBalancesFromOpenEnrollments(memberId, enrollmentsAsc);
 
   const items: MemberOwnedPackDto[] = [];
 
@@ -376,28 +364,46 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
     let remainingSessions: number;
     let courseQuotaRemaining: MemberOwnedPackDto["courseQuotaRemaining"] = [];
 
-    // Pack « 1 séance » : le débit pose packStartedAt → immédiatement terminé (évite les bornes FIFO incohérentes).
+    // Pack « 1 séance » : packStartedAt seul ne suffit pas (ex. présence puis remboursement).
     if (totalSessions === 1 && pack.courseQuotas.length === 0 && packStartedAt) {
-      consumedSessions = 1;
-      remainingSessions = 0;
-      if (!packExpiresAt && pack.durationDays) {
-        packExpiresAt = addPackDurationToStartDate(packStartedAt, pack.durationDays);
+      const { periodStart, periodEndExclusive } = getEnrollmentPeriodBounds(enrollment, enrollmentsAsc);
+      const consumedRaw = await countEnrollmentConsumedSessionsInPeriod({
+        memberId,
+        packId: pack.id,
+        courseQuotas: [],
+        sessionCount: pack.sessionCount,
+        category: pack.category,
+        periodStart,
+        periodEndExclusive,
+      });
+      if (consumedRaw > 0) {
+        consumedSessions = 1;
+        remainingSessions = 0;
+        if (!packExpiresAt && pack.durationDays) {
+          packExpiresAt = addPackDurationToStartDate(packStartedAt, pack.durationDays);
+        }
+      } else {
+        // Séance rendue au pack → réaffichage comme non démarré / disponible.
+        consumedSessions = 0;
+        remainingSessions = 1;
+        packStartedAt = null;
+        packExpiresAt = null;
+        if (enrollmentStatus === "ACTIVE") {
+          enrollmentStatus = "PENDING_START";
+        }
+        await prisma.$transaction(async (tx) => {
+          await reopenSingleSessionPackAfterFullRefund(tx, {
+            memberId,
+            packId: pack.id,
+            sessionCount: pack.sessionCount,
+            courseQuotas: pack.courseQuotas,
+          });
+        });
       }
     } else {
       const { periodStart, periodEndExclusive } = getEnrollmentPeriodBounds(enrollment, enrollmentsAsc);
-      const fifo = fifoByEnrollmentId.get(enrollment.id);
 
-      if (fifo) {
-        if (pack.courseQuotas.length > 0) {
-          courseQuotaRemaining = courseQuotaUsageLines(pack, fifo.byCourse);
-          const consumedRaw = courseQuotaRemaining.reduce((sum, q) => sum + q.consumed, 0);
-          consumedSessions =
-            totalSessions != null ? Math.min(consumedRaw, totalSessions) : consumedRaw;
-        } else {
-          consumedSessions =
-            totalSessions != null ? Math.min(fifo.total, totalSessions) : fifo.total;
-        }
-      } else if (pack.courseQuotas.length > 0) {
+      if (pack.courseQuotas.length > 0) {
         const consumedByCourse = await countEnrollmentConsumedSessionsByCourseInPeriod({
           memberId,
           packId: pack.id,
@@ -428,7 +434,18 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
       remainingSessions =
         totalSessions != null ? Math.max(0, totalSessions - consumedSessions) : 0;
 
-      if (!packStartedAt && consumedSessions > 0) {
+      if (packStartedAt && consumedSessions <= 0) {
+        packStartedAt = null;
+        packExpiresAt = null;
+        enrollmentStatus = "PENDING_START";
+        await prisma.$transaction(async (tx) => {
+          await resetPackStartWhenNoConsumption(tx, {
+            memberId,
+            packId: pack.id,
+            enrollmentId: enrollment.id,
+          });
+        });
+      } else if (!packStartedAt && consumedSessions > 0) {
         const backfilled = await backfillEnrollmentStartFromFirstConsumption({
           enrollmentId: enrollment.id,
           memberId,
@@ -437,28 +454,48 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
           durationDays: pack.durationDays,
           periodStart,
           periodEndExclusive,
-          purchasedAt: enrollment.purchasedAt,
         });
         if (backfilled) {
           packStartedAt = backfilled.packStartedAt;
           packExpiresAt = backfilled.packExpiresAt;
           enrollmentStatus = "ACTIVE";
         }
-      } else if (packStartedAt && isPackStartBeforePurchase(packStartedAt, enrollment.purchasedAt)) {
-        // Sécurité affichage + persistance : jamais de début avant l'achat (héritage).
-        packStartedAt = null;
-        packExpiresAt = null;
-        const reopen =
-          enrollmentStatus === "ACTIVE" || enrollmentStatus === "PENDING_START";
-        if (reopen) enrollmentStatus = "PENDING_START";
-        await prisma.memberPackEnrollment.update({
-          where: { id: enrollment.id },
-          data: {
-            packStartedAt: null,
-            packExpiresAt: null,
-            ...(reopen ? { status: "PENDING_START" as const, closedAt: null } : {}),
-          },
-        });
+      } else if (
+        packStartedAt &&
+        toPrismaDateLocal(packStartedAt).getTime() < toPrismaDateLocal(enrollment.purchasedAt).getTime()
+      ) {
+        // Sécurité affichage + DB : ne jamais montrer un début avant l'achat.
+        const purchased = toPrismaDateLocal(enrollment.purchasedAt);
+        const repairedStart =
+          periodStart && periodStart.getTime() >= purchased.getTime() ? periodStart : purchased;
+        // Si aucune conso post-achat, remettre « pas encore démarré ».
+        if (consumedSessions <= 0) {
+          packStartedAt = null;
+          packExpiresAt = null;
+          enrollmentStatus = "PENDING_START";
+          await prisma.memberPackEnrollment.update({
+            where: { id: enrollment.id },
+            data: {
+              packStartedAt: null,
+              packExpiresAt: null,
+              status: "PENDING_START",
+              closedAt: null,
+            },
+          });
+        } else {
+          packStartedAt = repairedStart;
+          packExpiresAt = pack.durationDays
+            ? addPackDurationToStartDate(repairedStart, pack.durationDays)
+            : packExpiresAt;
+          await prisma.memberPackEnrollment.update({
+            where: { id: enrollment.id },
+            data: {
+              packStartedAt: repairedStart,
+              packExpiresAt,
+              status: enrollmentStatus === "PENDING_START" ? "ACTIVE" : enrollmentStatus,
+            },
+          });
+        }
       } else if (packStartedAt && !packExpiresAt && pack.durationDays) {
         packExpiresAt = addPackDurationToStartDate(packStartedAt, pack.durationDays);
       }
@@ -555,7 +592,7 @@ export async function reopenUnusedReplacedEnrollments(memberId: string): Promise
   }
 }
 
-/** Solde pack = quotas catalogue × nombre d'achats − séances déjà consommées. */
+/** Solde pack = somme des séances restantes des inscriptions ouvertes (ACTIVE / PENDING). */
 export async function syncBalancesFromOpenEnrollments(
   memberId: string,
   enrollmentsAsc?: {
@@ -577,90 +614,81 @@ export async function syncBalancesFromOpenEnrollments(
     (await prisma.memberPackEnrollment.findMany({
       where: { memberId },
       orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
-      select: { packId: true },
+      include: {
+        pack: {
+          select: {
+            sessionCount: true,
+            category: true,
+            courseQuotas: { select: { courseSlug: true, sessionCount: true } },
+          },
+        },
+      },
     }));
 
-  const packIds = [...new Set(rows.map((row) => row.packId))];
-  const member = await prisma.member.findUnique({
-    where: { id: memberId },
-    select: { packId: true },
-  });
-  if (member?.packId && !packIds.includes(member.packId)) {
-    packIds.push(member.packId);
+  const openByPack = new Map<string, typeof rows>();
+  for (const row of rows) {
+    if (row.status !== "ACTIVE" && row.status !== "PENDING_START") continue;
+    const list = openByPack.get(row.packId) ?? [];
+    list.push(row);
+    openByPack.set(row.packId, list);
   }
-  if (packIds.length === 0) return;
 
-  // ReadCommitted suffit (recalcul idempotent) ; Serializable provoquait P2034 en concurrence.
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      await prisma.$transaction(
-        async (tx) => {
-          await recomputeAllMemberPackBalancesForMember(tx, memberId);
-        },
-        {
-          isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
-          maxWait: 8000,
-          timeout: 20000,
-        },
-      );
-      return;
-    } catch (error) {
-      lastError = error;
-      const retryable =
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        (error.code === "P2034" || error.code === "P2002");
-      if (!retryable || attempt === 4) throw error;
-      await new Promise((r) => setTimeout(r, 50 * (attempt + 1)));
+  for (const [packId, openRows] of openByPack) {
+    const pack = openRows[0]!.pack;
+    if (pack.courseQuotas.length > 0) {
+      continue;
     }
-  }
-  throw lastError;
-}
+    if (pack.sessionCount == null) continue;
 
-const memberPackStockLocks = new Map<string, Promise<void>>();
+    let remainingTotal = 0;
+    for (const enrollment of openRows) {
+      const { periodStart, periodEndExclusive } = getEnrollmentPeriodBounds(enrollment, rows);
+
+      // Pack unique 1 séance : se baser sur les réservations encore consommatrices, pas seulement packStartedAt.
+      if (pack.sessionCount === 1) {
+        const consumed = await countEnrollmentConsumedSessionsInPeriod({
+          memberId,
+          packId,
+          courseQuotas: [],
+          sessionCount: 1,
+          category: pack.category ?? null,
+          periodStart,
+          periodEndExclusive,
+        });
+        if (consumed <= 0) remainingTotal += 1;
+        continue;
+      }
+
+      const consumed = await countEnrollmentConsumedSessionsInPeriod({
+        memberId,
+        packId,
+        courseQuotas: [],
+        sessionCount: pack.sessionCount,
+        category: pack.category ?? null,
+        periodStart,
+        periodEndExclusive,
+      });
+      remainingTotal += Math.max(0, pack.sessionCount - Math.min(consumed, pack.sessionCount));
+    }
+
+    await prisma.memberPackBalance.deleteMany({ where: { memberId, packId } });
+    await prisma.memberPackBalance.create({
+      data: {
+        memberId,
+        packId,
+        courseSlug: null,
+        remaining: remainingTotal,
+      },
+    });
+  }
+}
 
 /**
  * Prépare le stock débitable avant une réservation / présence :
  * réouvre les packs parallèles inutilisés et recalcule les soldes.
- * Verrou par adhérente pour éviter les courses entre fiche + présence.
  */
 export async function ensureMemberParallelPackStockForDebit(memberId: string): Promise<void> {
-  const previous = memberPackStockLocks.get(memberId) ?? Promise.resolve();
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  memberPackStockLocks.set(memberId, gate);
-
-  await previous.catch(() => undefined);
-  try {
-    await reopenUnusedReplacedEnrollments(memberId);
-    await repairEnrollmentStartsBeforePurchase(memberId);
-    await syncBalancesFromOpenEnrollments(memberId);
-  } finally {
-    release();
-    if (memberPackStockLocks.get(memberId) === gate) {
-      memberPackStockLocks.delete(memberId);
-    }
-  }
-}
-
-/** Recalcule les soldes sans réouverture / réparation (retry présence après P2034). */
-export async function refreshMemberPackBalancesForDebit(memberId: string): Promise<void> {
-  const previous = memberPackStockLocks.get(memberId) ?? Promise.resolve();
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  memberPackStockLocks.set(memberId, gate);
-
-  await previous.catch(() => undefined);
-  try {
-    await syncBalancesFromOpenEnrollments(memberId);
-  } finally {
-    release();
-    if (memberPackStockLocks.get(memberId) === gate) {
-      memberPackStockLocks.delete(memberId);
-    }
-  }
+  await reopenUnusedReplacedEnrollments(memberId);
+  await repairEnrollmentStartsBeforePurchase(memberId);
+  await syncBalancesFromOpenEnrollments(memberId);
 }

@@ -11,6 +11,7 @@ import {
   startOfLocalToday,
 } from "@/lib/calendar-day";
 import { getAdminOperationalPlanningSlotsForDate } from "@/lib/admin/planning-operational-slots";
+import { countOccupyingProspectsByPlanning } from "@/lib/admin/session-prospect-stats";
 import { prisma } from "@/lib/prisma";
 
 function errorResponse(message: string, status: number) {
@@ -44,15 +45,18 @@ export async function GET(request: Request) {
   const slots = await getAdminOperationalPlanningSlotsForDate(ymd);
 
   const planningIds = slots.map((s) => s.id);
-  const reservations = planningIds.length
-    ? await prisma.reservation.findMany({
-        where: {
-          planningId: { in: planningIds },
-          sessionDate: dayDb,
-        },
-        select: { planningId: true, status: true },
-      })
-    : [];
+  const [reservations, prospectCounts] = await Promise.all([
+    planningIds.length
+      ? prisma.reservation.findMany({
+          where: {
+            planningId: { in: planningIds },
+            sessionDate: dayDb,
+          },
+          select: { planningId: true, status: true },
+        })
+      : Promise.resolve([]),
+    countOccupyingProspectsByPlanning(planningIds, dayDb),
+  ]);
 
   const byPlanning = reservations.reduce<Record<string, { booked: number; wait: number; attended: number; cancelled: number }>>(
     (acc, r) => {
@@ -72,7 +76,8 @@ export async function GET(request: Request) {
     dayOfWeek,
     slots: slots.map((s) => {
       const stats = byPlanning[s.id] ?? { booked: 0, wait: 0, attended: 0, cancelled: 0 };
-      const mainOccupied = stats.booked + stats.attended;
+      const prospectCount = prospectCounts[s.id] ?? 0;
+      const mainOccupied = stats.booked + stats.attended + prospectCount;
       const spotsRemaining = Math.max(0, s.capacity - mainOccupied);
       const waitSpotsRemaining =
         s.waitlistCapacity == null ? null : Math.max(0, s.waitlistCapacity - stats.wait);
@@ -93,6 +98,7 @@ export async function GET(request: Request) {
           attended: stats.attended,
           waitlist: stats.wait,
           cancelled: stats.cancelled,
+          prospects: prospectCount,
           spotsRemaining,
           waitSpotsRemaining,
         },

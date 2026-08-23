@@ -10,7 +10,6 @@ import {
   type PackEligibility,
 } from "@/lib/pack-eligibility";
 import {
-  isPackStartBeforePurchase,
   isSessionDateWithinPackPeriod,
   packExpiresAtLocal,
   packStartDateLocal,
@@ -70,10 +69,8 @@ function totalRemaining(
   balances: { courseSlug: string | null; remaining: number }[],
   pack: PackQuotaShape,
 ): number {
-  // Solde initialisé (même à 0) : ne pas réinjecter le quota catalogue.
-  if (balances.length > 0) {
-    return balances.reduce((sum, b) => sum + Math.max(0, b.remaining), 0);
-  }
+  const forPack = balances.filter((b) => b.remaining > 0);
+  if (forPack.length > 0) return forPack.reduce((sum, b) => sum + b.remaining, 0);
   if (pack.courseQuotas.length > 0) {
     return pack.courseQuotas.reduce((sum, q) => sum + q.sessionCount, 0);
   }
@@ -124,28 +121,14 @@ function resolvePackPeriod(input: {
   memberPackStartedAt: Date | null;
   enrollmentStartedAt: Date | null;
   enrollmentExpiresAt: Date | null;
-  purchasedAt: Date | null;
 }): { packStartedAt: Date | null; packExpiresAt: Date | null } {
   if (input.enrollmentStartedAt) {
-    // Héritage / bug : début avant achat → traiter comme non démarré.
-    if (
-      input.purchasedAt &&
-      isPackStartBeforePurchase(input.enrollmentStartedAt, input.purchasedAt)
-    ) {
-      return { packStartedAt: null, packExpiresAt: null };
-    }
     return {
       packStartedAt: input.enrollmentStartedAt,
       packExpiresAt: input.enrollmentExpiresAt,
     };
   }
   if (input.memberPackId === input.packId && input.memberPackStartedAt) {
-    if (
-      input.purchasedAt &&
-      isPackStartBeforePurchase(input.memberPackStartedAt, input.purchasedAt)
-    ) {
-      return { packStartedAt: null, packExpiresAt: null };
-    }
     return { packStartedAt: input.memberPackStartedAt, packExpiresAt: null };
   }
   return { packStartedAt: null, packExpiresAt: null };
@@ -290,7 +273,6 @@ async function loadPackCandidates(
           memberPackStartedAt: member.packStartedAt,
           enrollmentStartedAt: openEnrollment?.packStartedAt ?? null,
           enrollmentExpiresAt: openEnrollment?.packExpiresAt ?? null,
-          purchasedAt: openEnrollment?.purchasedAt ?? enrollment?.purchasedAt ?? null,
         });
 
     candidates.push({

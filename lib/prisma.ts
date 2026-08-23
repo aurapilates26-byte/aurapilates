@@ -2,7 +2,12 @@ import { PrismaClient } from "@prisma/client";
 
 declare global {
   var prisma: PrismaClient | undefined;
+  /** Invalide le client Prisma en dev après `prisma generate` / migration. */
+  var prismaSchemaFingerprint: string | undefined;
 }
+
+/** Incrémenter quand le schéma Prisma change (évite client global obsolète en dev). */
+const PRISMA_SCHEMA_FINGERPRINT = "session-prospect-trial-pack-v1";
 
 function createPrismaClient() {
   return new PrismaClient({
@@ -17,12 +22,18 @@ function getPrismaClient(): PrismaClient {
   }
 
   const cached = global.prisma;
-  if (cached && "memberPendingPack" in cached) {
+  if (
+    cached &&
+    global.prismaSchemaFingerprint === PRISMA_SCHEMA_FINGERPRINT &&
+    "memberPendingPack" in cached &&
+    "sessionProspect" in cached
+  ) {
     return cached;
   }
 
   const client = createPrismaClient();
   global.prisma = client;
+  global.prismaSchemaFingerprint = PRISMA_SCHEMA_FINGERPRINT;
   return client;
 }
 

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { useToast } from "@/components/ui/toast-provider";
-import { Button, Checkbox, ConfirmDialog, Input, SelectMenu, Textarea } from "@/components/ui";
+import { Button, Checkbox, ConfirmDialog, Input, SelectMenu } from "@/components/ui";
 import { MemberDepositCompleteDialog } from "@/components/dashboard/member-deposit-complete-dialog";
 import {
   MEMBER_PAYMENT_STATUS_LABELS,
@@ -13,7 +13,6 @@ import { PaymentMethodBadge } from "@/components/dashboard/payment-method-badge"
 import { PACK_CATEGORY_OPTIONS, normalizePackCategory } from "@/lib/pack-categories";
 import {
   PACK_PAYMENT_METHODS,
-  PACK_PAYMENT_METHOD_LABELS,
   type PackPaymentMethodValue,
 } from "@/lib/pack-payment-method";
 import { ListPageSummary, ListPagination } from "@/components/dashboard/list-pagination";
@@ -134,37 +133,9 @@ function DepositAmountCell({
   );
 }
 
-function PaymentMethodPicker({
-  value,
-  onChange,
-  label = "Moyen de paiement *",
-}: {
-  value: PackPaymentMethodValue;
-  onChange: (method: PackPaymentMethodValue) => void;
-  label?: string;
-}) {
-  return (
-    <div>
-      <p className="text-sm font-semibold text-brand-dark">{label}</p>
-      <div className="mt-2 flex flex-wrap gap-2">
-        {PACK_PAYMENT_METHODS.map((method) => (
-          <button
-            key={method}
-            type="button"
-            onClick={() => onChange(method)}
-            className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
-              value === method
-                ? "bg-brand-dark text-white"
-                : "border border-brand-medium/30 bg-white text-brand-dark"
-            }`}
-          >
-            {PACK_PAYMENT_METHOD_LABELS[method]}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
+import { MemberCreateFormPanel } from "@/components/dashboard/member-form/member-create-form-panel";
+import { PaymentMethodPicker } from "@/components/dashboard/member-form/payment-method-picker";
+import type { ProspectConversionContext } from "@/components/dashboard/reservations/prospect-types";
 
 function DepositProgressBar({
   paid,
@@ -217,6 +188,8 @@ type MembersManagerProps = {
   paymentStatusFilter?: "ALL" | MemberPaymentStatus;
   onPaymentStatusFilterChange?: (value: "ALL" | MemberPaymentStatus) => void;
   onUnpaidCountChange?: (count: number) => void;
+  prospectConversion?: ProspectConversionContext | null;
+  onProspectConversionComplete?: () => void;
 };
 
 type MemberItem = {
@@ -272,6 +245,8 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     paymentStatusFilter = "ALL",
     onPaymentStatusFilterChange,
     onUnpaidCountChange,
+    prospectConversion = null,
+    onProspectConversionComplete,
   },
   ref
 ) {
@@ -641,12 +616,77 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     onChangeViewMode("form");
   };
 
+  const handleCreateMemberSubmit = async (createBody: Record<string, unknown>) => {
+    setIsSubmitting(true);
+    try {
+      const response = await fetch("/api/admin/members", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(createBody),
+      });
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(data?.error ?? "Création impossible.");
+      }
+
+      const paymentMode = String(createBody.paymentMode ?? "full");
+      const createdWithPartial = paymentMode === "deposit" || paymentMode === "credit";
+      await loadMembers();
+      await refreshUnpaidCount();
+      onChangeViewMode("list");
+      if (createdWithPartial) {
+        onPaymentStatusFilterChange?.(paymentMode === "credit" ? "CREDIT" : "ADVANCE");
+      }
+      toast({
+        variant: "success",
+        title: createdWithPartial
+          ? paymentMode === "credit"
+            ? "Crédit enregistré"
+            : "Acompte enregistré"
+          : "Adhérente créée",
+        description: createdWithPartial
+          ? "L'adhérente reste dans la liste et peut consommer ses séances. Finalisez le solde quand le reste est payé."
+          : "La nouvelle adhérente a été ajoutée et le QR code a été assigné.",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleConvertProspectSubmit = async (createBody: Record<string, unknown>) => {
+    if (!prospectConversion) return;
+    setIsSubmitting(true);
+    try {
+      const response = await fetch(
+        `/api/admin/reservations/prospects/${encodeURIComponent(prospectConversion.id)}/convert`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(createBody),
+        },
+      );
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(data?.error ?? "Conversion impossible.");
+      }
+      toast({
+        variant: "success",
+        title: "Adhérente créée",
+        description: "Le pack a été vendu et la séance d'essai a été débitée.",
+      });
+      onProspectConversionComplete?.();
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const handleSubmit = async () => {
     setModalError(null);
 
     const trimmedQr = qrId.trim();
 
     const isEditMode = editingMemberId !== null;
+    if (!isEditMode) return;
 
     // QR optionnel à la création (assignable plus tard depuis la fiche).
 
@@ -729,74 +769,6 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
 
     setIsSubmitting(true);
     try {
-      if (!isEditMode) {
-        const createBody: Record<string, unknown> = {
-          qrId: trimmedQr || undefined,
-          email: email.trim() || undefined,
-          firstName: firstName.trim(),
-          lastName: lastName.trim(),
-          phone: phone.trim(),
-          birthDate: birthDate || undefined,
-          packId,
-          isActive,
-          paymentMode,
-        };
-
-        if (paymentMode !== "credit") {
-          createBody.paymentMethod = paymentMethod;
-        }
-
-        if (discountType !== "NONE") {
-          createBody.personalDiscount = {
-            type: discountType,
-            value: Number.parseInt(discountValue, 10),
-            reason: discountReason.trim() || undefined,
-          };
-        }
-
-        if (paymentMode === "deposit") {
-          createBody.depositAmountDinars = Number.parseInt(depositAmountDinars, 10);
-        }
-
-        const trimmedNote = note.trim();
-        if (trimmedNote) {
-          createBody.note = trimmedNote;
-        }
-
-        const response = await fetch("/api/admin/members", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(createBody),
-        });
-
-        if (!response.ok) {
-          const data = (await response.json().catch(() => null)) as { error?: string } | null;
-          throw new Error(data?.error ?? "Création impossible.");
-        }
-
-        const createdWithPartial = paymentMode === "deposit" || paymentMode === "credit";
-        await loadMembers();
-        await refreshUnpaidCount();
-        setEditingMemberId(null);
-        onChangeViewMode("list");
-        if (createdWithPartial) {
-          onPaymentStatusFilterChange?.(paymentMode === "credit" ? "CREDIT" : "ADVANCE");
-        }
-        resetForm();
-        toast({
-          variant: "success",
-          title: createdWithPartial
-            ? paymentMode === "credit"
-              ? "Crédit enregistré"
-              : "Acompte enregistré"
-            : "Adhérente créée",
-          description: createdWithPartial
-            ? "L'adhérente reste dans la liste et peut consommer ses séances. Finalisez le solde quand le reste est payé."
-            : "La nouvelle adhérente a été ajoutée et le QR code a été assigné.",
-        });
-        return;
-      }
-
       const body: Record<string, unknown> = {
         email: email.trim(),
       };
@@ -1311,30 +1283,49 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
             </>
           )}
         </div>
+      ) : !editingMemberId ? (
+        <MemberCreateFormPanel
+          packs={packs}
+          resetKey={prospectConversion?.id ?? (viewMode === "form" ? "create" : null)}
+          initialValues={
+            prospectConversion
+              ? {
+                  firstName: prospectConversion.firstName,
+                  lastName: prospectConversion.lastName,
+                  phone: prospectConversion.phone,
+                }
+              : undefined
+          }
+          trialCourseLabel={prospectConversion?.courseLabel ?? null}
+          title={prospectConversion ? "Convertir en adhérente" : undefined}
+          description={
+            prospectConversion
+              ? `${prospectConversion.firstName} ${prospectConversion.lastName} · Même formulaire que « Nouvelle adhérente ».`
+              : undefined
+          }
+          submitLabel={prospectConversion ? "Créer l'adhérente" : undefined}
+          cancelLabel={prospectConversion ? "Annuler" : undefined}
+          idPrefix={prospectConversion ? "prospect-member" : "member"}
+          isSubmitting={isSubmitting}
+          onSubmit={prospectConversion ? handleConvertProspectSubmit : handleCreateMemberSubmit}
+          onCancel={() => {
+            if (prospectConversion) onProspectConversionComplete?.();
+            else onChangeViewMode("list");
+          }}
+        />
       ) : (
         <div className="rounded-2xl border border-brand-medium/20 bg-white p-6 shadow-sm">
           <h3 className="text-xl font-semibold text-brand-dark">
-            {editingMemberId
-              ? isEditingDepositPending
-                ? "Modifier une avance"
-                : "Modifier une adhérente"
-              : "Ajouter une adhérente"}
+            {isEditingDepositPending ? "Modifier une avance" : "Modifier une adhérente"}
           </h3>
           <p className="mt-2 text-sm text-brand-dark/70">
-            {editingMemberId ? (
-              isEditingDepositPending ? (
-                <>
-                  Corrigez les informations de l&apos;adhérente. Le QR et l&apos;activation se feront lors de la
-                  finalisation du solde.
-                </>
-              ) : (
-                <>Mettez à jour les infos, le pack ou le QR code associé si nécessaire.</>
-              )
-            ) : (
+            {isEditingDepositPending ? (
               <>
-                Le QR code est optionnel à la création (assignable plus tard depuis la fiche). Si vous le scannez,
-                la clé associée sera chargée automatiquement.
+                Corrigez les informations de l&apos;adhérente. Le QR et l&apos;activation se feront lors de la
+                finalisation du solde.
               </>
+            ) : (
+              <>Mettez à jour les infos, le pack ou le QR code associé si nécessaire.</>
             )}
           </p>
 
@@ -1508,168 +1499,8 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                 </div>
               ) : null}
 
-              {!editingMemberId ? (
-                <Textarea
-                  id="member-note"
-                  label="Note (optionnel)"
-                  value={note}
-                  onChange={(e) => setNote(e.target.value)}
-                  placeholder="Ex. : préférences, informations utiles pour le studio…"
-                  rows={3}
-                  maxLength={2000}
-                />
-              ) : null}
-
-              {!editingMemberId ? (
-                <>
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                    <SelectMenu
-                      id="member-discount-type"
-                      label="Remise personnalisée"
-                      value={discountType}
-                      onChange={(value) => setDiscountType(value as "NONE" | PersonalDiscountType)}
-                      options={[
-                        { value: "NONE", label: "Aucune remise" },
-                        { value: "PERCENT", label: "Pourcentage (%)" },
-                        { value: "AMOUNT", label: "Montant (DT)" },
-                      ]}
-                    />
-                    <Input
-                      id="member-discount-value"
-                      type="number"
-                      min={0}
-                      disabled={discountType === "NONE"}
-                      label={discountType === "PERCENT" ? "Valeur (%)" : "Valeur (DT)"}
-                      value={discountValue}
-                      onChange={(e) => setDiscountValue(e.target.value)}
-                      placeholder={discountType === "PERCENT" ? "Ex: 10" : "Ex: 50"}
-                    />
-                    <Input
-                      id="member-discount-reason"
-                      disabled={discountType === "NONE"}
-                      label="Motif remise (optionnel)"
-                      value={discountReason}
-                      onChange={(e) => setDiscountReason(e.target.value)}
-                      placeholder="Ex. : tarif préférentiel"
-                    />
-                  </div>
-                  {createDiscountPreview ? (
-                    <div className="rounded-xl border border-sky-200/80 bg-sky-50/70 px-4 py-3">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-sky-900/80">
-                        Aperçu du prix final
-                      </p>
-                      <div className="mt-2 rounded-lg border border-sky-200/70 bg-white/75 px-3 py-2">
-                        <p className="text-xs text-sky-900/80">
-                          Prix catalogue: <span className="font-semibold">{createDiscountPreview.base} DT</span>
-                        </p>
-                        <p className="text-xs text-sky-900/80">
-                          Remise appliquée: <span className="font-semibold">−{createDiscountPreview.discount} DT</span>
-                        </p>
-                        <p className="text-xs font-bold text-sky-950">
-                          Prix final: {createDiscountPreview.final} DT
-                        </p>
-                      </div>
-                      {paymentMode === "deposit" ? (
-                        <p className="mt-2 text-xs text-sky-900/75">
-                          L&apos;acompte s&apos;applique sur ce montant final.
-                        </p>
-                      ) : null}
-                    </div>
-                  ) : selectedPackListPriceDinars != null ? (
-                    <div className="rounded-xl border border-brand-medium/15 bg-zinc-50/60 px-4 py-3">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-dark/50">
-                        Prix catalogue
-                      </p>
-                      <p className="mt-1 text-sm font-bold text-brand-dark">{selectedPackListPriceDinars} DT</p>
-                    </div>
-                  ) : null}
-                </>
-              ) : null}
-
               {!isEditingDepositPending ? (
                 <Checkbox checked={isActive} onChange={(e) => setIsActive(e.target.checked)} label="Active" />
-              ) : null}
-
-              {!editingMemberId ? (
-                <>
-                  <div>
-                    <p className="text-sm font-semibold text-brand-dark">Mode de paiement</p>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setPaymentMode("full");
-                          setDepositAmountDinars("");
-                        }}
-                        className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
-                          paymentMode === "full"
-                            ? "bg-brand-dark text-white"
-                            : "border border-brand-medium/30 bg-white text-brand-dark"
-                        }`}
-                      >
-                        Paiement complet
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setPaymentMode("deposit")}
-                        className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
-                          paymentMode === "deposit"
-                            ? "bg-brand-dark text-white"
-                            : "border border-brand-medium/30 bg-white text-brand-dark"
-                        }`}
-                      >
-                        Avance
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setPaymentMode("credit");
-                          setDepositAmountDinars("");
-                        }}
-                        className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
-                          paymentMode === "credit"
-                            ? "bg-brand-dark text-white"
-                            : "border border-brand-medium/30 bg-white text-brand-dark"
-                        }`}
-                      >
-                        Crédit (reste à payer)
-                      </button>
-                    </div>
-                  </div>
-
-                  {paymentMode === "deposit" ? (
-                    <Input
-                      id="member-deposit-amount"
-                      label="Montant de l'acompte (DT)"
-                      type="number"
-                      min={1}
-                      value={depositAmountDinars}
-                      onChange={(e) => setDepositAmountDinars(e.target.value)}
-                    />
-                  ) : null}
-
-                  {paymentMode === "credit" ? (
-                    <div className="rounded-xl border border-amber-200/80 bg-amber-50/70 px-4 py-3 text-xs text-amber-950/90">
-                      Aucun paiement n&apos;est enregistré. Le pack est utilisable immédiatement ; le montant total
-                      {createDiscountPreview ? (
-                        <>
-                          {" "}
-                          (<span className="font-semibold">{createDiscountPreview.final} DT</span>)
-                        </>
-                      ) : selectedPackListPriceDinars != null ? (
-                        <>
-                          {" "}
-                          (<span className="font-semibold">{selectedPackListPriceDinars} DT</span>)
-                        </>
-                      ) : null}{" "}
-                      reste à payer.
-                    </div>
-                  ) : null}
-
-                  {paymentMode !== "credit" ? (
-                    <PaymentMethodPicker value={paymentMethod} onChange={setPaymentMethod} />
-                  ) : null}
-                </>
               ) : null}
           </div>
 
@@ -1689,13 +1520,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
               Retour à la liste
             </button>
             <Button type="button" onClick={() => void handleSubmit()} disabled={isSubmitting}>
-              {isSubmitting
-                ? editingMemberId
-                  ? "Enregistrement..."
-                  : "Création..."
-                : editingMemberId
-                  ? "Mettre à jour"
-                  : "Confirmer"}
+              {isSubmitting ? "Enregistrement..." : "Mettre à jour"}
             </Button>
           </div>
         </div>

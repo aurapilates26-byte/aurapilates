@@ -30,10 +30,7 @@ import {
 } from "@/lib/admin/member-deposit";
 import { deriveMemberPaymentStatus } from "@/lib/admin/member-payment-status";
 import { addParallelMemberPack } from "@/lib/admin/member-owned-packs";
-import {
-  closeOpenEnrollmentsForPack,
-  createPackEnrollmentAfterPayment,
-} from "@/lib/admin/member-pack-enrollment";
+import { closeOpenEnrollmentsForPack } from "@/lib/admin/member-pack-enrollment";
 import {
   decidePackRenewal,
   loadMemberPackState,
@@ -454,15 +451,7 @@ export async function createAdminMember(request: Request) {
         precomputed: paymentPrecomputed,
         paymentMethod: paymentMethod!,
       });
-    } else if (isCreditMode) {
-      // Crédit : pas d'encaissement, mais inscription pack obligatoire pour l'UI / FIFO.
-      await createPackEnrollmentAfterPayment(tx, {
-        memberId: member.id,
-        packId: memberData.packId,
-        packPaymentId: null,
-        purchasedAt: paymentPrecomputed.paidAt,
-      });
-    } else {
+    } else if (!isCreditMode) {
       const noteParts = ["Création adhérente"];
       if (personalDiscount?.reason) {
         noteParts.push(`Remise perso: ${personalDiscount.reason}`);
@@ -944,15 +933,7 @@ export async function renewAdminMemberPackById(id: string, request: Request) {
         precomputed: paymentPrecomputed,
         paymentMethod: paymentMethod!,
       });
-    } else if (isCreditMode) {
-      // Crédit : toast OK mais sans enrollment = pack invisible dans la liste.
-      await createPackEnrollmentAfterPayment(tx, {
-        memberId: id,
-        packId,
-        packPaymentId: null,
-        purchasedAt: paymentPrecomputed.paidAt,
-      });
-    } else {
+    } else if (!isCreditMode) {
       const noteParts = [
         decision.mode === "queued" ? "Renouvellement pack (pack parallèle)" : "Renouvellement pack",
       ];
