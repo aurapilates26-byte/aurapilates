@@ -34,10 +34,13 @@ type ResolvePackOptions = {
 export type BookablePackOptionDto = {
   packId: string;
   packName: string;
+  totalSessions: number | null;
+  consumedSessions: number;
   remainingSessions: number;
   remainingForCourse: number;
   courseCoverageLabel: string;
   purchasedAt: string;
+  packStartedAt: string | null;
 };
 
 type PackCandidate = {
@@ -87,8 +90,6 @@ function remainingForCourseSlug(
     if (!quota) return 0;
     const balance = balances.find((b) => b.courseSlug === courseSlug);
     if (balance) return Math.max(0, balance.remaining);
-    // Pack initialisé (autres quotas déjà débités) mais pas ce cours → 0 restant.
-    if (balances.length > 0) return 0;
     return quota.sessionCount;
   }
   return totalRemaining(balances, pack);
@@ -134,12 +135,19 @@ function resolvePackPeriod(input: {
   return { packStartedAt: null, packExpiresAt: null };
 }
 
+function isPackUnused(candidate: PackCandidate): boolean {
+  const total = totalSessionsForPack(candidate.pack);
+  if (total == null) return candidate.packStartedAt == null;
+  return candidate.remainingSessions >= total;
+}
+
 function isCandidateValidForSessionDate(
   candidate: PackCandidate,
   sessionDateLocal: Date,
   options?: Pick<ResolvePackOptions, "allowSessionBeforePackStart">,
 ): boolean {
-  if (!candidate.packStartedAt) return true;
+  // Pack jamais consommé : la 1ʳᵉ réservation démarre le pack (ignorer une date de début fantôme).
+  if (!candidate.packStartedAt || isPackUnused(candidate)) return true;
 
   const expiresAt = packExpiresAtLocal(candidate.packStartedAt, candidate.pack.durationDays);
   if (expiresAt && sessionDateLocal.getTime() > expiresAt.getTime()) {
@@ -197,6 +205,7 @@ async function loadPackCandidates(
           purchasedAt: true,
           packStartedAt: true,
           packExpiresAt: true,
+          status: true,
         },
       },
     },
@@ -259,9 +268,11 @@ async function loadPackCandidates(
     if (remainingForCourse <= 0) continue;
 
     const enrollment = latestEnrollmentByPack.get(pack.id);
-    // Stock parallèle pas encore démarré : ne pas hériter de la date du pack actif (sinon refus à tort).
+    // PENDING_START ou sans date : ne pas hériter d'un packStartedAt erroné / expiré.
     const unstartedEnrollment = member.packEnrollments.find(
-      (e) => e.packId === pack.id && !e.packStartedAt,
+      (e) =>
+        e.packId === pack.id &&
+        (e.status === "PENDING_START" || !e.packStartedAt),
     );
     const openEnrollment = unstartedEnrollment ?? enrollment;
 
@@ -321,10 +332,13 @@ function toBookablePackOptionDto(candidate: PackCandidate): BookablePackOptionDt
   return {
     packId: candidate.packId,
     packName: candidate.packName,
+    totalSessions: totalSessionsForPack(candidate.pack),
+    consumedSessions: consumedSessionsForCandidate(candidate),
     remainingSessions: candidate.remainingSessions,
     remainingForCourse: candidate.remainingForCourse,
     courseCoverageLabel: candidate.courseCoverageLabel,
     purchasedAt: candidate.purchasedAt.toISOString(),
+    packStartedAt: candidate.packStartedAt?.toISOString() ?? null,
   };
 }
 

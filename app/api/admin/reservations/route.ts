@@ -10,8 +10,13 @@ import {
   prismaDayOfWeekFromLocalDate,
   startOfLocalToday,
 } from "@/lib/calendar-day";
+import {
+  draftPeriodConfigOrNull,
+  getAdminPlanningPeriodWindow,
+} from "@/lib/admin/planning-period-draft";
 import { getAdminOperationalPlanningSlotsForDate } from "@/lib/admin/planning-operational-slots";
 import { countOccupyingProspectsByPlanning } from "@/lib/admin/session-prospect-stats";
+import { isSessionYmdWithinPlanningPeriod } from "@/lib/planning-period-status";
 import { prisma } from "@/lib/prisma";
 
 function errorResponse(message: string, status: number) {
@@ -42,7 +47,16 @@ export async function GET(request: Request) {
   const dayDb = parseYmdToPrismaDate(ymd);
   if (!dayDb) return errorResponse("Date invalide", 400);
 
-  const slots = await getAdminOperationalPlanningSlotsForDate(ymd);
+  const [slots, window] = await Promise.all([
+    getAdminOperationalPlanningSlotsForDate(ymd),
+    getAdminPlanningPeriodWindow(),
+  ]);
+
+  const draftPeriod = draftPeriodConfigOrNull(window.draft);
+  const inPublished = isSessionYmdWithinPlanningPeriod(ymd, window.published);
+  const inDraft = draftPeriod != null && isSessionYmdWithinPlanningPeriod(ymd, draftPeriod);
+  const periodScope: "published" | "draft" | "outside" =
+    !inPublished && !inDraft ? "outside" : inDraft ? "draft" : "published";
 
   const planningIds = slots.map((s) => s.id);
   const [reservations, prospectCounts] = await Promise.all([
@@ -74,6 +88,9 @@ export async function GET(request: Request) {
   return Response.json({
     date: ymd,
     dayOfWeek,
+    periodScope,
+    publishedPeriodLabel: window.published.periodLabel,
+    draftPeriodLabel: draftPeriod?.periodLabel ?? null,
     slots: slots.map((s) => {
       const stats = byPlanning[s.id] ?? { booked: 0, wait: 0, attended: 0, cancelled: 0 };
       const prospectCount = prospectCounts[s.id] ?? 0;

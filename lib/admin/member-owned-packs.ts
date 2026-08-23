@@ -635,9 +635,46 @@ export async function syncBalancesFromOpenEnrollments(
 
   for (const [packId, openRows] of openByPack) {
     const pack = openRows[0]!.pack;
+
     if (pack.courseQuotas.length > 0) {
+      const remainingBySlug = new Map<string, number>();
+      for (const quota of pack.courseQuotas) {
+        remainingBySlug.set(quota.courseSlug, 0);
+      }
+
+      for (const enrollment of openRows) {
+        const { periodStart, periodEndExclusive } = getEnrollmentPeriodBounds(enrollment, rows);
+        const consumedByCourse = await countEnrollmentConsumedSessionsByCourseInPeriod({
+          memberId,
+          packId,
+          courseQuotas: pack.courseQuotas,
+          sessionCount: pack.sessionCount,
+          category: pack.category ?? null,
+          periodStart,
+          periodEndExclusive,
+        });
+        for (const quota of pack.courseQuotas) {
+          const consumed = consumedByCourse.get(quota.courseSlug) ?? 0;
+          const remaining = Math.max(0, quota.sessionCount - Math.min(consumed, quota.sessionCount));
+          remainingBySlug.set(
+            quota.courseSlug,
+            (remainingBySlug.get(quota.courseSlug) ?? 0) + remaining,
+          );
+        }
+      }
+
+      await prisma.memberPackBalance.deleteMany({ where: { memberId, packId } });
+      await prisma.memberPackBalance.createMany({
+        data: pack.courseQuotas.map((quota) => ({
+          memberId,
+          packId,
+          courseSlug: quota.courseSlug,
+          remaining: remainingBySlug.get(quota.courseSlug) ?? quota.sessionCount,
+        })),
+      });
       continue;
     }
+
     if (pack.sessionCount == null) continue;
 
     let remainingTotal = 0;
@@ -683,6 +720,33 @@ export async function syncBalancesFromOpenEnrollments(
   }
 }
 
+/** Réaligne inscriptions ouvertes + soldes avant réservation (aligné fiche pack). */
+async function prepareOpenEnrollmentsForBooking(memberId: string): Promise<void> {
+  const open = await prisma.memberPackEnrollment.findMany({
+    where: { memberId, status: { in: ["PENDING_START", "ACTIVE"] } },
+    select: { id: true, packId: true, packStartedAt: true },
+  });
+  if (open.length === 0) return;
+
+  await prisma.$transaction(async (tx) => {
+    for (const enrollment of open) {
+      if (enrollment.packStartedAt) {
+        await resetPackStartWhenNoConsumption(tx, {
+          memberId,
+          packId: enrollment.packId,
+          enrollmentId: enrollment.id,
+        });
+      }
+      const balanceCount = await tx.memberPackBalance.count({
+        where: { memberId, packId: enrollment.packId },
+      });
+      if (balanceCount === 0) {
+        await resetMemberPackBalancesForPack(tx, { memberId, packId: enrollment.packId });
+      }
+    }
+  });
+}
+
 /**
  * Prépare le stock débitable avant une réservation / présence :
  * réouvre les packs parallèles inutilisés et recalcule les soldes.
@@ -690,5 +754,6 @@ export async function syncBalancesFromOpenEnrollments(
 export async function ensureMemberParallelPackStockForDebit(memberId: string): Promise<void> {
   await reopenUnusedReplacedEnrollments(memberId);
   await repairEnrollmentStartsBeforePurchase(memberId);
+  await prepareOpenEnrollmentsForBooking(memberId);
   await syncBalancesFromOpenEnrollments(memberId);
 }

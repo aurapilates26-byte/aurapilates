@@ -9,7 +9,7 @@ import { DatePicker } from "@/components/ui/date-picker";
 import { useToast } from "@/components/ui/toast-provider";
 import type { MemberDetailData, PackFormItem } from "@/lib/admin/member-detail-server";
 import { packRenewalMessageFr, type PackRenewalDecision } from "@/lib/admin/member-pack-renewal";
-import { formatYmdLocal, startOfLocalToday } from "@/lib/calendar-day";
+import { formatYmdLocal, parseYmdLocal, startOfLocalToday } from "@/lib/calendar-day";
 import { PACK_CATEGORY_OPTIONS, normalizePackCategory } from "@/lib/pack-categories";
 import { planningLevelBadgeClass } from "@/lib/planning-level-badge";
 import { planningLevelLabelFr } from "@/lib/planning-public-labels";
@@ -56,15 +56,20 @@ type SlotRow = {
 type BookablePackOption = {
   packId: string;
   packName: string;
+  totalSessions: number | null;
+  consumedSessions: number;
   remainingSessions: number;
   remainingForCourse: number;
   courseCoverageLabel: string;
+  packStartedAt: string | null;
 };
 
-type BookPackPickerState = {
+type PendingAdminBooking = {
   planningId: string;
-  packId: string;
-  options: BookablePackOption[];
+  slot: SlotRow;
+  packOptions: BookablePackOption[];
+  selectedPackId: string;
+  packsLoading: boolean;
 };
 
 type PanelMode = "view" | "edit" | "book" | "renew";
@@ -74,6 +79,28 @@ function formatDateFr(value: Date | string | null | undefined) {
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
   return date.toLocaleDateString("fr-FR");
+}
+
+function formatWeekdayFr(ymd: string) {
+  const day = parseYmdLocal(ymd.trim());
+  if (!day) return "";
+  const weekday = day.toLocaleDateString("fr-FR", { weekday: "long" });
+  return weekday.charAt(0).toUpperCase() + weekday.slice(1);
+}
+
+function formatSessionScheduleLine(input: {
+  sessionDateYmd: string;
+  startTime: string;
+  endTime: string;
+  coachName: string | null;
+}) {
+  const day = parseYmdLocal(input.sessionDateYmd.trim());
+  const weekday = formatWeekdayFr(input.sessionDateYmd);
+  const dateLabel = day ? day.toLocaleDateString("fr-FR") : input.sessionDateYmd;
+  const timeLabel = `${input.startTime} – ${input.endTime}`;
+  const parts = [weekday, dateLabel, timeLabel];
+  if (input.coachName) parts.push(input.coachName);
+  return parts.filter(Boolean).join(" · ");
 }
 
 function formatDateTimeFr(value: string) {
@@ -260,8 +287,13 @@ export function MemberDetailClient({
   const [slots, setSlots] = useState<SlotRow[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [slotsError, setSlotsError] = useState<string | null>(null);
+  const [slotsPeriodScope, setSlotsPeriodScope] = useState<"published" | "draft" | "outside" | null>(
+    null,
+  );
+  const [slotsDraftPeriodLabel, setSlotsDraftPeriodLabel] = useState<string | null>(null);
+  const [slotsPublishedPeriodLabel, setSlotsPublishedPeriodLabel] = useState<string | null>(null);
   const [bookingPlanningId, setBookingPlanningId] = useState<string | null>(null);
-  const [bookPackPicker, setBookPackPicker] = useState<BookPackPickerState | null>(null);
+  const [pendingBooking, setPendingBooking] = useState<PendingAdminBooking | null>(null);
 
   const [upcomingReservations, setUpcomingReservations] = useState<AdminMemberReservationItem[]>([]);
 
@@ -421,10 +453,21 @@ export function MemberDetailClient({
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(data?.error ?? "Impossible de charger les créneaux.");
       }
-      const data = (await response.json()) as { slots: SlotRow[] };
+      const data = (await response.json()) as {
+        slots: SlotRow[];
+        periodScope?: "published" | "draft" | "outside";
+        draftPeriodLabel?: string | null;
+        publishedPeriodLabel?: string | null;
+      };
       setSlots(data.slots);
+      setSlotsPeriodScope(data.periodScope ?? null);
+      setSlotsDraftPeriodLabel(data.draftPeriodLabel ?? null);
+      setSlotsPublishedPeriodLabel(data.publishedPeriodLabel ?? null);
     } catch (e) {
       setSlots([]);
+      setSlotsPeriodScope(null);
+      setSlotsDraftPeriodLabel(null);
+      setSlotsPublishedPeriodLabel(null);
       setSlotsError(e instanceof Error ? e.message : "Erreur");
     } finally {
       setSlotsLoading(false);
@@ -488,7 +531,15 @@ export function MemberDetailClient({
   }, [loadMember, memberId]);
 
   useEffect(() => {
-    if (panelMode !== "book" || !bookDate) return;
+    if (panelMode !== "book") return;
+    if (!bookDate) {
+      setSlots([]);
+      setSlotsError(null);
+      setSlotsPeriodScope(null);
+      setSlotsDraftPeriodLabel(null);
+      setSlotsPublishedPeriodLabel(null);
+      return;
+    }
     void loadSlots(bookDate);
   }, [bookDate, loadSlots, panelMode]);
 
@@ -836,14 +887,27 @@ export function MemberDetailClient({
       });
     } finally {
       setBookingPlanningId(null);
-      setBookPackPicker(null);
+      setPendingBooking(null);
     }
   };
 
-  const handleBookSlot = async (planningId: string, courseSlug: string) => {
+  const confirmAdminBooking = async () => {
+    if (!pendingBooking?.selectedPackId) return;
+    await submitBook(pendingBooking.planningId, pendingBooking.selectedPackId);
+  };
+
+  const handleBookSlot = async (slot: SlotRow) => {
+    setPendingBooking({
+      planningId: slot.planningId,
+      slot,
+      packOptions: [],
+      selectedPackId: "",
+      packsLoading: true,
+    });
+
     try {
       const params = new URLSearchParams({
-        courseSlug,
+        courseSlug: slot.courseSlug,
         sessionDate: bookDate,
       });
       const response = await fetch(
@@ -857,18 +921,22 @@ export function MemberDetailClient({
       const data = (await response.json()) as { items: BookablePackOption[] };
       const options = data.items ?? [];
       if (options.length === 0) {
-        throw new Error("Aucun pack avec des séances disponibles pour ce cours.");
+        throw new Error(
+          "Aucun pack avec des séances disponibles pour ce cours. Vérifiez que le pack couvre ce type de cours et qu'il reste des séances.",
+        );
       }
-      if (options.length === 1) {
-        await submitBook(planningId, options[0].packId);
-        return;
-      }
-      setBookPackPicker({
-        planningId,
-        packId: options[0].packId,
-        options,
-      });
+      setPendingBooking((prev) =>
+        prev
+          ? {
+              ...prev,
+              packOptions: options,
+              selectedPackId: options[0]!.packId,
+              packsLoading: false,
+            }
+          : prev,
+      );
     } catch (e) {
+      setPendingBooking(null);
       toast({
         variant: "error",
         title: "Réservation",
@@ -1465,7 +1533,13 @@ export function MemberDetailClient({
             <p className="mt-4 text-sm text-red-700">{slotsError}</p>
           ) : slots.length === 0 ? (
             <p className="mt-4 text-sm text-brand-dark/60">
-              Aucun créneau disponible pour cette date (cours passés ou jour sans cours).
+              {slotsPeriodScope === "outside"
+                ? `Cette date est hors période de planning${slotsPublishedPeriodLabel ? ` (période en cours : ${slotsPublishedPeriodLabel})` : ""}. Définissez la prochaine période dans le planning si besoin.`
+                : slotsPeriodScope === "draft"
+                  ? slotsDraftPeriodLabel
+                    ? `Aucun créneau préparé pour ce jour dans la prochaine période (${slotsDraftPeriodLabel}). Ajoutez des séances brouillon dans le planning.`
+                    : "Aucun créneau préparé pour ce jour dans la prochaine période. Ajoutez des séances brouillon dans le planning."
+                  : "Aucun créneau disponible pour cette date (jour sans cours dans la période en cours)."}
             </p>
           ) : (
             <ul className="mt-5 space-y-3">
@@ -1518,7 +1592,7 @@ export function MemberDetailClient({
                       <Button
                         type="button"
                         disabled={!canBook || isBooking}
-                        onClick={() => void handleBookSlot(slot.planningId, slot.courseSlug)}
+                        onClick={() => void handleBookSlot(slot)}
                         className="shrink-0"
                       >
                         {isBooking ? "..." : "Réserver"}
@@ -1599,46 +1673,101 @@ export function MemberDetailClient({
       />
 
       <Modal
-        isOpen={bookPackPicker != null}
-        title="Choisir le pack"
-        description="Plusieurs packs couvrent ce cours. Sélectionnez celui à débiter pour cette séance."
+        isOpen={pendingBooking != null}
+        title="Confirmer la réservation"
+        description="Vérifiez la séance et le solde du pack avant de finaliser l'inscription de l'adhérente."
         onClose={() => {
-          if (!bookingPlanningId) setBookPackPicker(null);
+          if (bookingPlanningId) return;
+          setPendingBooking(null);
         }}
         footer={
           <>
             <button
               type="button"
-              onClick={() => setBookPackPicker(null)}
+              onClick={() => setPendingBooking(null)}
               disabled={Boolean(bookingPlanningId)}
-              className="rounded-full border border-brand-medium/35 bg-white px-4 py-2 text-sm font-medium text-brand-dark transition hover:bg-zinc-50 disabled:opacity-60"
+              className="rounded-full border border-brand-medium/35 bg-white px-4 py-2 text-sm font-medium text-brand-dark transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
               Annuler
             </button>
             <Button
               type="button"
-              disabled={!bookPackPicker || Boolean(bookingPlanningId)}
-              onClick={() => {
-                if (!bookPackPicker) return;
-                void submitBook(bookPackPicker.planningId, bookPackPicker.packId);
-              }}
+              disabled={
+                Boolean(bookingPlanningId) ||
+                !pendingBooking?.selectedPackId ||
+                pendingBooking.packsLoading
+              }
+              onClick={() => void confirmAdminBooking()}
             >
-              {bookingPlanningId ? "Réservation..." : "Réserver"}
+              {bookingPlanningId ? "Réservation..." : "Confirmer la réservation"}
             </Button>
           </>
         }
       >
-        {bookPackPicker ? (
-          <SelectMenu
-            id="book-pack"
-            label="Pack à débiter"
-            value={bookPackPicker.packId}
-            onChange={(packId) => setBookPackPicker((prev) => (prev ? { ...prev, packId } : prev))}
-            options={bookPackPicker.options.map((option) => ({
-              value: option.packId,
-              label: `${option.packName} · ${option.remainingForCourse} séance(s) pour ce cours · ${option.courseCoverageLabel}`,
-            }))}
-          />
+        {pendingBooking ? (
+          <div className="space-y-4">
+            <div className="rounded-xl border border-brand-medium/15 bg-zinc-50/70 px-4 py-3 text-sm text-brand-dark">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-dark/50">Séance</p>
+              <p className="mt-1 font-semibold">{pendingBooking.slot.courseLabel}</p>
+              <p className="mt-0.5 text-xs text-brand-dark/65">
+                {formatSessionScheduleLine({
+                  sessionDateYmd: bookDate,
+                  startTime: pendingBooking.slot.startTime,
+                  endTime: pendingBooking.slot.endTime,
+                  coachName: pendingBooking.slot.coachName,
+                })}
+              </p>
+            </div>
+
+            {pendingBooking.packsLoading ? (
+              <p className="text-sm text-brand-dark/65">Chargement des packs disponibles…</p>
+            ) : null}
+
+            {!pendingBooking.packsLoading && pendingBooking.packOptions.length > 1 ? (
+              <SelectMenu
+                id="admin-book-pack"
+                label="Pack à débiter"
+                value={pendingBooking.selectedPackId}
+                onChange={(packId) =>
+                  setPendingBooking((prev) => (prev ? { ...prev, selectedPackId: packId } : prev))
+                }
+                options={pendingBooking.packOptions.map((option) => ({
+                  value: option.packId,
+                  label: `${option.packName} · ${option.consumedSessions}${option.totalSessions != null ? ` / ${option.totalSessions}` : ""} séances · ${option.remainingForCourse} pour ce cours`,
+                }))}
+              />
+            ) : null}
+
+            {!pendingBooking.packsLoading && pendingBooking.selectedPackId
+              ? (() => {
+                  const selectedPack =
+                    pendingBooking.packOptions.find(
+                      (option) => option.packId === pendingBooking.selectedPackId,
+                    ) ?? pendingBooking.packOptions[0];
+                  if (!selectedPack) return null;
+                  return (
+                    <div className="rounded-xl border border-brand-medium/15 bg-zinc-50/70 px-4 py-3 text-sm text-brand-dark">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-dark/50">
+                        Pack utilisé
+                      </p>
+                      <p className="mt-1 font-semibold">{selectedPack.packName}</p>
+                      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        <InfoField label="Total du pack">
+                          {selectedPack.totalSessions != null ? selectedPack.totalSessions : "—"}
+                        </InfoField>
+                        <InfoField label="1ʳᵉ réservation">
+                          {selectedPack.packStartedAt
+                            ? formatDateFr(selectedPack.packStartedAt)
+                            : "Pas encore démarré"}
+                        </InfoField>
+                        <InfoField label="Séances utilisées">{selectedPack.consumedSessions}</InfoField>
+                        <InfoField label="Séances restantes">{selectedPack.remainingSessions}</InfoField>
+                      </div>
+                    </div>
+                  );
+                })()
+              : null}
+          </div>
         ) : null}
       </Modal>
     </>

@@ -157,15 +157,8 @@ async function countPackConsumingReservations(
   return tx.reservation.count({
     where: {
       memberId,
-      AND: [
-        CONSUMING_RESERVATION_STATUSES,
-        {
-          OR: [
-            { debitedPackId: packId },
-            { debitedPackId: null, status: { in: ["BOOKED", "ATTENDED"] } },
-          ],
-        },
-      ],
+      debitedPackId: packId,
+      AND: [CONSUMING_RESERVATION_STATUSES],
     },
   });
 }
