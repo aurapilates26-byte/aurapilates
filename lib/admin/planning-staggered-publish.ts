@@ -223,6 +223,8 @@ export async function maybeRunStaggeredDraftPublication(now: Date = new Date()):
 
   // Bascule complète uniquement après le dernier jour de la période affichée (pas le dimanche 13h).
   if (todayYmd > published.periodEndYmd) {
+    const { ensureDraftPeriodWithMirrors } = await import("@/lib/admin/planning-draft-sync");
+    await ensureDraftPeriodWithMirrors();
     const { publishDraftPeriod } = await import("@/lib/admin/planning-period-draft");
     await publishDraftPeriod(row);
     return true;

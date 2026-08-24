@@ -29,7 +29,7 @@ function formatPackSessionsValue(count: number | null): string {
   return String(count);
 }
 
-type PackBadgeKind = "consuming" | "finished" | "expired";
+type PackBadgeKind = "consuming" | "pending" | "finished" | "expired";
 
 function isPackDateExpired(pack: MemberOwnedPackDto): boolean {
   if (!pack.packExpiresAt) return false;
@@ -41,7 +41,7 @@ function isPackDateExpired(pack: MemberOwnedPackDto): boolean {
   return expiresDay.getTime() < todayStart.getTime();
 }
 
-/** Expiré = date dépassée · Terminé = séances épuisées · En cours = séances restantes (démarré ou pas). */
+/** Expiré · Terminé · En cours (démarré) · En attente (pas encore démarré, FIFO). */
 function getPackBadgeKind(pack: MemberOwnedPackDto): PackBadgeKind {
   const hasRemaining =
     pack.remainingSessions > 0 ||
@@ -51,6 +51,7 @@ function getPackBadgeKind(pack: MemberOwnedPackDto): PackBadgeKind {
     return "expired";
   }
 
+  if (hasRemaining && !pack.packStartedAt) return "pending";
   if (hasRemaining) return "consuming";
 
   if (pack.totalSessions != null && pack.remainingSessions <= 0) return "finished";
@@ -63,6 +64,9 @@ function packBadgeClass(kind: PackBadgeKind): string {
   if (kind === "consuming") {
     return "border-indigo-200 bg-indigo-50 text-indigo-900";
   }
+  if (kind === "pending") {
+    return "border-amber-200 bg-amber-50 text-amber-900";
+  }
   if (kind === "finished") {
     return "border-zinc-200 bg-zinc-100 text-zinc-700";
   }
@@ -71,6 +75,7 @@ function packBadgeClass(kind: PackBadgeKind): string {
 
 function packBadgeLabel(kind: PackBadgeKind): string {
   if (kind === "consuming") return "En cours";
+  if (kind === "pending") return "En attente";
   if (kind === "finished") return "Terminé";
   return "Expiré";
 }
@@ -176,7 +181,10 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
   }
 
   const currentItems = items
-    .filter((p) => getPackBadgeKind(p) === "consuming")
+    .filter((p) => {
+      const kind = getPackBadgeKind(p);
+      return kind === "consuming" || kind === "pending";
+    })
     .sort((a, b) => new Date(a.purchasedAt).getTime() - new Date(b.purchasedAt).getTime());
   const historyItems = items
     .filter((p) => {

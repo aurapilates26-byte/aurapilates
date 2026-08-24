@@ -884,6 +884,7 @@ export function MemberDetailClient({
         variant: "error",
         title: "Réservation",
         description: e instanceof Error ? e.message : "Erreur",
+        durationMs: 14000,
       });
     } finally {
       setBookingPlanningId(null);
@@ -918,11 +919,15 @@ export function MemberDetailClient({
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(data?.error ?? "Impossible de charger les packs.");
       }
-      const data = (await response.json()) as { items: BookablePackOption[] };
+      const data = (await response.json()) as {
+        items: BookablePackOption[];
+        emptyMessage?: string;
+      };
       const options = data.items ?? [];
       if (options.length === 0) {
         throw new Error(
-          "Aucun pack avec des séances disponibles pour ce cours. Vérifiez que le pack couvre ce type de cours et qu'il reste des séances.",
+          data.emptyMessage ??
+            "Aucun pack utilisable pour ce cours à cette date. Vérifiez l'expiration, les séances restantes et le type de cours couvert.",
         );
       }
       setPendingBooking((prev) =>
@@ -941,6 +946,7 @@ export function MemberDetailClient({
         variant: "error",
         title: "Réservation",
         description: e instanceof Error ? e.message : "Erreur",
+        durationMs: 14000,
       });
     }
   };

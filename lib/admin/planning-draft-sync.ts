@@ -22,7 +22,7 @@ import {
   prismaDayOfWeekFromLocalDate,
 } from "@/lib/calendar-day";
 import { prisma } from "@/lib/prisma";
-import { proposeNextPlanningPeriod } from "@/lib/planning-period-status";
+import { proposeNextPlanningPeriod, proposePreviousPlanningPeriod } from "@/lib/planning-period-status";
 import type { PlanningPeriodConfig } from "@/types/admin/planning";
 
 const SINGLETON_ID = "singleton";
@@ -74,6 +74,31 @@ function mirrorDataFromSource(
     anchorSessionYmd: draftAnchorDate,
     isDraft: true,
     draftSource: { connect: { id: source.id } },
+    level: source.level,
+    bookingWindow: source.bookingWindow,
+    startTime: source.startTime,
+    endTime: source.endTime,
+    durationMinutes: source.durationMinutes,
+    capacity: source.capacity,
+    waitlistCapacity: source.waitlistCapacity,
+  };
+}
+
+/** Copie publiée (sans lien draftSource) — pour peupler une période en cours vide. */
+function publishedCloneFromSource(
+  source: Planning,
+  targetAnchorDate: Date,
+): Prisma.PlanningCreateInput {
+  const dayOfWeek = prismaDayOfWeekFromLocalDate(
+    parseYmdLocal(formatYmdPrismaDate(targetAnchorDate)) ?? targetAnchorDate,
+  );
+
+  return {
+    courseSlug: source.courseSlug,
+    coach: source.coachId ? { connect: { id: source.coachId } } : undefined,
+    dayOfWeek,
+    anchorSessionYmd: targetAnchorDate,
+    isDraft: false,
     level: source.level,
     bookingWindow: source.bookingWindow,
     startTime: source.startTime,
@@ -163,10 +188,38 @@ async function sourceSlotsInPeriod(period: PlanningPeriodConfig) {
   });
 }
 
+/**
+ * Si la période publiée est vide mais la précédente a des créneaux,
+ * copie la semaine précédente → période en cours (même logique que brouillon).
+ */
+async function seedPublishedPeriodFromPreviousIfEmpty(
+  currentPeriod: PlanningPeriodConfig,
+): Promise<Planning[]> {
+  const existing = await sourceSlotsInPeriod(currentPeriod);
+  if (existing.length > 0) return existing;
+
+  const previous = proposePreviousPlanningPeriod(currentPeriod);
+  if (!previous) return [];
+
+  const previousSlots = await sourceSlotsInPeriod(previous);
+  if (previousSlots.length === 0) return [];
+
+  const created: Planning[] = [];
+  for (const slot of previousSlots) {
+    const targetAnchor = draftAnchorDateForSourceSlot(slot, previous, currentPeriod);
+    if (!targetAnchor) continue;
+    const row = await prisma.planning.create({
+      data: publishedCloneFromSource(slot, targetAnchor),
+    });
+    created.push(row);
+  }
+  return created;
+}
+
 /** Garantit la période brouillon (période suivante immédiate) + copies des créneaux en cours. */
 export async function ensureDraftPeriodWithMirrors(): Promise<void> {
   const { calendarCurrent, draft } = await getCalendarContext();
-  const sourceSlots = await sourceSlotsInPeriod(calendarCurrent.period);
+  const sourceSlots = await seedPublishedPeriodFromPreviousIfEmpty(calendarCurrent.period);
   if (sourceSlots.length === 0) return;
 
   const existingMirrors = await prisma.planning.findMany({

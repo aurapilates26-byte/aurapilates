@@ -24,11 +24,14 @@ export async function GET(request: Request) {
   if (!parsed.success) return errorResponse("Paramètres invalides", 400);
 
   const sessionDateLocal = parsed.data.sessionDate ? parseYmdLocal(parsed.data.sessionDate) : null;
-  const items = await listBookablePacksForMember(
+  const result = await listBookablePacksForMember(
     guard.member.id,
     parsed.data.courseSlug,
     sessionDateLocal,
   );
 
-  return Response.json({ items });
+  return Response.json({
+    items: result.items,
+    ...(result.emptyMessage ? { emptyMessage: result.emptyMessage } : {}),
+  });
 }

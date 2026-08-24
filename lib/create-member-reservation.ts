@@ -246,13 +246,27 @@ export function reservationErrorMessage(code: string): string {
   if (code === "ALREADY_RESERVED") return "Déjà inscrit sur ce créneau";
   if (code === "ALREADY_ATTENDED") return "Présence déjà enregistrée";
   if (code === "FULL") return "Complet (capacité et liste d'attente)";
-  if (code === PACK_ERRORS.notAllowedCourse) return "Ce pack ne permet pas ce cours";
-  if (code === PACK_ERRORS.packCategoryMismatch) return "Pack incompatible avec ce type de cours";
-  if (code === PACK_ERRORS.noSessionsLeft) return "Plus de séances disponibles";
-  if (code === PACK_ERRORS.noPack) return "Aucun pack associé";
-  if (code === PACK_ERRORS.packInactive) return "Pack inactif";
-  if (code === PACK_ERRORS.packNotStarted) return "Date hors période de validité du pack";
-  if (code === PACK_ERRORS.packExpired) return "Pack expiré";
+  if (code === PACK_ERRORS.notAllowedCourse) {
+    return "Ce pack ne permet pas ce type de cours.";
+  }
+  if (code === PACK_ERRORS.packCategoryMismatch) {
+    return "Pack incompatible avec ce type de cours.";
+  }
+  if (code === PACK_ERRORS.noSessionsLeft) {
+    return "Pack terminé : plus aucune séance disponible.";
+  }
+  if (code === PACK_ERRORS.noPack) {
+    return "Aucun pack associé à cette adhérente.";
+  }
+  if (code === PACK_ERRORS.packInactive) {
+    return "Ce pack n'est plus actif.";
+  }
+  if (code === PACK_ERRORS.packNotStarted) {
+    return "Date trop tôt : le pack n'a pas encore démarré pour cette séance.";
+  }
+  if (code === PACK_ERRORS.packExpired) {
+    return "Pack expiré pour cette date. Renouvelez le pack ou choisissez une date avant l'échéance.";
+  }
   if (code === PACK_ERRORS.packChoiceRequired) {
     return "Plusieurs packs sont disponibles pour ce cours : choisissez le pack à utiliser.";
   }

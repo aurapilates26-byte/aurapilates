@@ -37,7 +37,10 @@ export async function GET(request: Request, { params }: Params) {
   if (!member) return errorResponse("Adhérente introuvable", 404);
 
   const sessionDateLocal = parsed.data.sessionDate ? parseYmdLocal(parsed.data.sessionDate) : null;
-  const items = await listBookablePacksForMember(memberId, parsed.data.courseSlug, sessionDateLocal);
+  const result = await listBookablePacksForMember(memberId, parsed.data.courseSlug, sessionDateLocal);
 
-  return Response.json({ items });
+  return Response.json({
+    items: result.items,
+    ...(result.emptyMessage ? { emptyMessage: result.emptyMessage } : {}),
+  });
 }

@@ -5,6 +5,7 @@ import {
   startOfLocalToday,
 } from "@/lib/calendar-day";
 import {
+  BOOKING_WINDOW_DAYS,
   bookingWindowDateRange,
   formatPeriodIntervalFr,
 } from "@/lib/planning-booking-window";
@@ -31,6 +32,23 @@ export function proposeNextPlanningPeriod(
   const end = parseYmdLocal(config.periodEndYmd);
   const nextStart = end ? addLocalDays(end, 1) : startOfLocalToday();
   const { from, to } = bookingWindowDateRange(config.bookingWindow, nextStart);
+  return {
+    bookingWindow: config.bookingWindow,
+    periodStartYmd: formatYmdLocal(from),
+    periodEndYmd: formatYmdLocal(to),
+    periodLabel: formatPeriodIntervalFr(from, to),
+  };
+}
+
+/** Période immédiatement précédente (même durée de fenêtre). */
+export function proposePreviousPlanningPeriod(
+  config: PlanningPeriodConfig,
+): PlanningPeriodRenewalSuggestion | null {
+  const start = parseYmdLocal(config.periodStartYmd);
+  if (!start) return null;
+  const days = BOOKING_WINDOW_DAYS[config.bookingWindow] ?? 7;
+  const prevStart = addLocalDays(start, -days);
+  const { from, to } = bookingWindowDateRange(config.bookingWindow, prevStart);
   return {
     bookingWindow: config.bookingWindow,
     periodStartYmd: formatYmdLocal(from),

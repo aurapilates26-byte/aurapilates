@@ -91,6 +91,7 @@ export async function GET(request: Request) {
   let periodEnd: Date | null = null;
 
   if (scope === "published") {
+    await ensureDraftPeriodWithMirrors();
     const period = await getPlanningPeriodConfig();
     periodStart = parseYmdToPrismaDate(period.periodStartYmd);
     periodEnd = parseYmdToPrismaDate(period.periodEndYmd);

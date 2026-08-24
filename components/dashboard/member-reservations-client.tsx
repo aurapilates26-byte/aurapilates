@@ -241,8 +241,18 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(data?.error ?? "Impossible de charger les packs.");
       }
-      const data = (await response.json()) as { items: BookablePackOption[] };
-      return data.items ?? [];
+      const data = (await response.json()) as {
+        items: BookablePackOption[];
+        emptyMessage?: string;
+      };
+      const items = data.items ?? [];
+      if (items.length === 0) {
+        throw new Error(
+          data.emptyMessage ??
+            "Aucun pack utilisable pour ce cours à cette date. Vérifiez l'expiration, les séances restantes et le type de cours couvert.",
+        );
+      }
+      return items;
     },
     [],
   );
@@ -290,6 +300,7 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
         variant: "error",
         title: "Réservation",
         description: e instanceof Error ? e.message : "Erreur.",
+        durationMs: 14000,
       });
     }
   };

@@ -135,6 +135,13 @@ function resolvePackPeriod(input: {
   return { packStartedAt: null, packExpiresAt: null };
 }
 
+function totalSessionsForPack(pack: PackCandidate["pack"]): number | null {
+  if (pack.courseQuotas.length > 0) {
+    return pack.courseQuotas.reduce((sum, q) => sum + q.sessionCount, 0);
+  }
+  return pack.sessionCount;
+}
+
 function isPackUnused(candidate: PackCandidate): boolean {
   const total = totalSessionsForPack(candidate.pack);
   if (total == null) return candidate.packStartedAt == null;
@@ -302,13 +309,6 @@ async function loadPackCandidates(
   return candidates.sort((a, b) => a.purchasedAt.getTime() - b.purchasedAt.getTime());
 }
 
-function totalSessionsForPack(pack: PackCandidate["pack"]): number | null {
-  if (pack.courseQuotas.length > 0) {
-    return pack.courseQuotas.reduce((sum, q) => sum + q.sessionCount, 0);
-  }
-  return pack.sessionCount;
-}
-
 function consumedSessionsForCandidate(candidate: PackCandidate): number {
   const total = totalSessionsForPack(candidate.pack);
   if (total == null) return 0;
@@ -405,17 +405,191 @@ export async function getMemberCombinedPackEligibility(memberId: string): Promis
   };
 }
 
+export type ListBookablePacksResult = {
+  items: BookablePackOptionDto[];
+  /** Message clair pour l'admin quand aucun pack n'est réservable. */
+  emptyMessage?: string;
+};
+
+function formatDateFrShort(d: Date): string {
+  return d.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
+function resolveCandidateExpiresAt(candidate: PackCandidate): Date | null {
+  if (candidate.packExpiresAt) return packStartDateLocal(candidate.packExpiresAt);
+  return packExpiresAtLocal(candidate.packStartedAt, candidate.pack.durationDays);
+}
+
+async function diagnoseEmptyBookablePacks(input: {
+  memberId: string;
+  courseSlug: string;
+  sessionDateLocal: Date | null | undefined;
+  eligibleCandidates: PackCandidate[];
+}): Promise<string> {
+  const { memberId, courseSlug, sessionDateLocal, eligibleCandidates } = input;
+
+  if (eligibleCandidates.length > 0 && sessionDateLocal) {
+    const expired = eligibleCandidates.filter((c) => {
+      if (!c.packStartedAt || isPackUnused(c)) return false;
+      const expiresAt = resolveCandidateExpiresAt(c);
+      return expiresAt != null && sessionDateLocal.getTime() > expiresAt.getTime();
+    });
+    if (expired.length > 0) {
+      const c = expired[0]!;
+      const expiresAt = resolveCandidateExpiresAt(c);
+      const expireLabel = expiresAt ? formatDateFrShort(expiresAt) : "non définie";
+      return `Pack ${c.packName} expiré le ${expireLabel}. Impossible de réserver le ${formatDateFrShort(sessionDateLocal)}. Choisissez une date jusqu'au ${expireLabel}, ou renouvelez le pack (${c.remainingSessions} séance(s) encore au compteur).`;
+    }
+
+    const notStarted = eligibleCandidates.filter((c) => {
+      if (!c.packStartedAt || isPackUnused(c)) return false;
+      const start = packStartDateLocal(c.packStartedAt);
+      return start != null && sessionDateLocal.getTime() < start.getTime();
+    });
+    if (notStarted.length > 0) {
+      const c = notStarted[0]!;
+      const start = packStartDateLocal(c.packStartedAt);
+      return `Pack ${c.packName} pas encore démarré pour cette date (début : ${start ? formatDateFrShort(start) : "non défini"}). Choisissez une date à partir du début du pack.`;
+    }
+
+    const expiredVsToday = eligibleCandidates.filter((c) => {
+      const expiresAt = resolveCandidateExpiresAt(c);
+      return expiresAt != null && expiresAt.getTime() < startOfLocalToday().getTime();
+    });
+    if (expiredVsToday.length > 0) {
+      const c = expiredVsToday[0]!;
+      const expiresAt = resolveCandidateExpiresAt(c);
+      return `Pack ${c.packName} expiré le ${expiresAt ? formatDateFrShort(expiresAt) : "non définie"}. Renouvelez le pack pour réserver (${c.remainingSessions} séance(s) encore au compteur).`;
+    }
+  }
+
+  const member = await prisma.member.findUnique({
+    where: { id: memberId },
+    select: {
+      packId: true,
+      packBalances: { select: { packId: true, courseSlug: true, remaining: true } },
+      packEnrollments: {
+        where: { status: { in: ["PENDING_START", "ACTIVE", "EXPIRED"] } },
+        orderBy: [{ purchasedAt: "desc" }, { createdAt: "desc" }],
+        select: {
+          packId: true,
+          status: true,
+          packStartedAt: true,
+          packExpiresAt: true,
+          pack: {
+            select: {
+              id: true,
+              name: true,
+              category: true,
+              sessionCount: true,
+              durationDays: true,
+              isActive: true,
+              courseQuotas: { select: { courseSlug: true, sessionCount: true } },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  if (!member) {
+    return "Adhérente introuvable.";
+  }
+
+  const packIds = new Set<string>();
+  for (const b of member.packBalances) packIds.add(b.packId);
+  for (const e of member.packEnrollments) packIds.add(e.packId);
+  if (member.packId) packIds.add(member.packId);
+
+  if (packIds.size === 0) {
+    return "Aucun pack associé à cette adhérente. Ajoutez ou renouvelez un pack avant de réserver.";
+  }
+
+  const packs = await prisma.pack.findMany({
+    where: { id: { in: [...packIds] } },
+    select: {
+      id: true,
+      name: true,
+      category: true,
+      sessionCount: true,
+      isActive: true,
+      courseQuotas: { select: { courseSlug: true, sessionCount: true } },
+    },
+  });
+
+  const courseLabelFr = courseLabel(courseSlug);
+  let finishedName: string | null = null;
+  let wrongCourseName: string | null = null;
+  let wrongCourseCoverage: string | null = null;
+  let inactiveName: string | null = null;
+
+  for (const pack of packs) {
+    if (!pack.isActive) {
+      inactiveName ??= pack.name;
+      continue;
+    }
+
+    const eligibility = getEligibilityForPack({
+      category: pack.category ?? null,
+      courseQuotas: pack.courseQuotas,
+    });
+    const balances = member.packBalances.filter((b) => b.packId === pack.id);
+    const coversCourse = isCourseAllowedForPack(eligibility, courseSlug);
+
+    if (!coversCourse) {
+      wrongCourseName ??= pack.name;
+      wrongCourseCoverage ??= buildCourseCoverageLabel(
+        {
+          ...pack,
+          durationDays: null,
+        },
+        courseSlug,
+      );
+      continue;
+    }
+
+    const remaining = remainingForCourseSlug(balances, pack, courseSlug);
+    if (remaining <= 0) {
+      finishedName ??= pack.name;
+      continue;
+    }
+  }
+
+  if (finishedName) {
+    return `Pack ${finishedName} terminé : plus aucune séance disponible pour ce cours. Renouvelez le pack pour réserver.`;
+  }
+
+  if (wrongCourseName) {
+    return `Le pack ${wrongCourseName} ne couvre pas ${courseLabelFr}. Cours autorisés : ${wrongCourseCoverage ?? "autre catégorie"}.`;
+  }
+
+  if (inactiveName) {
+    return `Le pack ${inactiveName} n'est plus actif. Choisissez un autre pack ou réactivez-le.`;
+  }
+
+  return `Aucun pack utilisable pour ${courseLabelFr} à cette date. Vérifiez l'expiration, les séances restantes et le type de cours couvert.`;
+}
+
 export async function listBookablePacksForMember(
   memberId: string,
   courseSlug: string,
   sessionDateLocal?: Date | null,
-): Promise<BookablePackOptionDto[]> {
+): Promise<ListBookablePacksResult> {
   await ensureMemberParallelPackStockForDebit(memberId);
   const candidates = await prisma.$transaction((tx) => loadPackCandidates(tx, memberId, courseSlug));
   const filtered = sessionDateLocal
     ? candidates.filter((c) => isCandidateValidForSessionDate(c, sessionDateLocal))
     : candidates;
-  return filtered.map(toBookablePackOptionDto);
+  const items = filtered.map(toBookablePackOptionDto);
+  if (items.length > 0) return { items };
+
+  const emptyMessage = await diagnoseEmptyBookablePacks({
+    memberId,
+    courseSlug,
+    sessionDateLocal,
+    eligibleCandidates: candidates,
+  });
+  return { items, emptyMessage };
 }
 
 export async function resolvePackForMemberBooking(

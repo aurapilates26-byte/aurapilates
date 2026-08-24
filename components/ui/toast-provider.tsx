@@ -37,13 +37,16 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 
   const toast = useCallback((input: ToastInput) => {
     const id = buildId();
+    const variant = input.variant ?? "info";
+    const defaultDuration =
+      variant === "error" || variant === "warning" ? 12000 : 3200;
     const item: ToastItem = {
       id,
       createdAt: Date.now(),
-      variant: input.variant ?? "info",
+      variant,
       title: input.title,
       description: input.description,
-      durationMs: input.durationMs ?? 3200,
+      durationMs: input.durationMs ?? defaultDuration,
     };
 
     setToasts((prev) => [item, ...prev].slice(0, 4));
@@ -66,8 +69,10 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <p className="truncate text-sm font-semibold">{t.title}</p>
-                {t.description ? <p className="mt-1 text-xs opacity-80">{t.description}</p> : null}
+                <p className="text-sm font-semibold leading-snug">{t.title}</p>
+                {t.description ? (
+                  <p className="mt-1 text-sm leading-relaxed opacity-90">{t.description}</p>
+                ) : null}
               </div>
               <button
                 type="button"

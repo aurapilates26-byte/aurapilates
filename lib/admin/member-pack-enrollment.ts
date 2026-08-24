@@ -112,9 +112,196 @@ export async function syncActiveEnrollmentDates(
   });
 }
 
+export type FifoEnrollmentAllocation = {
+  enrollmentId: string;
+  consumedTotal: number;
+  consumedByCourse: Map<string, number>;
+  firstSessionDate: Date | null;
+  remainingTotal: number;
+  remainingByCourse: Map<string, number>;
+};
+
 /**
- * Après un débit de séance : rattache la conso à la plus ancienne inscription ouverte
- * (packs parallèles 1 séance « Pas encore démarré »).
+ * Attribue les séances consommées aux inscriptions du même pack catalogue en FIFO :
+ * on remplit d'abord le pack le plus ancien, puis le suivant.
+ * (Corrige le cas « 2 packs En cours » consommés en parallèle.)
+ */
+export async function allocateFifoPackConsumptions(input: {
+  memberId: string;
+  packId: string;
+  enrollmentsAsc: { id: string }[];
+  courseQuotas: { courseSlug: string; sessionCount: number }[];
+  sessionCount: number | null;
+  category?: string | null;
+}): Promise<Map<string, FifoEnrollmentAllocation>> {
+  const result = new Map<string, FifoEnrollmentAllocation>();
+  const quotas = input.courseQuotas;
+  const hasQuotas = quotas.length > 0;
+  const totalCap = hasQuotas
+    ? quotas.reduce((sum, q) => sum + q.sessionCount, 0)
+    : input.sessionCount;
+
+  for (const enrollment of input.enrollmentsAsc) {
+    const consumedByCourse = new Map<string, number>();
+    const remainingByCourse = new Map<string, number>();
+    if (hasQuotas) {
+      for (const q of quotas) {
+        consumedByCourse.set(q.courseSlug, 0);
+        remainingByCourse.set(q.courseSlug, q.sessionCount);
+      }
+    }
+    result.set(enrollment.id, {
+      enrollmentId: enrollment.id,
+      consumedTotal: 0,
+      consumedByCourse,
+      firstSessionDate: null,
+      remainingTotal: totalCap ?? 0,
+      remainingByCourse,
+    });
+  }
+
+  if (input.enrollmentsAsc.length === 0) return result;
+
+  const eligibilitySlugs = hasQuotas
+    ? quotas.map((q) => q.courseSlug)
+    : getEligibilityForPack({
+        category: input.category ?? null,
+        courseQuotas: [],
+      }).allowedCourseSlugs;
+
+  const reservations = await prisma.reservation.findMany({
+    where: {
+      memberId: input.memberId,
+      AND: [
+        CONSUMING_RESERVATION_STATUSES,
+        {
+          OR: [
+            { debitedPackId: input.packId },
+            { debitedPackId: null, status: "ATTENDED" },
+          ],
+        },
+      ],
+      ...(eligibilitySlugs.length > 0
+        ? { planning: { courseSlug: { in: eligibilitySlugs } } }
+        : {}),
+    },
+    orderBy: [{ sessionDate: "asc" }, { createdAt: "asc" }],
+    select: {
+      sessionDate: true,
+      planning: { select: { courseSlug: true } },
+    },
+  });
+
+  for (const reservation of reservations) {
+    const courseSlug = reservation.planning.courseSlug;
+    for (const enrollment of input.enrollmentsAsc) {
+      const alloc = result.get(enrollment.id)!;
+      // Pack encore ouvert : on ne passe au suivant que lorsqu'il est plein.
+      if (alloc.remainingTotal <= 0) continue;
+
+      if (hasQuotas) {
+        const remainingForCourse = alloc.remainingByCourse.get(courseSlug) ?? 0;
+        if (remainingForCourse <= 0) {
+          // Quota cours épuisé sur ce pack, mais d'autres séances restent →
+          // ne pas ouvrir le pack suivant (finir d'abord le plus ancien).
+          break;
+        }
+        alloc.remainingByCourse.set(courseSlug, remainingForCourse - 1);
+        alloc.consumedByCourse.set(
+          courseSlug,
+          (alloc.consumedByCourse.get(courseSlug) ?? 0) + 1,
+        );
+        alloc.consumedTotal += 1;
+        alloc.remainingTotal = Math.max(0, alloc.remainingTotal - 1);
+        if (!alloc.firstSessionDate) alloc.firstSessionDate = reservation.sessionDate;
+        break;
+      }
+
+      alloc.consumedTotal += 1;
+      alloc.remainingTotal = totalCap != null ? Math.max(0, totalCap - alloc.consumedTotal) : 0;
+      if (!alloc.firstSessionDate) alloc.firstSessionDate = reservation.sessionDate;
+      break;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Réalignement DB : packStartedAt / status selon l'attribution FIFO.
+ * Les inscriptions sans conso FIFO repassent à 0 (Pas encore démarré).
+ */
+export async function repairFifoEnrollmentActivationForPack(input: {
+  memberId: string;
+  packId: string;
+  durationDays: string | null;
+  courseQuotas: { courseSlug: string; sessionCount: number }[];
+  sessionCount: number | null;
+  category?: string | null;
+}): Promise<void> {
+  const enrollments = await prisma.memberPackEnrollment.findMany({
+    where: {
+      memberId: input.memberId,
+      packId: input.packId,
+      status: { in: ["PENDING_START", "ACTIVE"] },
+    },
+    orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
+    select: { id: true, packStartedAt: true, status: true },
+  });
+  if (enrollments.length <= 1) return;
+
+  const allocations = await allocateFifoPackConsumptions({
+    memberId: input.memberId,
+    packId: input.packId,
+    enrollmentsAsc: enrollments,
+    courseQuotas: input.courseQuotas,
+    sessionCount: input.sessionCount,
+    category: input.category,
+  });
+
+  for (const enrollment of enrollments) {
+    const alloc = allocations.get(enrollment.id);
+    if (!alloc) continue;
+
+    if (alloc.consumedTotal <= 0) {
+      if (enrollment.packStartedAt != null || enrollment.status !== "PENDING_START") {
+        await prisma.memberPackEnrollment.update({
+          where: { id: enrollment.id },
+          data: {
+            packStartedAt: null,
+            packExpiresAt: null,
+            status: "PENDING_START",
+            closedAt: null,
+          },
+        });
+      }
+      continue;
+    }
+
+    const packStartedAt = alloc.firstSessionDate;
+    if (!packStartedAt) continue;
+    const packExpiresAt = addPackDurationToStartDate(packStartedAt, input.durationDays) ?? null;
+    const startedSame =
+      enrollment.packStartedAt &&
+      enrollment.packStartedAt.getTime() === packStartedAt.getTime();
+    if (!startedSame || enrollment.status !== "ACTIVE") {
+      await prisma.memberPackEnrollment.update({
+        where: { id: enrollment.id },
+        data: {
+          packStartedAt,
+          packExpiresAt,
+          status: "ACTIVE",
+          closedAt: null,
+        },
+      });
+    }
+  }
+}
+
+/**
+ * Après un débit de séance : démarre uniquement l'inscription FIFO courante
+ * (plus ancienne encore non pleine). Ne démarre jamais le pack suivant tant que
+ * le précédent du même catalogue a encore des séances.
  */
 export async function consumeOldestOpenEnrollmentOnDebit(
   tx: Prisma.TransactionClient,
@@ -125,23 +312,70 @@ export async function consumeOldestOpenEnrollmentOnDebit(
     durationDays: string | null;
   },
 ): Promise<void> {
-  const unstarted = await tx.memberPackEnrollment.findFirst({
+  const pack = await tx.pack.findUnique({
+    where: { id: input.packId },
+    select: {
+      sessionCount: true,
+      category: true,
+      courseQuotas: { select: { courseSlug: true, sessionCount: true } },
+    },
+  });
+  if (!pack) return;
+
+  const openEnrollments = await tx.memberPackEnrollment.findMany({
     where: {
       memberId: input.memberId,
       packId: input.packId,
       status: { in: ["PENDING_START", "ACTIVE"] },
-      packStartedAt: null,
     },
     orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
-    select: { id: true },
+    select: { id: true, purchasedAt: true, status: true, packStartedAt: true },
   });
-  if (!unstarted) return;
+  if (openEnrollments.length === 0) return;
 
-  const packExpiresAt = addPackDurationToStartDate(input.sessionDateDb, input.durationDays) ?? null;
+  const allocations = await allocateFifoPackConsumptions({
+    memberId: input.memberId,
+    packId: input.packId,
+    enrollmentsAsc: openEnrollments,
+    courseQuotas: pack.courseQuotas,
+    sessionCount: pack.sessionCount,
+    category: pack.category,
+  });
+
+  // Cible = plus ancienne inscription encore non pleine (FIFO).
+  let targetId: string | null = null;
+  for (const enrollment of openEnrollments) {
+    const alloc = allocations.get(enrollment.id);
+    if (!alloc) continue;
+    if (alloc.remainingTotal > 0) {
+      targetId = enrollment.id;
+      break;
+    }
+  }
+  if (!targetId) {
+    targetId = openEnrollments[openEnrollments.length - 1]!.id;
+  }
+
+  const target = openEnrollments.find((e) => e.id === targetId);
+  if (!target || target.packStartedAt) return;
+
+  // Ne démarre le pack suivant que s'il est bien la cible FIFO
+  // (tous les packs plus anciens sont déjà pleins).
+  const olderStillOpen = openEnrollments.some((e) => {
+    if (e.id === target.id) return false;
+    if (e.purchasedAt.getTime() > target.purchasedAt.getTime()) return false;
+    const olderAlloc = allocations.get(e.id);
+    return (olderAlloc?.remainingTotal ?? 0) > 0;
+  });
+  if (olderStillOpen) return;
+
+  const alloc = allocations.get(targetId);
+  const packStartedAt = alloc?.firstSessionDate ?? input.sessionDateDb;
+  const packExpiresAt = addPackDurationToStartDate(packStartedAt, input.durationDays) ?? null;
   await tx.memberPackEnrollment.update({
-    where: { id: unstarted.id },
+    where: { id: target.id },
     data: {
-      packStartedAt: input.sessionDateDb,
+      packStartedAt,
       packExpiresAt,
       status: "ACTIVE",
       closedAt: null,
