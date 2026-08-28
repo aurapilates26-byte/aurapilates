@@ -1,4 +1,5 @@
 import { courseLabel } from "@/lib/course-labels";
+import { isPackSessionConsumed } from "@/lib/pack-session-consumption";
 
 export type ReservationHistoryCourseCount = {
   courseSlug: string;
@@ -34,19 +35,28 @@ function sortCourseSlugs(slugs: string[], preferredOrder?: string[]): string[] {
 }
 
 type HistoryReservationRow = {
+  status?: string;
+  packRefundedAt?: string | null;
   planning: { courseSlug?: string; courseLabel: string };
 };
 
 /**
  * Compte l'historique total et par type de cours (Reformer / Mat, etc.).
+ * Seules les séances réellement consommées sont comptées (cohérent avec la fiche pack).
  * Si le pack a plusieurs quotas, affiche tous les cours du pack (y compris à 0).
  */
 export function buildReservationHistoryCounts(
   history: HistoryReservationRow[],
   courseQuotaSlugs?: string[],
 ): ReservationHistoryCounts {
+  const consumedHistory = history.filter((row) =>
+    isPackSessionConsumed({
+      status: row.status ?? "",
+      packRefundedAt: row.packRefundedAt,
+    }),
+  );
   const countsBySlug = new Map<string, number>();
-  for (const row of history) {
+  for (const row of consumedHistory) {
     const slug = row.planning.courseSlug ?? row.planning.courseLabel;
     countsBySlug.set(slug, (countsBySlug.get(slug) ?? 0) + 1);
   }
@@ -61,7 +71,7 @@ export function buildReservationHistoryCounts(
         : [];
 
   if (slugsToShow.length < 2) {
-    return { total: history.length, byCourse: [] };
+    return { total: consumedHistory.length, byCourse: [] };
   }
 
   const byCourse = slugsToShow.map((slug) => {
@@ -74,7 +84,7 @@ export function buildReservationHistoryCounts(
     };
   });
 
-  return { total: history.length, byCourse };
+  return { total: consumedHistory.length, byCourse };
 }
 
 export function formatHistoryCourseBreakdown(byCourse: ReservationHistoryCourseCount[]): string {

@@ -1,3 +1,5 @@
+import { studioClockHHMM } from "@/lib/studio-timezone";
+
 /** Utilitaires fenêtre de présence : ouverture 15 min avant le début du cours. */
 
 export function minus15Minutes(clock: string): string {
@@ -12,12 +14,8 @@ export function minus15Minutes(clock: string): string {
 }
 
 export function localNowTimeString(offsetMinutes: number = 0): string {
-  const n = new Date();
-  if (offsetMinutes === 0) {
-    return `${String(n.getHours()).padStart(2, "0")}:${String(n.getMinutes()).padStart(2, "0")}`;
-  }
-  const d = new Date(n.getTime() + offsetMinutes * 60_000);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  if (offsetMinutes === 0) return studioClockHHMM(new Date());
+  return studioClockHHMM(new Date(Date.now() + offsetMinutes * 60_000));
 }
 
 /** Créneau en cours : de (début − 15 min) jusqu'à la fin du cours. */

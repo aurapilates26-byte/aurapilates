@@ -6,7 +6,7 @@ import { courseLabel } from "@/lib/course-labels";
 import { formatYmdLocal, parseYmdLocal, parseYmdToPrismaDate, startOfLocalToday } from "@/lib/calendar-day";
 import { getAdminOperationalPlanningSlotsForDate } from "@/lib/admin/planning-operational-slots";
 import { repairAttendedReservationsWithoutAttendance } from "@/lib/ensure-reservation-attendance";
-import { SESSION_PROSPECT_OCCUPYING_STATUSES } from "@/lib/admin/session-prospect-stats";
+import { SESSION_PROSPECT_ROSTER_STATUSES } from "@/lib/admin/session-prospect-stats";
 import { prisma } from "@/lib/prisma";
 
 function errorResponse(message: string, status: number) {
@@ -74,7 +74,7 @@ export async function GET(request: Request) {
     where: {
       planningId: planning.id,
       sessionDate: dayDb,
-      status: { in: [...SESSION_PROSPECT_OCCUPYING_STATUSES, "CONVERTED"] },
+      status: { in: [...SESSION_PROSPECT_ROSTER_STATUSES] },
     },
     orderBy: [{ createdAt: "asc" }],
     select: {

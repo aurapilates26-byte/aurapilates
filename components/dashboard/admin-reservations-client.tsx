@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { DashboardHeader } from "@/components/dashboard/header";
 import { Input } from "@/components/ui";
+import { ConfirmDialog } from "@/components/ui";
 import { badgeClasses } from "@/lib/badge-classes";
 import { planningLevelBadgeClass } from "@/lib/planning-level-badge";
 import { planningLevelLabelFr } from "@/lib/planning-public-labels";
@@ -14,6 +15,7 @@ import {
   buildConvertedProspectByMemberId,
   ConvertedProspectBadge,
   filterVisibleProspects,
+  ProspectPresenceStatusBadges,
   ProspectRowActions,
 } from "@/components/dashboard/reservations/prospect-row-actions";
 import { RecordProspectTrialPaymentDialog } from "@/components/dashboard/reservations/record-prospect-trial-payment-dialog";
@@ -118,21 +120,14 @@ const prospectStatusLabels: Record<string, string> = {
   ACTIVE: "Prospect",
   PAID_TRIAL: "Prospect",
   CONVERTED: "Convertie",
+  CANCELLED: "Annulé",
 };
 
-function prospectBadgeClass(_status: ProspectRow["status"]) {
+function prospectBadgeClass(status: ProspectRow["status"]) {
+  if (status === "CANCELLED") {
+    return "inline-flex rounded-full border border-zinc-300 bg-zinc-100 px-2 py-0.5 text-xs font-semibold text-zinc-700";
+  }
   return "inline-flex rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-xs font-semibold text-violet-900";
-}
-
-/** Séance encaissée = la personne était présente à la séance d'essai. */
-function prospectPresenceLabel(status: ProspectRow["status"]): string {
-  if (status === "PAID_TRIAL") return "Oui";
-  return "—";
-}
-
-function prospectPresenceClass(status: ProspectRow["status"]): string {
-  if (status === "PAID_TRIAL") return "text-brand-dark/80";
-  return "text-brand-dark/60";
 }
 
 function cancelledPackInfoLabel(r: RosterRow) {
@@ -210,6 +205,12 @@ export function AdminReservationsClient() {
   const [addProspectSubmitting, setAddProspectSubmitting] = useState(false);
   const [trialPaymentProspect, setTrialPaymentProspect] = useState<ProspectRow | null>(null);
   const [trialPaymentSubmitting, setTrialPaymentSubmitting] = useState(false);
+  const [prospectToDelete, setProspectToDelete] = useState<{
+    prospect: ProspectRow;
+    dateYmd: string;
+    planningId: string;
+  } | null>(null);
+  const [deletingProspectId, setDeletingProspectId] = useState<string | null>(null);
 
   const searchAbortRef = useRef<AbortController | null>(null);
 
@@ -469,6 +470,35 @@ export function AdminReservationsClient() {
   );
   const openProspectCollect = useCallback((p: ProspectRow) => setTrialPaymentProspect(p), []);
 
+  const handleDeleteProspect = useCallback(
+    async (prospect: ProspectRow, dateYmd: string, planningId: string) => {
+      setDeletingProspectId(prospect.id);
+      try {
+        const res = await fetch(`/api/admin/reservations/prospects/${encodeURIComponent(prospect.id)}`, {
+          method: "DELETE",
+        });
+        const payload = (await res.json().catch(() => null)) as { error?: string } | null;
+        if (!res.ok) throw new Error(payload?.error ?? "Suppression impossible.");
+        setProspectToDelete(null);
+        await refreshSlotAndRoster(planningId, dateYmd);
+        toast({
+          variant: "success",
+          title: "Prospect annulé",
+          description: `${prospect.firstName} ${prospect.lastName} est marqué comme annulé sur ce créneau.`,
+        });
+      } catch (e) {
+        toast({
+          variant: "error",
+          title: "Erreur",
+          description: e instanceof Error ? e.message : "Erreur.",
+        });
+      } finally {
+        setDeletingProspectId(null);
+      }
+    },
+    [refreshSlotAndRoster, toast],
+  );
+
   function renderRosterAccordion(dateYmd: string, s: SlotRow) {
     const key = `${dateYmd}:${s.planningId}`;
     const expanded = expandedKey === key;
@@ -511,8 +541,7 @@ export function AdminReservationsClient() {
                         .map((r) => (
                           <tr key={r.id}>
                             <td className="px-4 py-3 text-left font-medium text-brand-dark">
-                              <div>{`${r.member.firstName ?? ""} ${r.member.lastName ?? ""}`.trim() || "—"}</div>
-                              <div className="text-xs font-normal text-brand-dark/60">{r.member.email ?? "—"}</div>
+                              {`${r.member.firstName ?? ""} ${r.member.lastName ?? ""}`.trim() || "—"}
                             </td>
                             <td className="px-4 py-3 text-center text-brand-dark/80">{r.member.phone ?? "—"}</td>
                             <td className="px-4 py-3 text-center text-brand-dark/70">{s.courseLabel}</td>
@@ -535,7 +564,7 @@ export function AdminReservationsClient() {
                       {visibleProspects
                         .filter((p) => matchesRosterFilter(p.firstName, p.lastName, p.phone, rosterFilterQuery))
                         .map((p) => (
-                          <tr key={`prospect-${p.id}`} className="bg-violet-50/30">
+                          <tr key={`prospect-${p.id}`} className={p.status === "CANCELLED" ? "bg-zinc-50/80" : "bg-violet-50/30"}>
                             <td className="px-4 py-3 text-left font-medium text-brand-dark">
                               {`${p.firstName} ${p.lastName}`.trim()}
                             </td>
@@ -546,17 +575,25 @@ export function AdminReservationsClient() {
                                 {prospectStatusLabels[p.status] ?? p.status}
                               </span>
                             </td>
-                            <td className={`px-4 py-3 text-center ${prospectPresenceClass(p.status)}`}>
-                              {prospectPresenceLabel(p.status)}
+                            <td className="px-4 py-3 text-center">
+                              <ProspectPresenceStatusBadges prospect={p} />
                             </td>
                             <td className="px-4 py-3 text-center">
-                              <div className="flex flex-wrap items-center justify-center gap-1.5">
-                                <ProspectRowActions
-                                  prospect={p}
-                                  onCollect={() => openProspectCollect(p)}
-                                  onConvert={() => openProspectConvert(p)}
-                                />
-                              </div>
+                              {p.status === "CANCELLED" ? (
+                                "—"
+                              ) : (
+                                <div className="flex flex-wrap items-center justify-center gap-1.5">
+                                  <ProspectRowActions
+                                    prospect={p}
+                                    onCollect={() => openProspectCollect(p)}
+                                    onConvert={() => openProspectConvert(p)}
+                                    onDelete={() =>
+                                      setProspectToDelete({ prospect: p, dateYmd, planningId: s.planningId })
+                                    }
+                                    deleting={deletingProspectId === p.id}
+                                  />
+                                </div>
+                              )}
                             </td>
                           </tr>
                         ))}
@@ -577,7 +614,6 @@ export function AdminReservationsClient() {
                             <p className="font-semibold text-brand-dark">
                               {`${r.member.firstName ?? ""} ${r.member.lastName ?? ""}`.trim() || "—"}
                             </p>
-                            <p className="mt-1 text-xs text-brand-dark/70">{r.member.email ?? "—"}</p>
                             <p className="mt-1 text-xs text-brand-dark/60">{r.member.phone ?? "—"}</p>
                             {r.status === "CANCELLED" ? (
                               <p className="mt-1 text-[11px] font-medium text-brand-dark/65">{cancelledPackInfoLabel(r)}</p>
@@ -603,7 +639,12 @@ export function AdminReservationsClient() {
                   {visibleProspects
                     .filter((p) => matchesRosterFilter(p.firstName, p.lastName, p.phone, rosterFilterQuery))
                     .map((p) => (
-                      <article key={`prospect-${p.id}`} className="border-b border-violet-100 bg-violet-50/40 p-2 last:border-b-0 sm:p-4">
+                      <article
+                        key={`prospect-${p.id}`}
+                        className={`border-b border-violet-100 p-2 last:border-b-0 sm:p-4 ${
+                          p.status === "CANCELLED" ? "bg-zinc-50/80" : "bg-violet-50/40"
+                        }`}
+                      >
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
                             <p className="font-semibold text-brand-dark">{`${p.firstName} ${p.lastName}`.trim()}</p>
@@ -616,17 +657,23 @@ export function AdminReservationsClient() {
                         </div>
                         <p className="mt-2 text-xs text-brand-dark/70">
                           Présence :{" "}
-                          <span className={`font-semibold ${prospectPresenceClass(p.status)}`}>
-                            {prospectPresenceLabel(p.status)}
+                          <span className="inline-flex align-middle">
+                            <ProspectPresenceStatusBadges prospect={p} />
                           </span>
                         </p>
-                        <div className="mt-2">
-                          <ProspectRowActions
-                            prospect={p}
-                            onCollect={() => openProspectCollect(p)}
-                            onConvert={() => openProspectConvert(p)}
-                          />
-                        </div>
+                        {p.status !== "CANCELLED" ? (
+                          <div className="mt-2">
+                            <ProspectRowActions
+                              prospect={p}
+                              onCollect={() => openProspectCollect(p)}
+                              onConvert={() => openProspectConvert(p)}
+                              onDelete={() =>
+                                setProspectToDelete({ prospect: p, dateYmd, planningId: s.planningId })
+                              }
+                              deleting={deletingProspectId === p.id}
+                            />
+                          </div>
+                        ) : null}
                       </article>
                     ))}
                 </div>
@@ -874,6 +921,27 @@ export function AdminReservationsClient() {
         isSubmitting={trialPaymentSubmitting}
         onClose={() => setTrialPaymentProspect(null)}
         onConfirm={handleConfirmTrialPayment}
+      />
+
+      <ConfirmDialog
+        isOpen={prospectToDelete != null}
+        title="Annuler ce prospect ?"
+        description={
+          prospectToDelete
+            ? `${prospectToDelete.prospect.firstName} ${prospectToDelete.prospect.lastName} sera marqué comme annulé sur ce créneau.`
+            : undefined
+        }
+        confirmText="Annuler le prospect"
+        isConfirming={deletingProspectId != null}
+        onClose={() => setProspectToDelete(null)}
+        onConfirm={() => {
+          if (!prospectToDelete) return;
+          void handleDeleteProspect(
+            prospectToDelete.prospect,
+            prospectToDelete.dateYmd,
+            prospectToDelete.planningId,
+          );
+        }}
       />
     </>
   );

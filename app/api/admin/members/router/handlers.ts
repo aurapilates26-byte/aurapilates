@@ -29,6 +29,7 @@ import {
   updateMemberDepositPaymentInTransaction,
 } from "@/lib/admin/member-deposit";
 import { deriveMemberPaymentStatus } from "@/lib/admin/member-payment-status";
+import { ensurePaidTrialProspectMembersLinked } from "@/lib/admin/session-prospect";
 import { addParallelMemberPack } from "@/lib/admin/member-owned-packs";
 import { closeOpenEnrollmentsForPack } from "@/lib/admin/member-pack-enrollment";
 import {
@@ -94,6 +95,7 @@ function mapMember(
     user: { email: string } | null;
     pack: { id: string; name: string; durationDays: string | null } | null;
     assignedQrCodes: { publicId: string; qrKey: string; status: string; updatedAt: Date }[];
+    convertedFromProspects?: { id: string; status: string }[];
   },
   paymentTotals?: {
     totalPaid: number;
@@ -127,6 +129,7 @@ function mapMember(
           }
         : null,
     isActive: record.isActive,
+    isProspectTrial: (record.convertedFromProspects?.length ?? 0) > 0,
     enrollmentStatus: record.enrollmentStatus,
     expectedPackAmountDinars: record.expectedPackAmountDinars,
     totalPaidDinars: paymentTotals?.totalPaid ?? null,
@@ -167,6 +170,11 @@ const memberListInclude = {
     orderBy: { updatedAt: "desc" as const },
     take: 1,
     select: { publicId: true, qrKey: true, status: true, updatedAt: true },
+  },
+  convertedFromProspects: {
+    where: { status: "PAID_TRIAL" },
+    select: { id: true, status: true },
+    take: 1,
   },
 } satisfies Prisma.MemberInclude;
 
@@ -233,6 +241,8 @@ function matchesStatusFilter(status: MemberOperationalStatus, filter: string): b
 export async function listAdminMembers(request: Request) {
   const sessionResult = await requireAdminSession();
   if ("error" in sessionResult) return sessionResult.error;
+
+  await ensurePaidTrialProspectMembersLinked();
 
   const url = new URL(request.url);
   const parsedQuery = listMembersQuerySchema.safeParse({

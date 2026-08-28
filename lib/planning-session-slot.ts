@@ -7,6 +7,30 @@ export const DEFAULT_PLANNING_COURSE_MINUTES = 50;
 export const DEFAULT_PLANNING_CAPACITY = 6;
 export const DEFAULT_PLANNING_WAITLIST_CAPACITY = 2;
 
+/** Capacité max par type de cours (places réservables sur le créneau). */
+export const SESSION_CAPACITY_BY_COURSE_SLUG: Record<string, number> = {
+  "pilates-reformer": 6,
+  "mat-pilates": 5,
+  "coaching-prive": 1,
+  "cours-de-yoga": 5,
+  yoga: 5,
+  "cours-de-dance": 6,
+  dance: 6,
+};
+
+export function sessionCapacityForCourseSlug(courseSlug: string): number {
+  return SESSION_CAPACITY_BY_COURSE_SLUG[courseSlug] ?? DEFAULT_PLANNING_CAPACITY;
+}
+
+/** Capacité effective pour affichage, réservation et décompte des places. */
+export function effectivePlanningCapacity(courseSlug: string, storedCapacity?: number | null): number {
+  if (Object.prototype.hasOwnProperty.call(SESSION_CAPACITY_BY_COURSE_SLUG, courseSlug)) {
+    return SESSION_CAPACITY_BY_COURSE_SLUG[courseSlug]!;
+  }
+  if (storedCapacity != null && storedCapacity > 0) return storedCapacity;
+  return DEFAULT_PLANNING_CAPACITY;
+}
+
 export const PLANNING_SLOT_OVERLAP_ERROR =
   "Ce créneau chevauche une séance existante du même cours sur cette date (bloc d'1 heure).";
 

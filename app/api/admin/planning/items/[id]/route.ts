@@ -13,6 +13,7 @@ import {
   syncPublishedDeleteToDraft,
   syncPublishedUpdateToDraft,
 } from "@/lib/admin/planning-draft-sync";
+import { effectivePlanningCapacity } from "@/lib/planning-session-slot";
 
 const db = new PrismaClient();
 
@@ -102,7 +103,7 @@ export async function PUT(request: Request, { params }: Params) {
         startTime: data.startTime,
         endTime: data.endTime,
         durationMinutes: data.durationMinutes,
-        capacity: data.capacity,
+        capacity: effectivePlanningCapacity(data.courseSlug, data.capacity),
         waitlistCapacity: data.waitlistCapacity ?? null,
       },
       include: {

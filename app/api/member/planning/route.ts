@@ -16,6 +16,7 @@ import {
 } from "@/lib/admin/planning-staggered-publish";
 import { planningSlotOccurrenceDates } from "@/lib/planning-slot-occurrences";
 import { getMemberBookableCourseSlugs } from "@/lib/admin/member-pack-selection";
+import { effectivePlanningCapacity } from "@/lib/planning-session-slot";
 import { prisma } from "@/lib/prisma";
 import { requireMemberSession } from "@/lib/require-member";
 import { getStudioBookingRules } from "@/lib/studio-booking-rules-server";
@@ -133,7 +134,8 @@ export async function GET(request: Request) {
       const waitlistCount = rows.filter((r) => r.status === "WAITLIST").length;
       const mine = rows.find((r) => r.memberId === member.id) ?? null;
 
-      const spotsRemaining = Math.max(0, p.capacity - mainOccupied);
+      const capacity = effectivePlanningCapacity(p.courseSlug, p.capacity);
+      const spotsRemaining = Math.max(0, capacity - mainOccupied);
       const waitSpotsRemaining =
         p.waitlistCapacity == null ? null : Math.max(0, p.waitlistCapacity - waitlistCount);
 
@@ -147,7 +149,7 @@ export async function GET(request: Request) {
         level: p.level,
         coachName: p.coach ? `${p.coach.firstName} ${p.coach.lastName}`.trim() : null,
         coachImageUrl: p.coach?.imageUrl ?? null,
-        capacity: p.capacity,
+        capacity,
         waitlistCapacity: p.waitlistCapacity,
         mainOccupied,
         waitlistCount,

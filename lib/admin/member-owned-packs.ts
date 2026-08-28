@@ -390,6 +390,7 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
       courseQuotas: pack.courseQuotas,
       sessionCount: pack.sessionCount,
       category: pack.category,
+      countingMode: "display",
     });
     for (const [enrollmentId, alloc] of allocations) {
       fifoByEnrollmentId.set(enrollmentId, alloc);

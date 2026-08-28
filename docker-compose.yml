@@ -28,6 +28,8 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
+      TZ: Africa/Tunis
+      STUDIO_TIMEZONE: Africa/Tunis
       DATABASE_URL: postgresql://postgres:postgres@db:5432/aurapilates
       PRISMA_MIGRATE: "1"
     ports:

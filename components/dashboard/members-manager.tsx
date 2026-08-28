@@ -27,6 +27,14 @@ import type { PersonalDiscountType } from "@/types/admin/pack-payment";
 const MEMBERS_PAGE_SIZE = 20;
 const MEMBERS_FETCH_PAGE_SIZE = 5000;
 
+function MemberProspectTrialBadge() {
+  return (
+    <span className="inline-flex rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-xs font-semibold text-violet-900">
+      Prospect
+    </span>
+  );
+}
+
 function memberMatchesSearch(member: MemberItem, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
@@ -203,6 +211,7 @@ type MemberItem = {
   packStartedAt: string | null;
   packExpiresAt: string | null;
   isActive: boolean;
+  isProspectTrial?: boolean;
   enrollmentStatus?: "ACTIVE" | "DEPOSIT_PENDING";
   paymentStatus?: MemberPaymentStatus;
   expectedPackAmountDinars?: number | null;
@@ -1083,21 +1092,27 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                         </p>
                       </div>
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <span
-                          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
-                            m.isActive
-                              ? "border border-emerald-200 bg-emerald-50 text-emerald-900"
-                              : "border border-zinc-200 bg-zinc-50 text-zinc-800"
-                          }`}
-                        >
-                          {m.isActive ? "Active" : "Inactive"}
-                        </span>
-                        {(m.paymentStatus ?? "PAID") !== "PAID" ? (
-                          <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-900">
-                            {MEMBER_PAYMENT_STATUS_LABELS[m.paymentStatus ?? "ADVANCE"]}
-                            {m.remainingDinars != null ? ` · ${m.remainingDinars} DT` : ""}
-                          </span>
-                        ) : null}
+                        {m.isProspectTrial ? (
+                          <MemberProspectTrialBadge />
+                        ) : (
+                          <>
+                            <span
+                              className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
+                                m.isActive
+                                  ? "border border-emerald-200 bg-emerald-50 text-emerald-900"
+                                  : "border border-zinc-200 bg-zinc-50 text-zinc-800"
+                              }`}
+                            >
+                              {m.isActive ? "Active" : "Inactive"}
+                            </span>
+                            {(m.paymentStatus ?? "PAID") !== "PAID" ? (
+                              <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-900">
+                                {MEMBER_PAYMENT_STATUS_LABELS[m.paymentStatus ?? "ADVANCE"]}
+                                {m.remainingDinars != null ? ` · ${m.remainingDinars} DT` : ""}
+                              </span>
+                            ) : null}
+                          </>
+                        )}
                       </div>
                     </div>
                     <p className="text-xs text-brand-dark/75">Pack : {m.pack?.name ?? "—"}</p>
@@ -1220,21 +1235,27 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                           <>
                             <td className="px-4 py-4 text-center">
                               <div className="flex flex-col items-center gap-1">
-                                <span
-                                  className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
-                                    m.isActive
-                                      ? "border border-emerald-200 bg-emerald-50 text-emerald-900"
-                                      : "border border-zinc-200 bg-zinc-50 text-zinc-800"
-                                  }`}
-                                >
-                                  {m.isActive ? "Active" : "Inactive"}
-                                </span>
-                                {(m.paymentStatus ?? "PAID") !== "PAID" ? (
-                                  <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-900">
-                                    {MEMBER_PAYMENT_STATUS_LABELS[m.paymentStatus ?? "ADVANCE"]}
-                                    {m.remainingDinars != null ? ` · ${m.remainingDinars} DT` : ""}
-                                  </span>
-                                ) : null}
+                                {m.isProspectTrial ? (
+                                  <MemberProspectTrialBadge />
+                                ) : (
+                                  <>
+                                    <span
+                                      className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
+                                        m.isActive
+                                          ? "border border-emerald-200 bg-emerald-50 text-emerald-900"
+                                          : "border border-zinc-200 bg-zinc-50 text-zinc-800"
+                                      }`}
+                                    >
+                                      {m.isActive ? "Active" : "Inactive"}
+                                    </span>
+                                    {(m.paymentStatus ?? "PAID") !== "PAID" ? (
+                                      <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-900">
+                                        {MEMBER_PAYMENT_STATUS_LABELS[m.paymentStatus ?? "ADVANCE"]}
+                                        {m.remainingDinars != null ? ` · ${m.remainingDinars} DT` : ""}
+                                      </span>
+                                    ) : null}
+                                  </>
+                                )}
                               </div>
                             </td>
                             <td className="px-4 py-4 text-center text-brand-dark/80">{m.pack?.name ?? "—"}</td>

@@ -5,7 +5,7 @@ export type ProspectRow = {
   phone: string;
   courseSlug: string;
   courseLabel: string;
-  status: "ACTIVE" | "CONVERTED" | "PAID_TRIAL";
+  status: "ACTIVE" | "CONVERTED" | "PAID_TRIAL" | "CANCELLED";
   convertedMemberId?: string | null;
 };
 

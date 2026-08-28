@@ -7,7 +7,7 @@ declare global {
 }
 
 /** Incrémenter quand le schéma Prisma change (évite client global obsolète en dev). */
-const PRISMA_SCHEMA_FINGERPRINT = "session-prospect-trial-pack-v1";
+const PRISMA_SCHEMA_FINGERPRINT = "session-prospect-cancelled-v1";
 
 function createPrismaClient() {
   return new PrismaClient({

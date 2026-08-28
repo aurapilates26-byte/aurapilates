@@ -1,4 +1,5 @@
 import type { DayOfWeek } from "@prisma/client";
+import { startOfStudioCalendarDay, studioClockHHMM, studioWallClock, studioYmd } from "@/lib/studio-timezone";
 
 const JS_TO_PRISMA: DayOfWeek[] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
 
@@ -16,14 +17,14 @@ function pad2(n: number) {
   return String(n).padStart(2, "0");
 }
 
-/** Start of today in local timezone (date only, midnight local). */
+/** Start of today in studio timezone (date only, midnight local). */
 export function startOfLocalToday(): Date {
-  const n = new Date();
-  return new Date(n.getFullYear(), n.getMonth(), n.getDate());
+  return startOfStudioCalendarDay(new Date());
 }
 
 export function prismaDayOfWeekLocalNow(): DayOfWeek {
-  return JS_TO_PRISMA[new Date().getDay()]!;
+  const { year, month, day } = studioWallClock(new Date());
+  return JS_TO_PRISMA[new Date(year, month - 1, day).getDay()]!;
 }
 
 export function prismaDayOfWeekFromLocalDate(d: Date): DayOfWeek {
@@ -31,7 +32,7 @@ export function prismaDayOfWeekFromLocalDate(d: Date): DayOfWeek {
 }
 
 export function formatYmdLocal(d: Date): string {
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  return studioYmd(d);
 }
 
 /**
@@ -163,12 +164,10 @@ export function isSessionSlotEndedLocal(
   planningEndTime: string,
   referenceNow: Date = new Date(),
 ): boolean {
-  const todayLocalYmd = formatYmdLocal(
-    new Date(referenceNow.getFullYear(), referenceNow.getMonth(), referenceNow.getDate()),
-  );
+  const todayLocalYmd = studioYmd(referenceNow);
   if (sessionYmdPrisma < todayLocalYmd) return true;
   if (sessionYmdPrisma > todayLocalYmd) return false;
-  const nowClock = `${pad2(referenceNow.getHours())}:${pad2(referenceNow.getMinutes())}`;
+  const nowClock = studioClockHHMM(referenceNow);
   return compareClockHHMM(planningEndTime, nowClock) <= 0;
 }
 

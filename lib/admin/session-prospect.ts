@@ -11,6 +11,7 @@ import {
 } from "@/lib/calendar-day";
 import { getAdminOperationalPlanningSlotsForDate } from "@/lib/admin/planning-operational-slots";
 import { SESSION_PROSPECT_OCCUPYING_STATUSES } from "@/lib/admin/session-prospect-stats";
+import { effectivePlanningCapacity } from "@/lib/planning-session-slot";
 import { computeExpectedPackAmountForCreate, recordDepositOnMemberCreate } from "@/lib/admin/member-deposit";
 import {
   computeProspectTrialPaymentAmount,
@@ -135,6 +136,20 @@ async function assertProspectCapacity(
   }
 }
 
+export async function deleteSessionProspect(prospectId: string): Promise<void> {
+  const prospect = await prisma.sessionProspect.findUnique({
+    where: { id: prospectId },
+    select: { id: true, status: true },
+  });
+  if (!prospect) throw new Error("PROSPECT_NOT_FOUND");
+  if (prospect.status !== "ACTIVE") throw new Error("PROSPECT_NOT_DELETABLE");
+
+  await prisma.sessionProspect.update({
+    where: { id: prospectId },
+    data: { status: "CANCELLED" },
+  });
+}
+
 export async function createSessionProspect(input: {
   planningId: string;
   sessionDate: string;
@@ -156,7 +171,7 @@ export async function createSessionProspect(input: {
     await assertProspectCapacity(tx, {
       planningId: planning.id,
       sessionDateDb,
-      capacity: planning.capacity,
+      capacity: effectivePlanningCapacity(planning.courseSlug, planning.capacity),
     });
 
     const prospect = await tx.sessionProspect.create({
@@ -376,6 +391,87 @@ export async function convertSessionProspectToMember(input: {
   return result;
 }
 
+async function createPaidTrialProspectMember(
+  tx: Prisma.TransactionClient,
+  prospect: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    phone: string;
+    sessionDate: Date;
+  },
+  input: {
+    packId: string;
+    personalDiscount?: { type: "PERCENT" | "AMOUNT"; value: number; reason?: string };
+  },
+) {
+  const sessionDateYmd = formatYmdLocal(prospect.sessionDate);
+
+  const member = await tx.member.create({
+    data: {
+      firstName: prospect.firstName,
+      lastName: prospect.lastName,
+      phone: prospect.phone,
+      packId: input.packId,
+      packStartedAt: prospect.sessionDate,
+      personalDiscountType: input.personalDiscount?.type ?? null,
+      personalDiscountValue: input.personalDiscount?.value ?? null,
+      personalDiscountReason: input.personalDiscount?.reason?.trim() || null,
+      enrollmentStatus: "ACTIVE",
+      expectedPackAmountDinars: null,
+      isActive: true,
+      note: `Prospect · séance d'essai encaissée · séance ${sessionDateYmd}`,
+    },
+  });
+
+  await tx.sessionProspect.update({
+    where: { id: prospect.id },
+    data: { convertedMemberId: member.id },
+  });
+
+  return member;
+}
+
+/** Rattache une fiche adhérente aux prospects déjà encaissés avant cette fonctionnalité. */
+export async function ensurePaidTrialProspectMembersLinked(): Promise<void> {
+  const orphans = await prisma.sessionProspect.findMany({
+    where: { status: "PAID_TRIAL", convertedMemberId: null, trialPackId: { not: null } },
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      phone: true,
+      sessionDate: true,
+      trialPackId: true,
+      trialPersonalDiscountType: true,
+      trialPersonalDiscountValue: true,
+      trialPersonalDiscountReason: true,
+    },
+  });
+
+  for (const prospect of orphans) {
+    await prisma.$transaction(async (tx) => {
+      const fresh = await tx.sessionProspect.findUnique({
+        where: { id: prospect.id },
+        select: { id: true, status: true, convertedMemberId: true },
+      });
+      if (!fresh || fresh.status !== "PAID_TRIAL" || fresh.convertedMemberId) return;
+
+      await createPaidTrialProspectMember(tx, prospect, {
+        packId: prospect.trialPackId!,
+        personalDiscount:
+          prospect.trialPersonalDiscountType && prospect.trialPersonalDiscountValue != null
+            ? {
+                type: prospect.trialPersonalDiscountType,
+                value: prospect.trialPersonalDiscountValue,
+                reason: prospect.trialPersonalDiscountReason ?? undefined,
+              }
+            : undefined,
+      });
+    });
+  }
+}
+
 export async function recordSessionProspectTrialPayment(input: {
   prospectId: string;
   packId: string;
@@ -403,27 +499,46 @@ export async function recordSessionProspectTrialPayment(input: {
     ? computePersonalDiscountPreview(listPriceDinars, personalDiscountInput)
     : null;
 
-  const updated = await prisma.sessionProspect.update({
-    where: { id: input.prospectId },
-    data: {
-      status: "PAID_TRIAL",
-      trialPackId: input.packId,
-      trialListPriceDinars: listPriceDinars,
-      trialPersonalDiscountType: input.personalDiscount?.type ?? null,
-      trialPersonalDiscountValue: input.personalDiscount?.value ?? null,
-      trialPersonalDiscountReason: input.personalDiscount?.reason?.trim() || null,
-      trialPersonalDiscountDinars: discountPreview?.discount ?? 0,
-      trialPaymentDinars: amountDinars,
-      trialPaymentMethod: input.paymentMethod,
-      trialPaidAt: new Date(),
-    },
-    include: {
-      trialPack: { select: { id: true, name: true, category: true } },
-    },
+  const { updated, memberId } = await prisma.$transaction(async (tx) => {
+    const freshProspect = await tx.sessionProspect.findUnique({
+      where: { id: input.prospectId },
+    });
+    if (!freshProspect) throw new Error("PROSPECT_NOT_FOUND");
+    if (freshProspect.status === "CONVERTED") throw new Error("PROSPECT_ALREADY_CONVERTED");
+    if (freshProspect.trialPaidAt) throw new Error("TRIAL_ALREADY_PAID");
+
+    let linkedMemberId = freshProspect.convertedMemberId;
+    if (!linkedMemberId) {
+      const member = await createPaidTrialProspectMember(tx, freshProspect, input);
+      linkedMemberId = member.id;
+    }
+
+    const updatedProspect = await tx.sessionProspect.update({
+      where: { id: input.prospectId },
+      data: {
+        status: "PAID_TRIAL",
+        convertedMemberId: linkedMemberId,
+        trialPackId: input.packId,
+        trialListPriceDinars: listPriceDinars,
+        trialPersonalDiscountType: input.personalDiscount?.type ?? null,
+        trialPersonalDiscountValue: input.personalDiscount?.value ?? null,
+        trialPersonalDiscountReason: input.personalDiscount?.reason?.trim() || null,
+        trialPersonalDiscountDinars: discountPreview?.discount ?? 0,
+        trialPaymentDinars: amountDinars,
+        trialPaymentMethod: input.paymentMethod,
+        trialPaidAt: new Date(),
+      },
+      include: {
+        trialPack: { select: { id: true, name: true, category: true } },
+      },
+    });
+
+    return { updated: updatedProspect, memberId: linkedMemberId };
   });
 
   return {
     id: updated.id,
+    memberId,
     firstName: updated.firstName,
     lastName: updated.lastName,
     phone: updated.phone,

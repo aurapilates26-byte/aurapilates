@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   computePlanningGlobalSlotEnd,
   doPlanningGlobalSlotsOverlap,
+  effectivePlanningCapacity,
   hasPlanningSlotOverlap,
   PLANNING_GLOBAL_SLOT_MINUTES,
+  sessionCapacityForCourseSlug,
 } from "@/lib/planning-session-slot";
 
 describe("planning-session-slot", () => {
@@ -41,5 +43,14 @@ describe("planning-session-slot", () => {
 
   it("uses a 60-minute global slot", () => {
     expect(PLANNING_GLOBAL_SLOT_MINUTES).toBe(60);
+  });
+
+  it("maps course slugs to studio session capacities", () => {
+    expect(sessionCapacityForCourseSlug("pilates-reformer")).toBe(6);
+    expect(sessionCapacityForCourseSlug("mat-pilates")).toBe(5);
+    expect(sessionCapacityForCourseSlug("coaching-prive")).toBe(1);
+    expect(sessionCapacityForCourseSlug("yoga")).toBe(5);
+    expect(sessionCapacityForCourseSlug("dance")).toBe(6);
+    expect(effectivePlanningCapacity("mat-pilates", 6)).toBe(5);
   });
 });

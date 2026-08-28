@@ -13,7 +13,7 @@ import {
 import { ensureReservationAttendanceRecord } from "@/lib/ensure-reservation-attendance";
 import { unmarkAdminPresence, unmarkLivePresenceErrorMessage } from "@/lib/admin/unmark-live-presence";
 import { broadcastMemberBookingRefresh } from "@/lib/member-booking-stream";
-import { isPresenceMarkingAllowed } from "@/lib/admin/presence-window";
+import { isPresenceMarkingAllowed, localNowTimeString } from "@/lib/admin/presence-window";
 import { PACK_ERRORS } from "@/lib/create-member-reservation";
 import {
   debitSelectedPackSession,
@@ -73,10 +73,8 @@ export async function POST(request: Request) {
   const todayYmd = formatYmdLocal(startOfLocalToday());
   const todayDb = parseYmdToPrismaDate(todayYmd);
   if (!todayDb) return errorResponse(ERRORS.PAYLOAD_INVALID, 400);
-  const now = new Date();
-  const nowTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-  const plus15 = new Date(now.getTime() + 15 * 60_000);
-  const nowPlus15 = `${String(plus15.getHours()).padStart(2, "0")}:${String(plus15.getMinutes()).padStart(2, "0")}`;
+  const nowTime = localNowTimeString();
+  const nowPlus15 = localNowTimeString(15);
 
   let outcome: Outcome;
   try {

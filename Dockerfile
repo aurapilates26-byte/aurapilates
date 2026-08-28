@@ -28,6 +28,8 @@ FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
+ENV TZ=Africa/Tunis
+ENV STUDIO_TIMEZONE=Africa/Tunis
 
 RUN addgroup -S nodejs && adduser -S nextjs -G nodejs
 

@@ -17,6 +17,7 @@ import {
   resolvePackForMemberBooking,
 } from "@/lib/admin/member-pack-selection";
 import { ensureMemberParallelPackStockForDebit } from "@/lib/admin/member-owned-packs";
+import { effectivePlanningCapacity } from "@/lib/planning-session-slot";
 import { prisma } from "@/lib/prisma";
 
 export const PACK_ERRORS = {
@@ -160,9 +161,9 @@ export async function createMemberReservation(params: {
 
       const mainOccupied = rows.filter((r) => r.status === "BOOKED" || r.status === "ATTENDED").length;
       const waitlistCount = rows.filter((r) => r.status === "WAITLIST").length;
-
+      const slotCapacity = effectivePlanningCapacity(planning.courseSlug, planning.capacity);
       let status: "BOOKED" | "WAITLIST";
-      if (mainOccupied < planning.capacity) status = "BOOKED";
+      if (mainOccupied < slotCapacity) status = "BOOKED";
       else if (planning.waitlistCapacity != null && waitlistCount < planning.waitlistCapacity) status = "WAITLIST";
       else throw new Error("FULL");
 

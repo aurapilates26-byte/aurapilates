@@ -6,6 +6,9 @@ import type { ProspectRow } from "@/components/dashboard/reservations/prospect-t
 const textBtnBase =
   "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 whitespace-nowrap";
 
+const prospectBadgeBase =
+  "inline-flex shrink-0 items-center whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-semibold leading-none";
+
 function stopCardClick(e: MouseEvent) {
   e.stopPropagation();
 }
@@ -28,7 +31,7 @@ function AddIcon({ className = "h-3.5 w-3.5" }: { className?: string }) {
 
 export function ConvertedProspectBadge() {
   return (
-    <span className="inline-flex rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-900">
+    <span className={`${prospectBadgeBase} border-violet-200 bg-violet-50 text-violet-900`}>
       Convertie
     </span>
   );
@@ -36,10 +39,60 @@ export function ConvertedProspectBadge() {
 
 export function PaidTrialProspectBadge() {
   return (
-    <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-900">
+    <span className={`${prospectBadgeBase} border-emerald-200 bg-emerald-50 text-emerald-900`}>
       Séance payée
     </span>
   );
+}
+
+export function UnpaidProspectBadge() {
+  return (
+    <span className={`${prospectBadgeBase} border-red-200 bg-red-50 text-red-900`}>
+      Non payé
+    </span>
+  );
+}
+
+export function CancelledProspectBadge() {
+  return (
+    <span className={`${prospectBadgeBase} border-zinc-300 bg-zinc-100 text-zinc-700`}>
+      Annulé
+    </span>
+  );
+}
+
+export function PresentProspectBadge() {
+  return (
+    <span className={`${prospectBadgeBase} border-emerald-200 bg-emerald-50 text-emerald-900`}>
+      Présente
+    </span>
+  );
+}
+
+export function prospectStatutLineLabel(status: ProspectRow["status"]): string {
+  if (status === "PAID_TRIAL") return "Séance payée";
+  if (status === "CONVERTED") return "Convertie";
+  if (status === "CANCELLED") return "Annulé";
+  return "Non payé";
+}
+
+/** Badges lecture seule (page Présence, colonne Présence en Réservations). */
+export function ProspectPresenceStatusBadges({ prospect }: { prospect: ProspectRow }) {
+  if (prospect.status === "CANCELLED") {
+    return <CancelledProspectBadge />;
+  }
+  if (prospect.status === "CONVERTED") {
+    return (
+      <div className="flex shrink-0 flex-nowrap items-center justify-end gap-1.5">
+        <PresentProspectBadge />
+        <ConvertedProspectBadge />
+      </div>
+    );
+  }
+  if (prospect.status === "PAID_TRIAL") {
+    return <PaidTrialProspectBadge />;
+  }
+  return <UnpaidProspectBadge />;
 }
 
 export function CollectTrialPaymentButton({ onClick }: { onClick: () => void }) {
@@ -74,26 +127,100 @@ export function ConvertProspectButton({ onClick }: { onClick: () => void }) {
   );
 }
 
+function TrashIcon({ className = "h-3.5 w-3.5" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={`shrink-0 fill-current ${className}`} aria-hidden="true">
+      <path d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z" />
+    </svg>
+  );
+}
+
+export function DeleteProspectIconButton({
+  onClick,
+  disabled = false,
+  loading = false,
+  label = "Supprimer le prospect",
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  loading?: boolean;
+  label?: string;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled || loading}
+      onClick={(e) => {
+        stopCardClick(e);
+        onClick();
+      }}
+      aria-label={label}
+      title={label}
+      className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-red-200 bg-red-50 text-red-700 transition hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200 disabled:cursor-not-allowed disabled:opacity-60"
+    >
+      {loading ? <span className="text-[10px] font-semibold">…</span> : <TrashIcon className="h-4 w-4" />}
+    </button>
+  );
+}
+
+export function DeleteProspectButton({
+  onClick,
+  disabled = false,
+  loading = false,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  loading?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled || loading}
+      onClick={(e) => {
+        stopCardClick(e);
+        onClick();
+      }}
+      className={`${textBtnBase} border-red-200 bg-red-50 text-red-800 hover:bg-red-100 focus-visible:ring-red-200 disabled:cursor-not-allowed disabled:opacity-60`}
+    >
+      <TrashIcon />
+      {loading ? "Suppression…" : "Supprimer"}
+    </button>
+  );
+}
+
 export function ProspectRowActions({
   prospect,
   onCollect,
   onConvert,
+  onDelete,
+  deleting = false,
 }: {
   prospect: ProspectRow;
   onCollect: () => void;
   onConvert: () => void;
+  onDelete?: () => void;
+  deleting?: boolean;
 }) {
+  if (prospect.status === "CANCELLED") {
+    return <CancelledProspectBadge />;
+  }
   if (prospect.status === "CONVERTED") {
-    return <ConvertedProspectBadge />;
+    return (
+      <div className="flex shrink-0 flex-nowrap items-center justify-end gap-1.5">
+        <PresentProspectBadge />
+        <ConvertedProspectBadge />
+      </div>
+    );
   }
   if (prospect.status === "PAID_TRIAL") {
     return <PaidTrialProspectBadge />;
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
+    <div className="flex shrink-0 flex-nowrap items-center justify-center gap-1.5">
       <CollectTrialPaymentButton onClick={onCollect} />
       <ConvertProspectButton onClick={onConvert} />
+      {onDelete ? <DeleteProspectButton onClick={onDelete} loading={deleting} /> : null}
     </div>
   );
 }

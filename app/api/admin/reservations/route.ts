@@ -16,6 +16,7 @@ import {
 } from "@/lib/admin/planning-period-draft";
 import { getAdminOperationalPlanningSlotsForDate } from "@/lib/admin/planning-operational-slots";
 import { countOccupyingProspectsByPlanning } from "@/lib/admin/session-prospect-stats";
+import { effectivePlanningCapacity } from "@/lib/planning-session-slot";
 import { isSessionYmdWithinPlanningPeriod } from "@/lib/planning-period-status";
 import { prisma } from "@/lib/prisma";
 
@@ -95,7 +96,8 @@ export async function GET(request: Request) {
       const stats = byPlanning[s.id] ?? { booked: 0, wait: 0, attended: 0, cancelled: 0 };
       const prospectCount = prospectCounts[s.id] ?? 0;
       const mainOccupied = stats.booked + stats.attended + prospectCount;
-      const spotsRemaining = Math.max(0, s.capacity - mainOccupied);
+      const capacity = effectivePlanningCapacity(s.courseSlug, s.capacity);
+      const spotsRemaining = Math.max(0, capacity - mainOccupied);
       const waitSpotsRemaining =
         s.waitlistCapacity == null ? null : Math.max(0, s.waitlistCapacity - stats.wait);
 
@@ -108,7 +110,7 @@ export async function GET(request: Request) {
         level: s.level,
         coachName: s.coach ? `${s.coach.firstName} ${s.coach.lastName}`.trim() : null,
         coachImageUrl: s.coach?.imageUrl ?? null,
-        capacity: s.capacity,
+        capacity,
         waitlistCapacity: s.waitlistCapacity,
         stats: {
           booked: stats.booked,

@@ -1,9 +1,17 @@
 import "server-only";
 
+import type { SessionProspectStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
 /** Statuts qui occupent une place sur le créneau (essai en cours ou séance payée à l'unité). */
-export const SESSION_PROSPECT_OCCUPYING_STATUSES = ["ACTIVE", "PAID_TRIAL"] as const;
+export const SESSION_PROSPECT_OCCUPYING_STATUSES = ["ACTIVE", "PAID_TRIAL"] as const satisfies readonly SessionProspectStatus[];
+
+/** Statuts affichés dans les listes présence / réservations. */
+export const SESSION_PROSPECT_ROSTER_STATUSES = [
+  ...SESSION_PROSPECT_OCCUPYING_STATUSES,
+  "CONVERTED",
+  "CANCELLED",
+] as const satisfies readonly SessionProspectStatus[];
 
 export async function countOccupyingProspectsByPlanning(
   planningIds: string[],

@@ -10,7 +10,9 @@ import {
 } from "@/lib/calendar-day";
 import { getAdminOperationalPlanningSlotsForDate, type OperationalPlanningSlot } from "@/lib/admin/planning-operational-slots";
 import { localNowTimeString, minus15Minutes } from "@/lib/admin/presence-window";
+import { SESSION_PROSPECT_ROSTER_STATUSES } from "@/lib/admin/session-prospect-stats";
 import { repairAttendedReservationsWithoutAttendance } from "@/lib/ensure-reservation-attendance";
+import { effectivePlanningCapacity } from "@/lib/planning-session-slot";
 import { prisma } from "@/lib/prisma";
 
 function errorResponse(message: string, status: number) {
@@ -97,6 +99,16 @@ type ClassRosterPayload = {
       qrPublicId: string | null;
     };
   }[];
+  prospects: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    phone: string;
+    courseSlug: string;
+    courseLabel: string;
+    status: string;
+    convertedMemberId: string | null;
+  }[];
 };
 
 async function loadTodayClassRosters(
@@ -180,6 +192,32 @@ async function loadTodayClassRosters(
 
   const planningById = new Map(plannings.map((planning) => [planning.id, planning]));
 
+  const prospectRows = await prisma.sessionProspect.findMany({
+    where: {
+      planningId: { in: planningIds },
+      sessionDate: sessionDateDb,
+      status: { in: [...SESSION_PROSPECT_ROSTER_STATUSES] },
+    },
+    orderBy: [{ createdAt: "asc" }],
+    select: {
+      id: true,
+      planningId: true,
+      firstName: true,
+      lastName: true,
+      phone: true,
+      courseSlug: true,
+      status: true,
+      convertedMemberId: true,
+    },
+  });
+
+  const prospectsByPlanningId = new Map<string, typeof prospectRows>();
+  for (const row of prospectRows) {
+    const list = prospectsByPlanningId.get(row.planningId) ?? [];
+    list.push(row);
+    prospectsByPlanningId.set(row.planningId, list);
+  }
+
   return operationalSlots.flatMap((slot) => {
     const planning = planningById.get(slot.id);
     if (!planning) return [];
@@ -196,7 +234,7 @@ async function loadTodayClassRosters(
         startTime: planning.startTime,
         endTime: planning.endTime,
         level: planning.level,
-        capacity: planning.capacity,
+        capacity: effectivePlanningCapacity(planning.courseSlug, planning.capacity),
         waitlistCapacity: planning.waitlistCapacity,
         coachName: planning.coach ? `${planning.coach.firstName} ${planning.coach.lastName}`.trim() : null,
         coachImageUrl: planning.coach?.imageUrl ?? null,
@@ -216,6 +254,16 @@ async function loadTodayClassRosters(
                 ? (r.member.assignedQrCodes as { publicId: string }[])[0]?.publicId ?? null
                 : null,
           },
+        })),
+        prospects: (prospectsByPlanningId.get(planning.id) ?? []).map((p) => ({
+          id: p.id,
+          firstName: p.firstName,
+          lastName: p.lastName,
+          phone: p.phone,
+          courseSlug: p.courseSlug,
+          courseLabel: courseLabel(p.courseSlug),
+          status: p.status,
+          convertedMemberId: p.convertedMemberId,
         })),
       },
     ];

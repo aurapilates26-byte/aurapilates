@@ -3,6 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DashboardHeader } from "@/components/dashboard/header";
 import { useToast } from "@/components/ui/toast-provider";
+import type { ProspectRow } from "@/components/dashboard/reservations/prospect-types";
+import {
+  buildConvertedProspectByMemberId,
+  ConvertedProspectBadge,
+  filterVisibleProspects,
+  prospectStatutLineLabel,
+  ProspectPresenceStatusBadges,
+} from "@/components/dashboard/reservations/prospect-row-actions";
 import { planningLevelLabelFr } from "@/lib/planning-public-labels";
 import { Input } from "@/components/ui";
 
@@ -34,6 +42,7 @@ type RosterClass = {
   scannedReservationId: string | null;
   scannedReservationStatus?: "BOOKED" | "WAITLIST" | "CANCELLED" | "ATTENDED";
   reservations: RosterRow[];
+  prospects: ProspectRow[];
 };
 
 type RosterResponse = {
@@ -699,6 +708,11 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
               const phase = getSessionPhase(classItem.startTime, classItem.endTime, roster?.nowTime);
               const opensAt = presenceOpensAt(classItem.startTime);
               const markingLocked = Boolean(roster?.nowTime && roster.nowTime < opensAt);
+              const visibleProspects = filterVisibleProspects(
+                classItem.prospects ?? [],
+                classItem.reservations.map((r) => ({ member: { id: r.member.id } })),
+              );
+              const convertedByMemberId = buildConvertedProspectByMemberId(classItem.prospects ?? []);
 
               return (
                 <section
@@ -762,7 +776,7 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                     </div>
                   </div>
 
-                  {classItem.reservations.length === 0 ? (
+                  {classItem.reservations.length === 0 && visibleProspects.length === 0 ? (
                     <p className="mt-3 text-sm text-brand-dark/60">Aucun inscrit sur ce créneau.</p>
                   ) : (
                     <ul className="mt-4 divide-y divide-brand-medium/15 rounded-xl border border-brand-medium/15 bg-white">
@@ -798,7 +812,7 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                               ) : null}
                             </div>
 
-                            <div className="flex items-center justify-end">
+                            <div className="flex items-center justify-end gap-2">
                               <PresenceMarkButton
                                 isPresent={isPresent}
                                 canMark={canMark}
@@ -810,6 +824,32 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                                 onMark={() => void markPresent(row.id)}
                                 onUnmark={() => void removePresence(row.id, memberName)}
                               />
+                              {convertedByMemberId.has(row.member.id) ? <ConvertedProspectBadge /> : null}
+                            </div>
+                          </li>
+                        );
+                      })}
+                      {visibleProspects.map((prospect) => {
+                        const prospectName = `${prospect.firstName} ${prospect.lastName}`.trim();
+                        const isCancelled = prospect.status === "CANCELLED";
+                        return (
+                          <li
+                            key={`prospect-${prospect.id}`}
+                            className={`flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between ${
+                              isCancelled ? "bg-zinc-50/80" : "bg-violet-50/40"
+                            }`}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <p className="font-medium text-brand-dark">{prospectName}</p>
+                              <p className="mt-1 text-xs font-semibold text-brand-dark/70">
+                                Statut :{" "}
+                                <span className="text-brand-dark">{prospectStatutLineLabel(prospect.status)}</span>
+                              </p>
+                              <p className="mt-0.5 text-xs text-brand-dark/60">{prospect.phone}</p>
+                            </div>
+
+                            <div className="flex shrink-0 items-center justify-end">
+                              <ProspectPresenceStatusBadges prospect={prospect} />
                             </div>
                           </li>
                         );

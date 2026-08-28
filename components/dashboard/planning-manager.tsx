@@ -17,6 +17,7 @@ import {
   hasPlanningSlotOverlap,
   PLANNING_GLOBAL_SLOT_MINUTES,
   PLANNING_SLOT_OVERLAP_ERROR,
+  sessionCapacityForCourseSlug,
 } from "@/lib/planning-session-slot";
 import { planningLevelBadgeClass } from "@/lib/planning-level-badge";
 import { buildPeriodDaySelectOptions, weekdayDateLineForPeriod, weekdaysPresentInPeriod } from "@/lib/planning-period-day-dates";
@@ -1012,7 +1013,12 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
                 id="planning-course"
                 label="Cours"
                 value={courseSlug}
-                onChange={(value) => setCourseSlug(value)}
+                onChange={(value) => {
+                  setCourseSlug(value);
+                  if (value !== "NONE") {
+                    setCapacity(String(sessionCapacityForCourseSlug(value)));
+                  }
+                }}
                 options={[
                   { value: "NONE", label: "Choisir un cours" },
                   ...courseOptions,

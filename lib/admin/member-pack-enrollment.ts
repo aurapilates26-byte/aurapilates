@@ -5,22 +5,16 @@ import { formatYmdLocal, parseYmdToPrismaDate } from "@/lib/calendar-day";
 import { addPackDurationToStartDate } from "@/lib/pack-duration";
 import { packExpiresAtLocal, packStartDateLocal } from "@/lib/member-pack-period";
 import { getEligibilityForPack } from "@/lib/pack-eligibility";
+import {
+  PACK_SESSION_CONSUMED_WHERE,
+  PACK_SESSION_DEBITED_WHERE,
+} from "@/lib/pack-session-consumption";
 import { prisma } from "@/lib/prisma";
 
-const CONSUMING_RESERVATION_STATUSES = {
-  OR: [
-    { status: { in: ["BOOKED", "ATTENDED"] as const } },
-    { status: "CANCELLED" as const, packRefundedAt: null },
-  ],
-} satisfies Pick<Prisma.ReservationWhereInput, "OR">;
+const CONSUMING_RESERVATION_STATUSES = PACK_SESSION_DEBITED_WHERE;
 
 /** Présence réelle ou annulation tardive — pour l'affichage « séances consommées ». */
-const DISPLAY_CONSUMED_RESERVATION_STATUSES = {
-  OR: [
-    { status: "ATTENDED" as const },
-    { status: "CANCELLED" as const, packRefundedAt: null },
-  ],
-} satisfies Pick<Prisma.ReservationWhereInput, "OR">;
+const DISPLAY_CONSUMED_RESERVATION_STATUSES = PACK_SESSION_CONSUMED_WHERE;
 
 export async function closeOpenEnrollmentsForPack(
   tx: Prisma.TransactionClient,
@@ -121,6 +115,9 @@ export type FifoEnrollmentAllocation = {
   remainingByCourse: Map<string, number>;
 };
 
+/** `debit` = réservations futures BOOKED comptent (solde / débit). `display` = présence réelle seulement (affichage fiche). */
+export type FifoCountingMode = "debit" | "display";
+
 /**
  * Attribue les séances consommées aux inscriptions du même pack catalogue en FIFO :
  * on remplit d'abord le pack le plus ancien, puis le suivant.
@@ -133,6 +130,7 @@ export async function allocateFifoPackConsumptions(input: {
   courseQuotas: { courseSlug: string; sessionCount: number }[];
   sessionCount: number | null;
   category?: string | null;
+  countingMode?: FifoCountingMode;
 }): Promise<Map<string, FifoEnrollmentAllocation>> {
   const result = new Map<string, FifoEnrollmentAllocation>();
   const quotas = input.courseQuotas;
@@ -169,11 +167,16 @@ export async function allocateFifoPackConsumptions(input: {
         courseQuotas: [],
       }).allowedCourseSlugs;
 
+  const statusFilter =
+    input.countingMode === "display"
+      ? DISPLAY_CONSUMED_RESERVATION_STATUSES
+      : CONSUMING_RESERVATION_STATUSES;
+
   const reservations = await prisma.reservation.findMany({
     where: {
       memberId: input.memberId,
       AND: [
-        CONSUMING_RESERVATION_STATUSES,
+        statusFilter,
         {
           OR: [
             { debitedPackId: input.packId },
