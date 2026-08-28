@@ -38,6 +38,10 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 
+# Prisma Client + query engine (requis en prod avec output standalone)
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder /app/node_modules/@prisma/client ./node_modules/@prisma/client
+
 # Prisma assets (migrations + schema) for migrate deploy
 COPY --from=builder /app/prisma ./prisma
 
