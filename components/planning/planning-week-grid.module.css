@@ -38,6 +38,20 @@
   padding: 0.25rem calc(0.75rem + 6px) 0.5rem 0.75rem;
 }
 
+/* Admin : jours fixés en haut pendant le scroll de la page (sans hauteur fixe). */
+.planningWeekHeaderSticky {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: #fff;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 1px 0 rgb(139 115 85 / 0.15);
+}
+
+.planningWeekAdminRoot {
+  overflow: visible;
+}
+
 .planningWeekEmbedded {
   display: flex;
   min-height: 0;

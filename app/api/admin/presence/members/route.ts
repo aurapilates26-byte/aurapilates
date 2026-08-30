@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { z } from "zod";
 import { authOptions } from "@/auth";
 import { isStaffRole } from "@/lib/admin/access";
+import { buildMemberSearchWhere } from "@/lib/admin/member-search-filter";
 import { prisma } from "@/lib/prisma";
 
 function errorResponse(message: string, status: number) {
@@ -29,29 +30,11 @@ export async function GET(request: Request) {
 
   const q = parsed.data.q;
   const includeInactive = parsed.data.historical === "1" || parsed.data.historical === "true";
-  const tokens = q
-    .split(/\s+/)
-    .map((t) => t.trim())
-    .filter(Boolean)
-    .slice(0, 4);
-
-  const tokenClause = (token: string) => ({
-    OR: [
-      { firstName: { contains: token, mode: "insensitive" as const } },
-      { lastName: { contains: token, mode: "insensitive" as const } },
-      { phone: { contains: token, mode: "insensitive" as const } },
-    ],
-  });
-
-  const nameFilter =
-    tokens.length > 1
-      ? { AND: tokens.map((t) => tokenClause(t)) }
-      : tokenClause(tokens[0] ?? q);
 
   const items = await prisma.member.findMany({
     where: {
       ...(includeInactive ? {} : { isActive: true }),
-      ...nameFilter,
+      ...buildMemberSearchWhere(q),
     },
     select: {
       id: true,

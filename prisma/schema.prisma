@@ -190,8 +190,16 @@ model MemberPackEnrollment {
   purchasedAt   DateTime                   @default(now())
   packStartedAt DateTime?
   packExpiresAt DateTime?
+  /// Prolongation admin après expiration (séances restantes conservées).
+  prolongedAt            DateTime?
+  /// Date d'expiration avant prolongation (pour annuler la prolongation).
+  prolongedFromExpiresAt DateTime?
   status        MemberPackEnrollmentStatus   @default(PENDING_START)
   closedAt      DateTime?
+  /// Séances supplémentaires créditées manuellement (report / conversion après changement de catégorie).
+  additionalSessionsCredit Int               @default(0)
+  /// Date du changement de catégorie (solde manuel, ne pas recalculer via FIFO).
+  categoryReassignedAt     DateTime?
   createdAt     DateTime                   @default(now())
   updatedAt     DateTime                   @updatedAt
 
@@ -471,6 +479,8 @@ model Planning {
   isDraft          Boolean   @default(false)
   /// Lien vers le créneau publié source (sync publié → brouillon).
   draftSourceId    String?   @unique
+  /// Créneau publié retiré manuellement du brouillon (évite la re-création du miroir).
+  draftMirrorSuppressedAt DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
   coach            Coach?    @relation(fields: [coachId], references: [id], onDelete: SetNull)

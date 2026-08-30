@@ -16,7 +16,7 @@ type PlanningWeekGridProps = {
   levelLabelFor: (level: AdminPlanningItem["level"]) => string | null;
   levelToneFor: (level: AdminPlanningItem["level"]) => string | null;
   readOnly?: boolean;
-  /** Page publique : hauteur naturelle, sans scroll interne. */
+  /** Page publique : hauteur limitée avec scroll interne. */
   embedded?: boolean;
   renderEmptyDay?: (column: PeriodDaySelectOption) => ReactNode | null;
 };
@@ -54,10 +54,60 @@ export function PlanningWeekGrid({
 
   const columnCount = Math.min(Math.max(dayColumns.length, 1), 7);
 
+  const dayColumnsGrid = (
+    <div
+      className={`${styles.planningDayColumns} gap-1 sm:gap-1.5 ${styles.planningWeekBody}`}
+      data-cols={columnCount}
+    >
+      {dayColumns.map((column) => {
+        const columnItems = (itemsByDate.get(column.sessionYmd) ?? []).sort((a, b) =>
+          a.startTime.localeCompare(b.startTime),
+        );
+
+        const emptyContent = renderEmptyDay?.(column);
+
+        return (
+          <div key={column.sessionYmd} className="flex min-w-0 flex-col gap-1.5">
+            {columnItems.length === 0 ? (
+              emptyContent ?? (
+                <div className="rounded-lg border border-dashed border-brand-medium/20 px-1 py-4 text-center text-[10px] leading-tight text-brand-dark/45">
+                  Aucune séance
+                </div>
+              )
+            ) : (
+              columnItems.map((item) => (
+                <PlanningGridSessionCard
+                  key={item.id}
+                  courseSlug={item.courseSlug}
+                  courseLabel={courseLabelBySlug[item.courseSlug] ?? item.courseSlug}
+                  startTime={item.startTime}
+                  endTime={item.endTime}
+                  levelLabel={levelLabelFor(item.level)}
+                  levelToneClass={levelToneFor(item.level)}
+                  coachName={item.coach ? `${item.coach.firstName} ${item.coach.lastName}` : null}
+                  durationMinutes={item.durationMinutes}
+                  capacity={item.capacity}
+                  waitlistCapacity={item.waitlistCapacity}
+                  actions={readOnly ? undefined : renderSessionActions(item)}
+                />
+              ))
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+
   return (
-    <div className={embedded ? `${styles.planningWeekEmbedded} max-h-[min(70vh,720px)]` : "flex h-full min-h-0 flex-col"}>
+    <div
+      className={
+        embedded
+          ? `${styles.planningWeekEmbedded} max-h-[min(70vh,720px)]`
+          : styles.planningWeekAdminRoot
+      }
+    >
       <div
-        className={`${styles.planningWeekHeader} ${styles.planningDayColumns} gap-1 sm:gap-1.5`}
+        className={`${styles.planningWeekHeader} ${!embedded ? styles.planningWeekHeaderSticky : ""} ${styles.planningDayColumns} gap-1 sm:gap-1.5`}
         data-cols={columnCount}
         aria-label="Jours de la semaine"
       >
@@ -79,49 +129,11 @@ export function PlanningWeekGrid({
         })}
       </div>
 
-      <div className={embedded ? styles.planningWeekEmbeddedScroll : styles.planningWeekScrollViewport}>
-        <div
-          className={`${styles.planningDayColumns} gap-1 sm:gap-1.5 ${styles.planningWeekBody}`}
-          data-cols={columnCount}
-        >
-          {dayColumns.map((column) => {
-            const columnItems = (itemsByDate.get(column.sessionYmd) ?? []).sort((a, b) =>
-              a.startTime.localeCompare(b.startTime),
-            );
-
-            const emptyContent = renderEmptyDay?.(column);
-
-            return (
-              <div key={column.sessionYmd} className="flex min-w-0 flex-col gap-1.5">
-                {columnItems.length === 0 ? (
-                  emptyContent ?? (
-                    <div className="rounded-lg border border-dashed border-brand-medium/20 px-1 py-4 text-center text-[10px] leading-tight text-brand-dark/45">
-                      Aucune séance
-                    </div>
-                  )
-                ) : (
-                  columnItems.map((item) => (
-                    <PlanningGridSessionCard
-                      key={item.id}
-                      courseSlug={item.courseSlug}
-                      courseLabel={courseLabelBySlug[item.courseSlug] ?? item.courseSlug}
-                      startTime={item.startTime}
-                      endTime={item.endTime}
-                      levelLabel={levelLabelFor(item.level)}
-                      levelToneClass={levelToneFor(item.level)}
-                      coachName={item.coach ? `${item.coach.firstName} ${item.coach.lastName}` : null}
-                      durationMinutes={item.durationMinutes}
-                      capacity={item.capacity}
-                      waitlistCapacity={item.waitlistCapacity}
-                      actions={readOnly ? undefined : renderSessionActions(item)}
-                    />
-                  ))
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
+      {embedded ? (
+        <div className={styles.planningWeekEmbeddedScroll}>{dayColumnsGrid}</div>
+      ) : (
+        dayColumnsGrid
+      )}
     </div>
   );
 }

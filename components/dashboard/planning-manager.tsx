@@ -3,6 +3,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useState } from "react";
 import { useToast } from "@/components/ui/toast-provider";
 import { Button, ConfirmDialog, Input, SelectMenu } from "@/components/ui";
+import { PlanningCourseStatCards, type PlanningCourseFilter } from "@/components/planning/planning-course-stat-cards";
 import { PlanningPeriodNavigator } from "@/components/planning/planning-period-navigator";
 import { PlanningWeekGrid } from "@/components/planning/planning-week-grid";
 import { PlanningHistoricalPresenceDialog } from "@/components/planning/planning-historical-presence-dialog";
@@ -87,6 +88,22 @@ const dayLabels: Record<PlanningDayOfWeek, string> = {
   SUN: "Dimanche",
 };
 
+function formatPlanningSessionSummary(item: AdminPlanningItem): string {
+  const course = courseLabelBySlug[item.courseSlug] ?? item.courseSlug;
+  const day = dayLabels[item.dayOfWeek];
+  const time = `${item.startTime}–${item.endTime}`;
+  const coach = item.coach ? `${item.coach.firstName} ${item.coach.lastName}` : null;
+  return coach ? `${course} · ${day} ${time} · ${coach}` : `${course} · ${day} ${time}`;
+}
+
+function deleteScopeForGridSlot(
+  slot: PlanningGridNavSlot | null,
+): PlanningSessionFormSource {
+  if (slot?.kind === "archive") return "archive";
+  if (slot?.kind === "draft") return "draft";
+  return "list";
+}
+
 const orderedDays: PlanningDayOfWeek[] = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
 
 function todayPlanningDay(): PlanningDayOfWeek {
@@ -152,7 +169,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   const fetchPeriodConfig = usePlanningPeriodStore((s) => s.fetchConfig);
   const periodConfig = usePlanningPeriodStore((s) => s.config);
   const draftPeriod = usePlanningPeriodStore((s) => s.draft);
-  const { items, filters, setSearch, setDayOfWeek, resetFilters, fetchGridForSlot, hasGridCache, gridCache, gridLoadingKey, gridError, gridErrorKey } =
+  const { items, filters, setSearch, setDayOfWeek, resetFilters, fetchGridForSlot, hasGridCache, gridCache, gridLoadingKey, gridError, gridErrorKey, removeGridItem } =
     usePlanningStore();
 
   const [coaches, setCoaches] = useState<AdminCoach[]>([]);
@@ -162,6 +179,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   const [editingId, setEditingId] = useState<string | null>(null);
   const [itemToDelete, setItemToDelete] = useState<AdminPlanningItem | null>(null);
   const [selectedDay, setSelectedDay] = useState<PlanningDayOfWeek>(() => todayPlanningDay());
+  const [courseFilter, setCourseFilter] = useState<PlanningCourseFilter>("ALL");
 
   const [courseSlug, setCourseSlug] = useState<string>("NONE");
   const [coachId, setCoachId] = useState<string>("NONE");
@@ -401,6 +419,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
 
   useEffect(() => {
     if (!showList || !currentGridSlot) return;
+    setCourseFilter("ALL");
     void loadGridSlot(currentGridSlot);
     if (currentGridSlot.kind === "archive") {
       setSelectedArchiveStartYmd(currentGridSlot.periodStartYmd);
@@ -426,12 +445,13 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
   const visibleGridItems = useMemo(() => {
     const q = filters.search.trim().toLowerCase();
     return gridItems.filter((item) => {
+      if (courseFilter !== "ALL" && item.courseSlug !== courseFilter) return false;
       if (!q) return true;
       const coachName = item.coach ? `${item.coach.firstName} ${item.coach.lastName}` : "";
       const haystack = `${item.courseSlug} ${coachName}`.toLowerCase();
       return haystack.includes(q);
     });
-  }, [filters.search, gridItems]);
+  }, [courseFilter, filters.search, gridItems]);
 
   const yesterdayYmd = yesterdayYmdLocal();
 
@@ -732,12 +752,14 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
 
   const handleDelete = async () => {
     if (!itemToDelete) return;
+    const deletedItem = itemToDelete;
+    const deleteScope = deleteScopeForGridSlot(currentGridSlot);
     setIsDeleting(true);
     try {
       const response = await fetch(
         planningItemApiUrl(
-          itemToDelete.id,
-          isArchiveContext ? "archive" : isDraftContext ? "draft" : "list",
+          deletedItem.id,
+          deleteScope,
           selectedArchiveStartYmd,
         ),
         { method: "DELETE" },
@@ -746,15 +768,20 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(data?.error ?? "Suppression impossible.");
       }
+      if (currentGridCacheKey) {
+        removeGridItem(currentGridCacheKey, deletedItem.id);
+      }
       setItemToDelete(null);
-      if (isArchiveContext && selectedArchiveStartYmd) {
+      if (deleteScope === "archive" && selectedArchiveStartYmd) {
         await loadArchivePlanning(selectedArchiveStartYmd, { force: true });
-      } else if (isDraftContext) {
-        await loadDraftPlanning({ force: true });
       } else if (currentGridSlot) {
         await loadGridSlot(currentGridSlot, { force: true });
       }
-      toast({ variant: "success", title: "Séance supprimée" });
+      toast({
+        variant: "success",
+        title: "Séance supprimée",
+        description: formatPlanningSessionSummary(deletedItem),
+      });
     } catch (e) {
       const message = e instanceof Error ? e.message : "Une erreur est survenue.";
       toast({ variant: "error", title: "Erreur", description: message });
@@ -885,8 +912,8 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
         ) : currentGridError ? (
           <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-sm text-red-700">{currentGridError}</div>
         ) : currentGridSlot ? (
-          <div className="flex max-h-[calc(100dvh-10rem)] min-h-0 flex-col overflow-hidden rounded-2xl border border-brand-medium/20 bg-white">
-            <div className="shrink-0 border-b border-brand-medium/20 px-4 py-3 sm:px-5 sm:py-4">
+          <div className="flex flex-col overflow-visible rounded-2xl border border-brand-medium/20 bg-white">
+            <div className="shrink-0 space-y-3 border-b border-brand-medium/20 px-4 py-3 sm:px-5 sm:py-4">
               <PlanningPeriodNavigator
                 slot={currentGridSlot}
                 canGoPrevious={effectiveGridNavIndex > 0}
@@ -910,7 +937,10 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
                     />
                     <button
                       type="button"
-                      onClick={() => resetFilters()}
+                      onClick={() => {
+                        resetFilters();
+                        setCourseFilter("ALL");
+                      }}
                       aria-label="Réinitialiser les filtres"
                       title="Réinitialiser"
                       className="flex h-9 w-9 items-center justify-center rounded-xl border border-brand-medium/30 bg-white text-lg font-semibold text-brand-dark/70 transition hover:bg-zinc-50 hover:text-brand-dark sm:h-[42px] sm:w-[42px]"
@@ -919,6 +949,11 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
                     </button>
                   </div>
                 }
+              />
+              <PlanningCourseStatCards
+                items={gridItems}
+                value={courseFilter}
+                onChange={setCourseFilter}
               />
             </div>
 
@@ -940,16 +975,14 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
                 </span>
               </div>
             ) : (
-              <div className="flex min-h-0 flex-1 flex-col">
-                <PlanningWeekGrid
+              <PlanningWeekGrid
                 period={currentGridSlot.period}
                 items={visibleGridItems}
                 courseLabelBySlug={courseLabelBySlug}
                 renderSessionActions={renderGridSessionActions}
                 levelLabelFor={(level) => planningLevelLabelFr(level)}
                 levelToneFor={(level) => planningLevelBadgeClass(level)}
-                />
-              </div>
+              />
             )}
           </div>
         ) : (
@@ -1130,7 +1163,7 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
       <ConfirmDialog
         isOpen={Boolean(itemToDelete)}
         title="Supprimer cette séance ?"
-        description={itemToDelete ? `${dayLabels[itemToDelete.dayOfWeek]} - ${itemToDelete.startTime}` : undefined}
+        description={itemToDelete ? formatPlanningSessionSummary(itemToDelete) : undefined}
         confirmText="Supprimer"
         isConfirming={isDeleting}
         onClose={() => {

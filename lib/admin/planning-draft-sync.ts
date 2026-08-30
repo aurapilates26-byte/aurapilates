@@ -21,6 +21,9 @@ import {
   parseYmdToPrismaDate,
   prismaDayOfWeekFromLocalDate,
 } from "@/lib/calendar-day";
+import {
+  clearAllDraftMirrorSuppressions,
+} from "@/lib/admin/planning-draft-mirror-suppression";
 import { prisma } from "@/lib/prisma";
 import { proposeNextPlanningPeriod, proposePreviousPlanningPeriod } from "@/lib/planning-period-status";
 import type { PlanningPeriodConfig } from "@/types/admin/planning";
@@ -164,6 +167,7 @@ async function getCalendarContext(): Promise<{
   if (!draft || draft.periodStartYmd !== expectedNext.periodStartYmd) {
     if (draft && draft.periodStartYmd !== expectedNext.periodStartYmd) {
       await prisma.planning.deleteMany({ where: { isDraft: true } });
+      await clearAllDraftMirrorSuppressions();
     }
     await saveDraftPeriodSchedule({
       bookingWindow: expectedNext.bookingWindow,
@@ -233,6 +237,7 @@ export async function ensureDraftPeriodWithMirrors(): Promise<void> {
 
   for (const slot of sourceSlots) {
     if (mirroredSourceIds.has(slot.id)) continue;
+    if (slot.draftMirrorSuppressedAt) continue;
     const draftAnchor = draftAnchorDateForSourceSlot(slot, calendarCurrent.period, draft);
     if (!draftAnchor) continue;
     await prisma.planning.create({
@@ -250,6 +255,7 @@ function slotBelongsToPeriod(
 }
 
 export async function syncPublishedCreateToDraft(published: Planning): Promise<void> {
+  if (published.draftMirrorSuppressedAt) return;
   const { calendarCurrent, draft } = await getCalendarContext();
   if (!slotBelongsToPeriod(published, calendarCurrent.period)) return;
   const draftAnchor = draftAnchorDateForSourceSlot(published, calendarCurrent.period, draft);
@@ -267,6 +273,7 @@ export async function syncPublishedCreateToDraft(published: Planning): Promise<v
 }
 
 export async function syncPublishedUpdateToDraft(published: Planning): Promise<void> {
+  if (published.draftMirrorSuppressedAt) return;
   const { calendarCurrent, draft } = await getCalendarContext();
   if (!slotBelongsToPeriod(published, calendarCurrent.period)) return;
   const draftAnchor = draftAnchorDateForSourceSlot(published, calendarCurrent.period, draft);

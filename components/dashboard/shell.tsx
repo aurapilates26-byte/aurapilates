@@ -69,7 +69,7 @@ export function DashboardShell({ role, children }: DashboardShellProps) {
         ) : null}
 
         <div className="flex min-h-screen min-w-0 flex-1 flex-col">
-          <main className="min-w-0 flex-1 overflow-x-hidden px-4 pb-6 pt-0 sm:px-6 lg:px-8 xl:px-10">{children}</main>
+          <main className="min-w-0 flex-1 overflow-x-clip px-4 pb-6 pt-0 sm:px-6 lg:px-8 xl:px-10">{children}</main>
         </div>
       </div>
     </div>

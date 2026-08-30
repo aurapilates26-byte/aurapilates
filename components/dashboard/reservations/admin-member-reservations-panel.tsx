@@ -23,6 +23,7 @@ import {
   PackEnrollmentEditButton,
 } from "@/components/dashboard/edit-member-pack-enrollment-dialog";
 import { PaymentMethodBadge } from "@/components/dashboard/payment-method-badge";
+import { packCategoryMenuLabel } from "@/lib/pack-categories";
 import type { MemberOwnedPackDto } from "@/lib/admin/member-owned-packs";
 import {
   EMPTY_MEMBER_OWNED_PACKS,
@@ -247,7 +248,14 @@ export function AdminMemberReservationsPanel({
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="font-semibold text-brand-dark">{pack.packName}</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-semibold text-brand-dark">{pack.packName}</p>
+                      {pack.category ? (
+                        <span className="inline-flex rounded-full border border-brand-medium/30 bg-brand-light/50 px-2 py-0.5 text-[11px] font-semibold text-brand-dark/80">
+                          {packCategoryMenuLabel(pack.category)}
+                        </span>
+                      ) : null}
+                    </div>
                     <p className="mt-0.5 text-xs text-brand-dark/60">
                       {pack.isRenewal ? "Renouvellement" : "Premier pack"}
                       {pack.totalPaidDinars > 0 ? ` · ${pack.totalPaidDinars} DT` : ""}
@@ -258,7 +266,15 @@ export function AdminMemberReservationsPanel({
                     <PackEnrollmentEditButton onClick={() => setPackToEdit(pack)} />
                   </div>
                 </div>
-                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="rounded-lg border border-brand-medium/15 bg-zinc-50/70 px-3 py-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-brand-dark/50">
+                      Catégorie
+                    </p>
+                    <p className="mt-1 text-sm font-medium text-brand-dark">
+                      {pack.category ? packCategoryMenuLabel(pack.category) : "—"}
+                    </p>
+                  </div>
                   <div className="rounded-lg border border-brand-medium/15 bg-zinc-50/70 px-3 py-2">
                     <p className="text-[10px] font-semibold uppercase tracking-wide text-brand-dark/50">
                       {pack.isRenewal ? "Date d'achat" : "Date d'ajout"}

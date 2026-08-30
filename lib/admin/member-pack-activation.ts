@@ -105,6 +105,18 @@ export async function activateSelectedPackOnSessionDate(
         })
       )?.packStartedAt ??
       null;
+  } else if (!currentStartedAt) {
+    const enrollment = await tx.memberPackEnrollment.findFirst({
+      where: {
+        memberId: input.memberId,
+        packId: input.packId,
+        status: { in: ["PENDING_START", "ACTIVE"] },
+        packStartedAt: { not: null },
+      },
+      orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
+      select: { packStartedAt: true },
+    });
+    currentStartedAt = enrollment?.packStartedAt ?? null;
   }
 
   let packStartedAt = currentStartedAt;
@@ -130,6 +142,11 @@ export async function activateSelectedPackOnSessionDate(
       }
       packStartedAt = input.sessionDateDb;
       packStartAdjusted = true;
+    } else if (isMemberPrimaryPack && !input.memberPackStartedAt) {
+      await tx.member.update({
+        where: { id: input.memberId },
+        data: { packStartedAt, isActive: true },
+      });
     }
   }
 

@@ -5,7 +5,7 @@ import { Button, Modal, SelectMenu } from "@/components/ui";
 import { useToast } from "@/components/ui/toast-provider";
 import { PersonalDiscountFields } from "@/components/dashboard/member-form/personal-discount-fields";
 import type { MemberOwnedPackDto } from "@/lib/admin/member-owned-packs";
-import { normalizePackCategory, packCategoryMenuLabel } from "@/lib/pack-categories";
+import { normalizePackCategory, PACK_CATEGORY_OPTIONS } from "@/lib/pack-categories";
 import {
   buildPackChangePriceSummary,
   formatPackChangeDifferenceLabel,
@@ -118,6 +118,8 @@ export function EditMemberPackEnrollmentDialog({
   const [packs, setCatalogPacks] = useState<PackOption[]>([]);
   const [loadingPacks, setLoadingPacks] = useState(false);
   const [packId, setPackId] = useState("");
+  const [packCategory, setPackCategory] = useState("");
+  const [additionalSessions, setAdditionalSessions] = useState("0");
   const [paymentMethod, setPaymentMethod] = useState<PackPaymentMethodValue | "">("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -140,6 +142,10 @@ export function EditMemberPackEnrollmentDialog({
   useEffect(() => {
     if (!open || !pack) return;
     setPackId(pack.packId);
+    setPackCategory(pack.category ? normalizePackCategory(pack.category) : "");
+    setAdditionalSessions(
+      (pack.additionalSessionsCredit ?? 0) > 0 ? String(pack.additionalSessionsCredit) : "0",
+    );
     setPaymentMethod(
       pack.packPaymentMethod === "CASH" ||
         pack.packPaymentMethod === "CHECK" ||
@@ -270,16 +276,23 @@ export function EditMemberPackEnrollmentDialog({
     discountForm.discountValue,
   ]);
 
-  const lockedCategory = useMemo(
+  const originalCategory = useMemo(
     () => (pack?.category ? normalizePackCategory(pack.category) : ""),
     [pack?.category],
   );
 
+  const categoryChanged = useMemo(() => {
+    if (!originalCategory || !packCategory.trim()) return false;
+    return normalizePackCategory(packCategory) !== originalCategory;
+  }, [originalCategory, packCategory]);
+
   const packsForSelect = useMemo(() => {
     let list = packs.filter((p) => p.isActive !== false);
-    if (lockedCategory) {
+    const cat = packCategory.trim();
+    if (cat) {
+      const normalized = normalizePackCategory(cat);
       list = list.filter(
-        (p) => p.category && normalizePackCategory(p.category) === lockedCategory,
+        (p) => p.category && normalizePackCategory(p.category) === normalized,
       );
     }
     if (packId && !list.some((p) => p.id === packId)) {
@@ -287,13 +300,83 @@ export function EditMemberPackEnrollmentDialog({
       if (selected) list = [selected, ...list];
     }
     return list;
-  }, [packs, lockedCategory, packId]);
+  }, [packs, packCategory, packId]);
+
+  const selectedPackCatalogSessions = useMemo(() => {
+    if (!selectedPack) return null;
+    if (selectedPack.courseQuotas && selectedPack.courseQuotas.length > 0) {
+      return selectedPack.courseQuotas.reduce((sum, q) => sum + q.sessionCount, 0);
+    }
+    return selectedPack.sessionCount;
+  }, [selectedPack]);
+
+  const parsedAdditionalSessions = useMemo(() => {
+    const trimmed = additionalSessions.trim();
+    if (!trimmed) return 0;
+    const n = Number.parseInt(trimmed, 10);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }, [additionalSessions]);
+
+  const showAdditionalSessionsField = useMemo(() => {
+    if (categoryChanged) return true;
+    return Boolean(pack?.categoryReassignedAt);
+  }, [categoryChanged, pack?.categoryReassignedAt]);
+
+  const creditedSessionsPreview = useMemo(() => {
+    if (!showAdditionalSessionsField || selectedPackCatalogSessions == null || parsedAdditionalSessions == null) {
+      return null;
+    }
+    return selectedPackCatalogSessions + parsedAdditionalSessions;
+  }, [showAdditionalSessionsField, selectedPackCatalogSessions, parsedAdditionalSessions]);
+
+  const oldPackRemainingSummary = useMemo(() => {
+    if (!pack) return null;
+    if (pack.courseQuotaRemaining.length > 0) {
+      const parts = pack.courseQuotaRemaining
+        .filter((q) => q.remaining > 0)
+        .map((q) => `${q.courseLabel} : ${q.remaining}`);
+      if (parts.length === 0) return "Aucune séance restante sur l'ancien pack.";
+      return parts.join(" · ");
+    }
+    if (pack.remainingSessions > 0) {
+      return `${pack.remainingSessions} séance${pack.remainingSessions > 1 ? "s" : ""} restante${pack.remainingSessions > 1 ? "s" : ""}`;
+    }
+    return "Aucune séance restante sur l'ancien pack.";
+  }, [pack]);
+
+  const handlePackCategoryChange = (value: string) => {
+    setPackCategory(value);
+    setError(null);
+    if (!value.trim()) {
+      setPackId("");
+      return;
+    }
+    const cat = normalizePackCategory(value);
+    const selected = packs.find((p) => p.id === packId);
+    if (selected && normalizePackCategory(selected.category ?? "") !== cat) {
+      setPackId("");
+    }
+    if (value && normalizePackCategory(value) === originalCategory) {
+      setAdditionalSessions("0");
+    }
+  };
 
   const save = async () => {
     if (!pack) return;
     if (!packId) {
       setError("Veuillez choisir un pack.");
       return;
+    }
+
+    if (showAdditionalSessionsField) {
+      if (!packCategory.trim()) {
+        setError("Veuillez choisir une catégorie.");
+        return;
+      }
+      if (parsedAdditionalSessions == null) {
+        setError("Le nombre de séances supplémentaires est invalide.");
+        return;
+      }
     }
 
     const discountError = validatePersonalDiscountForm({
@@ -322,6 +405,9 @@ export function EditMemberPackEnrollmentDialog({
           credentials: "include",
           body: JSON.stringify({
             packId,
+            ...(showAdditionalSessionsField
+              ? { additionalSessions: parsedAdditionalSessions ?? 0 }
+              : {}),
             paymentMethod: paymentMethod || null,
             personalDiscount: personalDiscountPayload,
           }),
@@ -366,10 +452,31 @@ export function EditMemberPackEnrollmentDialog({
     >
       <div className="space-y-4">
         <p className="text-xs leading-relaxed text-brand-dark/65">
-          Corriger le pack catalogue de cette inscription. La <strong>catégorie</strong> reste
-          fixe ; vous pouvez choisir un autre pack de la même catégorie, même si des séances ont
-          déjà été consommées ou si le pack est terminé / expiré.
+          Corriger le pack catalogue de cette inscription. Vous pouvez changer la{" "}
+          <strong>catégorie</strong> et le pack ; la date d&apos;achat et la première réservation
+          restent inchangées. En cas de changement de catégorie, saisissez les séances
+          supplémentaires à créditer en plus du nouveau pack (report ou conversion manuelle).
         </p>
+
+        {pack ? (
+          <div className="rounded-xl border border-brand-medium/15 bg-zinc-50/70 px-3 py-2.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-brand-dark/50">
+              Ancien pack — séances restantes
+            </p>
+            <p className="mt-1 text-sm text-brand-dark">{oldPackRemainingSummary}</p>
+            {pack.packStartedAt ? (
+              <p className="mt-1 text-[11px] text-brand-dark/55">
+                1ʳᵉ séance :{" "}
+                {new Date(pack.packStartedAt).toLocaleDateString("fr-FR")} · Achat :{" "}
+                {new Date(pack.purchasedAt).toLocaleDateString("fr-FR")}
+              </p>
+            ) : (
+              <p className="mt-1 text-[11px] text-brand-dark/55">
+                Achat : {new Date(pack.purchasedAt).toLocaleDateString("fr-FR")}
+              </p>
+            )}
+          </div>
+        ) : null}
 
         {pack ? (
           <div className="rounded-xl border border-brand-medium/15 bg-white px-3 py-2.5">
@@ -380,15 +487,19 @@ export function EditMemberPackEnrollmentDialog({
         ) : null}
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:items-end">
-          <div className="rounded-xl border border-brand-medium/15 bg-zinc-50/60 px-3 py-2.5">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-dark/50">
-              Catégorie
-            </p>
-            <p className="mt-1.5 text-sm font-medium text-brand-dark">
-              {lockedCategory ? packCategoryMenuLabel(lockedCategory) : "—"}
-            </p>
-            <p className="mt-0.5 text-[11px] text-brand-dark/55">Non modifiable</p>
-          </div>
+          <SelectMenu
+            id="edit-owned-pack-category"
+            label="Catégorie"
+            value={packCategory}
+            onChange={handlePackCategoryChange}
+            options={[
+              { value: "", label: "Choisir une catégorie" },
+              ...PACK_CATEGORY_OPTIONS.map((opt) => ({
+                value: opt.value,
+                label: opt.label,
+              })),
+            ]}
+          />
 
           <SelectMenu
             id="edit-owned-pack"
@@ -399,7 +510,14 @@ export function EditMemberPackEnrollmentDialog({
               setError(null);
             }}
             options={[
-              { value: "", label: loadingPacks ? "Chargement…" : "Choisir un pack" },
+              {
+                value: "",
+                label: loadingPacks
+                  ? "Chargement…"
+                  : packCategory.trim()
+                    ? "Choisir un pack"
+                    : "Catégorie d'abord",
+              },
               ...packsForSelect.map((p) => ({
                 value: p.id,
                 label: formatPackSelectOptionLabel(p),
@@ -407,6 +525,39 @@ export function EditMemberPackEnrollmentDialog({
             ]}
           />
         </div>
+
+        {showAdditionalSessionsField ? (
+          <div className="space-y-2 rounded-xl border border-sky-200/80 bg-sky-50/50 px-3 py-3">
+            <label htmlFor="edit-owned-pack-additional" className="block text-sm font-medium text-brand-dark">
+              Séances supplémentaires
+            </label>
+            <p className="text-[11px] leading-relaxed text-brand-dark/60">
+              Séances à ajouter en plus du nouveau pack catalogue (report ou conversion depuis
+              l&apos;ancien pack). Ex. pack 10 séances + 5 reportées = 15 au total.
+            </p>
+            <input
+              id="edit-owned-pack-additional"
+              type="number"
+              min={0}
+              max={999}
+              step={1}
+              inputMode="numeric"
+              value={additionalSessions}
+              onChange={(e) => {
+                setAdditionalSessions(e.target.value);
+                setError(null);
+              }}
+              className="w-full rounded-lg border border-brand-medium/25 bg-white px-3 py-2 text-sm text-brand-dark tabular-nums focus:border-brand-medium focus:outline-none focus:ring-2 focus:ring-brand-medium/20"
+            />
+            {selectedPackCatalogSessions != null && parsedAdditionalSessions != null ? (
+              <p className="text-xs font-medium text-sky-950/85">
+                Total crédité : {selectedPackCatalogSessions} (pack) + {parsedAdditionalSessions}{" "}
+                (suppl.) ={" "}
+                <span className="font-bold tabular-nums">{creditedSessionsPreview}</span> séances
+              </p>
+            ) : null}
+          </div>
+        ) : null}
 
         {packId && discountBaseDinars != null ? (
           <PersonalDiscountFields

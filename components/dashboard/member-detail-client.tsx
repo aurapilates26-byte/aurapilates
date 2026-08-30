@@ -36,6 +36,7 @@ import {
   computePersonalDiscountPreviewFromForm,
 } from "@/lib/member-personal-discount";
 import type { PersonalDiscountType } from "@/types/admin/pack-payment";
+import { memberPrimaryPackBadgeClass } from "@/lib/member-primary-pack-state";
 
 type SlotRow = {
   planningId: string;
@@ -62,6 +63,7 @@ type BookablePackOption = {
   remainingForCourse: number;
   courseCoverageLabel: string;
   packStartedAt: string | null;
+  isProlonged: boolean;
 };
 
 type PendingAdminBooking = {
@@ -1756,7 +1758,16 @@ export function MemberDetailClient({
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-dark/50">
                         Pack utilisé
                       </p>
-                      <p className="mt-1 font-semibold">{selectedPack.packName}</p>
+                      <div className="mt-1 flex flex-wrap items-center gap-2">
+                        <p className="font-semibold">{selectedPack.packName}</p>
+                        {selectedPack.isProlonged ? (
+                          <span
+                            className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${memberPrimaryPackBadgeClass("prolonged")}`}
+                          >
+                            Prolongé
+                          </span>
+                        ) : null}
+                      </div>
                       <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                         <InfoField label="Total du pack">
                           {selectedPack.totalSessions != null ? selectedPack.totalSessions : "—"}

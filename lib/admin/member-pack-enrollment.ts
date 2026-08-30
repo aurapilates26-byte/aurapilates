@@ -72,7 +72,14 @@ export async function syncActiveEnrollmentDates(
         status: "PENDING_START",
       },
       orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
-      select: { id: true, purchasedAt: true },
+      select: {
+        id: true,
+        purchasedAt: true,
+        packStartedAt: true,
+        packExpiresAt: true,
+        prolongedAt: true,
+        status: true,
+      },
     })) ??
     (await tx.memberPackEnrollment.findFirst({
       where: {
@@ -81,9 +88,34 @@ export async function syncActiveEnrollmentDates(
         status: "ACTIVE",
       },
       orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
-      select: { id: true, purchasedAt: true },
+      select: {
+        id: true,
+        purchasedAt: true,
+        packStartedAt: true,
+        packExpiresAt: true,
+        prolongedAt: true,
+        status: true,
+      },
     }));
   if (!enrollment) return;
+
+  // Pack prolongé : conserver début, fin et marqueur de prolongation (séances déjà consommées).
+  if (enrollment.prolongedAt && enrollment.packStartedAt) {
+    if (enrollment.status === "PENDING_START") {
+      await tx.memberPackEnrollment.update({
+        where: { id: enrollment.id },
+        data: { status: "ACTIVE", closedAt: null },
+      });
+    }
+    return;
+  }
+
+  // Inscription déjà démarrée : ne recaler que si la séance est plus ancienne.
+  if (enrollment.packStartedAt && enrollment.status === "ACTIVE") {
+    const existingYmd = formatYmdLocal(enrollment.packStartedAt);
+    const incomingYmd = formatYmdLocal(input.packStartedAt);
+    if (incomingYmd >= existingYmd) return;
+  }
 
   // Ne jamais démarrer une inscription avant sa date d'achat (évite de coller le début du pack précédent sur le renouvellement).
   const purchasedYmd = formatYmdLocal(enrollment.purchasedAt);
@@ -93,7 +125,9 @@ export async function syncActiveEnrollmentDates(
       ? parseYmdToPrismaDate(purchasedYmd)!
       : input.packStartedAt;
 
-  const packExpiresAt = addPackDurationToStartDate(clampedStart, input.durationDays) ?? null;
+  const packExpiresAt = enrollment.prolongedAt
+    ? enrollment.packExpiresAt
+    : addPackDurationToStartDate(clampedStart, input.durationDays) ?? null;
 
   await tx.memberPackEnrollment.update({
     where: { id: enrollment.id },

@@ -41,6 +41,7 @@ export type BookablePackOptionDto = {
   courseCoverageLabel: string;
   purchasedAt: string;
   packStartedAt: string | null;
+  isProlonged: boolean;
 };
 
 type PackCandidate = {
@@ -58,6 +59,7 @@ type PackCandidate = {
   purchasedAt: Date;
   packStartedAt: Date | null;
   packExpiresAt: Date | null;
+  isProlonged: boolean;
   remainingSessions: number;
   remainingForCourse: number;
   courseCoverageLabel: string;
@@ -148,6 +150,11 @@ function isPackUnused(candidate: PackCandidate): boolean {
   return candidate.remainingSessions >= total;
 }
 
+function resolveCandidateExpiresAt(candidate: PackCandidate): Date | null {
+  if (candidate.packExpiresAt) return packStartDateLocal(candidate.packExpiresAt);
+  return packExpiresAtLocal(candidate.packStartedAt, candidate.pack.durationDays);
+}
+
 function isCandidateValidForSessionDate(
   candidate: PackCandidate,
   sessionDateLocal: Date,
@@ -156,7 +163,8 @@ function isCandidateValidForSessionDate(
   // Pack jamais consommé : la 1ʳᵉ réservation démarre le pack (ignorer une date de début fantôme).
   if (!candidate.packStartedAt || isPackUnused(candidate)) return true;
 
-  const expiresAt = packExpiresAtLocal(candidate.packStartedAt, candidate.pack.durationDays);
+  const expiresAt = resolveCandidateExpiresAt(candidate);
+
   if (expiresAt && sessionDateLocal.getTime() > expiresAt.getTime()) {
     return false;
   }
@@ -171,6 +179,7 @@ function isCandidateValidForSessionDate(
       sessionDateLocal,
       candidate.packStartedAt,
       candidate.pack.durationDays,
+      candidate.packExpiresAt,
     );
   }
 
@@ -179,6 +188,7 @@ function isCandidateValidForSessionDate(
       sessionDateLocal,
       candidate.packStartedAt,
       candidate.pack.durationDays,
+      candidate.packExpiresAt,
     )
   ) {
     return false;
@@ -212,6 +222,7 @@ async function loadPackCandidates(
           purchasedAt: true,
           packStartedAt: true,
           packExpiresAt: true,
+          prolongedAt: true,
           status: true,
         },
       },
@@ -231,7 +242,12 @@ async function loadPackCandidates(
 
   const latestEnrollmentByPack = new Map<
     string,
-    { purchasedAt: Date; packStartedAt: Date | null; packExpiresAt: Date | null }
+    {
+      purchasedAt: Date;
+      packStartedAt: Date | null;
+      packExpiresAt: Date | null;
+      prolongedAt: Date | null;
+    }
   >();
   for (const enrollment of member.packEnrollments) {
     if (!latestEnrollmentByPack.has(enrollment.packId)) {
@@ -239,6 +255,7 @@ async function loadPackCandidates(
         purchasedAt: enrollment.purchasedAt,
         packStartedAt: enrollment.packStartedAt,
         packExpiresAt: enrollment.packExpiresAt,
+        prolongedAt: enrollment.prolongedAt,
       });
     }
   }
@@ -282,6 +299,9 @@ async function loadPackCandidates(
         (e.status === "PENDING_START" || !e.packStartedAt),
     );
     const openEnrollment = unstartedEnrollment ?? enrollment;
+    const isProlonged = member.packEnrollments.some(
+      (e) => e.packId === pack.id && e.prolongedAt != null,
+    );
 
     const period = unstartedEnrollment
       ? { packStartedAt: null as Date | null, packExpiresAt: null as Date | null }
@@ -300,6 +320,7 @@ async function loadPackCandidates(
       purchasedAt: openEnrollment?.purchasedAt ?? enrollment?.purchasedAt ?? new Date(0),
       packStartedAt: period.packStartedAt,
       packExpiresAt: period.packExpiresAt,
+      isProlonged,
       remainingSessions: totalRemaining(balances, pack),
       remainingForCourse,
       courseCoverageLabel: buildCourseCoverageLabel(pack, courseSlug),
@@ -339,6 +360,7 @@ function toBookablePackOptionDto(candidate: PackCandidate): BookablePackOptionDt
     courseCoverageLabel: candidate.courseCoverageLabel,
     purchasedAt: candidate.purchasedAt.toISOString(),
     packStartedAt: candidate.packStartedAt?.toISOString() ?? null,
+    isProlonged: candidate.isProlonged,
   };
 }
 
@@ -413,11 +435,6 @@ export type ListBookablePacksResult = {
 
 function formatDateFrShort(d: Date): string {
   return d.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric" });
-}
-
-function resolveCandidateExpiresAt(candidate: PackCandidate): Date | null {
-  if (candidate.packExpiresAt) return packStartDateLocal(candidate.packExpiresAt);
-  return packExpiresAtLocal(candidate.packStartedAt, candidate.pack.durationDays);
 }
 
 async function diagnoseEmptyBookablePacks(input: {

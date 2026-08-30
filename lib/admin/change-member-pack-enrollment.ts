@@ -15,8 +15,14 @@ import {
   resolveFinalPackPaymentAmount,
   type PersonalDiscountInput,
 } from "@/lib/admin/pack-payment";
-import { prisma } from "@/lib/prisma";
+import { startOfLocalToday } from "@/lib/calendar-day";
+import { creditMemberPackSession } from "@/lib/member-pack-session-ledger";
 import { normalizePackCategory } from "@/lib/pack-categories";
+import {
+  getEligibilityForPack,
+  isCourseAllowedForPack,
+} from "@/lib/pack-eligibility";
+import { prisma } from "@/lib/prisma";
 
 export function changeMemberPackEnrollmentErrorMessage(code: string): string {
   if (code === "NOT_FOUND") return "Inscription pack introuvable";
@@ -24,6 +30,9 @@ export function changeMemberPackEnrollmentErrorMessage(code: string): string {
   if (code === "PACK_INACTIVE") return "Ce pack n'est plus actif";
   if (code === "CATEGORY_MISMATCH") {
     return "Le nouveau pack doit rester dans la même catégorie";
+  }
+  if (code === "INVALID_ADDITIONAL_SESSIONS") {
+    return "Le nombre de séances supplémentaires est invalide";
   }
   if (code === "INVALID_PAYMENT_METHOD") return "Mode de paiement invalide";
   if (code === "NO_CHANGE") return "Aucune modification";
@@ -34,9 +43,185 @@ export type ChangeMemberPackEnrollmentInput = {
   memberId: string;
   enrollmentId: string;
   packId: string;
+  /** Séances en plus du catalogue du nouveau pack (report / conversion manuelle). */
+  additionalSessions?: number;
   paymentMethod?: PackPaymentMethodValue | null;
   personalDiscount?: PersonalDiscountInput & { reason?: string } | null;
 };
+
+type PackBalanceShape = {
+  id: string;
+  category: string | null;
+  sessionCount: number | null;
+  courseQuotas: { courseSlug: string; sessionCount: number }[];
+};
+
+function enrollmentFutureSessionDateFilter(input: {
+  periodStart: Date | null;
+  periodEndExclusive: Date | null;
+}): Prisma.DateTimeFilter {
+  const today = startOfLocalToday();
+  const gte =
+    input.periodStart != null && input.periodStart.getTime() > today.getTime()
+      ? input.periodStart
+      : today;
+  return {
+    gte,
+    ...(input.periodEndExclusive ? { lt: input.periodEndExclusive } : {}),
+  };
+}
+
+/** Annule les réservations futures incompatibles avec la nouvelle catégorie du pack. */
+async function releaseFutureIncompatibleReservations(
+  tx: Prisma.TransactionClient,
+  input: {
+    memberId: string;
+    packId: string;
+    newPack: PackBalanceShape;
+    periodStart: Date | null;
+    periodEndExclusive: Date | null;
+  },
+): Promise<void> {
+  const eligibility = getEligibilityForPack({
+    category: input.newPack.category,
+    courseQuotas: input.newPack.courseQuotas,
+  });
+
+  const reservations = await tx.reservation.findMany({
+    where: {
+      memberId: input.memberId,
+      debitedPackId: input.packId,
+      status: { in: ["BOOKED", "WAITLIST"] },
+      sessionDate: enrollmentFutureSessionDateFilter(input),
+    },
+    select: {
+      id: true,
+      status: true,
+      packRefundedAt: true,
+      planning: { select: { courseSlug: true } },
+      debitedPack: {
+        select: {
+          id: true,
+          sessionCount: true,
+          courseQuotas: { select: { courseSlug: true, sessionCount: true } },
+        },
+      },
+    },
+  });
+
+  for (const reservation of reservations) {
+    if (isCourseAllowedForPack(eligibility, reservation.planning.courseSlug)) continue;
+
+    const wasBooked = reservation.status === "BOOKED";
+    await tx.reservation.update({
+      where: { id: reservation.id },
+      data: {
+        status: "CANCELLED",
+        packRefundedAt: wasBooked ? new Date() : null,
+      },
+    });
+
+    if (wasBooked && reservation.packRefundedAt == null && reservation.debitedPack) {
+      await creditMemberPackSession(tx, {
+        memberId: input.memberId,
+        pack: reservation.debitedPack,
+        courseSlug: reservation.planning.courseSlug,
+      });
+    }
+  }
+}
+
+async function countFutureBookedOnPack(
+  tx: Prisma.TransactionClient,
+  input: {
+    memberId: string;
+    packId: string;
+    pack: PackBalanceShape;
+    periodStart: Date | null;
+    periodEndExclusive: Date | null;
+  },
+): Promise<number> {
+  const eligibility = getEligibilityForPack({
+    category: input.pack.category,
+    courseQuotas: input.pack.courseQuotas,
+  });
+
+  return tx.reservation.count({
+    where: {
+      memberId: input.memberId,
+      debitedPackId: input.packId,
+      status: "BOOKED",
+      sessionDate: enrollmentFutureSessionDateFilter(input),
+      ...(eligibility.allowedCourseSlugs.length > 0
+        ? { planning: { courseSlug: { in: eligibility.allowedCourseSlugs } } }
+        : {}),
+    },
+  });
+}
+
+async function applyPackBalanceWithAdditional(
+  tx: Prisma.TransactionClient,
+  input: {
+    memberId: string;
+    pack: PackBalanceShape;
+    additionalSessions: number;
+    consumedSessions: number;
+    futureBookedCount?: number;
+    oldPackId?: string;
+  },
+): Promise<void> {
+  const { memberId, pack, additionalSessions, consumedSessions, oldPackId } = input;
+  const futureBookedCount = input.futureBookedCount ?? 0;
+
+  if (oldPackId && oldPackId !== pack.id) {
+    await tx.memberPackBalance.deleteMany({
+      where: { memberId, packId: oldPackId },
+    });
+  }
+  await tx.memberPackBalance.deleteMany({
+    where: { memberId, packId: pack.id },
+  });
+
+  if (pack.courseQuotas.length > 0) {
+    const firstSlug = pack.courseQuotas[0]!.courseSlug;
+    const catalogTotal = pack.courseQuotas.reduce((sum, q) => sum + q.sessionCount, 0);
+    const remainingTotal = Math.max(
+      0,
+      catalogTotal + additionalSessions - consumedSessions - futureBookedCount,
+    );
+    let left = remainingTotal;
+    await tx.memberPackBalance.createMany({
+      data: pack.courseQuotas.map((q, index) => {
+        const isLast = index === pack.courseQuotas.length - 1;
+        const base = q.sessionCount + (q.courseSlug === firstSlug ? additionalSessions : 0);
+        const remaining = isLast ? left : Math.min(left, base);
+        left = Math.max(0, left - remaining);
+        return {
+          memberId,
+          packId: pack.id,
+          courseSlug: q.courseSlug,
+          remaining,
+        };
+      }),
+    });
+    return;
+  }
+
+  if (pack.sessionCount != null) {
+    const remaining = Math.max(
+      0,
+      pack.sessionCount + additionalSessions - consumedSessions - futureBookedCount,
+    );
+    await tx.memberPackBalance.create({
+      data: {
+        memberId,
+        packId: pack.id,
+        courseSlug: null,
+        remaining,
+      },
+    });
+  }
+}
 
 function resolvePersonalDiscountInput(
   input: ChangeMemberPackEnrollmentInput,
@@ -74,6 +259,8 @@ export async function changeMemberPackEnrollment(input: ChangeMemberPackEnrollme
           status: true,
           purchasedAt: true,
           closedAt: true,
+          additionalSessionsCredit: true,
+          categoryReassignedAt: true,
           pack: {
             select: {
               sessionCount: true,
@@ -130,7 +317,23 @@ export async function changeMemberPackEnrollment(input: ChangeMemberPackEnrollme
 
       const enrollmentCategory = normalizePackCategory(enrollment.pack.category ?? "");
       const newPackCategory = normalizePackCategory(newPack.category ?? "");
-      if (enrollmentCategory !== newPackCategory) throw new Error("CATEGORY_MISMATCH");
+      const categoryChanged = enrollmentCategory !== newPackCategory;
+
+      const additionalSessions = input.additionalSessions ?? 0;
+      if (
+        !Number.isInteger(additionalSessions) ||
+        additionalSessions < 0 ||
+        additionalSessions > 999
+      ) {
+        throw new Error("INVALID_ADDITIONAL_SESSIONS");
+      }
+      if (!categoryChanged && additionalSessions > 0 && !enrollment.categoryReassignedAt) {
+        throw new Error("INVALID_ADDITIONAL_SESSIONS");
+      }
+
+      const creditTouched =
+        input.additionalSessions !== undefined &&
+        (categoryChanged || enrollment.categoryReassignedAt != null);
 
       const paymentMethod =
         input.paymentMethod === undefined
@@ -148,7 +351,7 @@ export async function changeMemberPackEnrollment(input: ChangeMemberPackEnrollme
       const willTouchPayment =
         Boolean(enrollment.packPaymentId) &&
         (paymentMethod !== undefined || discountTouched || packChanged);
-      if (!packChanged && !willTouchPayment) throw new Error("NO_CHANGE");
+      if (!packChanged && !willTouchPayment && !creditTouched) throw new Error("NO_CHANGE");
 
       const memberRow = await tx.member.findUnique({
         where: { id: input.memberId },
@@ -180,17 +383,31 @@ export async function changeMemberPackEnrollment(input: ChangeMemberPackEnrollme
       const oldPackId = enrollment.packId;
 
       if (packChanged) {
+        const enrollmentUpdateData: {
+          packId: string;
+          packStartedAt?: Date | null;
+          packExpiresAt?: Date | null;
+          status?: typeof enrollment.status;
+          closedAt?: Date | null;
+          additionalSessionsCredit?: number;
+          categoryReassignedAt?: Date | null;
+        } = { packId: newPack.id };
+
+        if (categoryChanged) {
+          enrollmentUpdateData.additionalSessionsCredit = additionalSessions;
+          enrollmentUpdateData.categoryReassignedAt = new Date();
+        } else if (hasUsage) {
+          // Même catégorie + usage : conserver dates et statut.
+        } else {
+          enrollmentUpdateData.packStartedAt = null;
+          enrollmentUpdateData.packExpiresAt = null;
+          enrollmentUpdateData.status = "PENDING_START";
+          enrollmentUpdateData.closedAt = null;
+        }
+
         await tx.memberPackEnrollment.update({
           where: { id: enrollment.id },
-          data: hasUsage
-            ? { packId: newPack.id }
-            : {
-                packId: newPack.id,
-                packStartedAt: null,
-                packExpiresAt: null,
-                status: "PENDING_START",
-                closedAt: null,
-              },
+          data: enrollmentUpdateData,
         });
 
         if (enrollment.packPaymentId) {
@@ -246,7 +463,11 @@ export async function changeMemberPackEnrollment(input: ChangeMemberPackEnrollme
             }
           }
 
-          const adjustmentNote = `Pack modifié : ${newPack.name}`;
+          const adjustmentNote = categoryChanged
+            ? `Pack modifié (changement catégorie) : ${newPack.name}${
+                additionalSessions > 0 ? ` · +${additionalSessions} séances reportées` : ""
+              }`
+            : `Pack modifié : ${newPack.name}`;
           paymentUpdate.note = existingPayment?.note
             ? `${existingPayment.note} · ${adjustmentNote}`
             : adjustmentNote;
@@ -264,13 +485,58 @@ export async function changeMemberPackEnrollment(input: ChangeMemberPackEnrollme
         if (member?.packId === oldPackId || member?.packId === newPack.id) {
           await tx.member.update({
             where: { id: input.memberId },
-            data: hasUsage
-              ? { packId: newPack.id }
-              : { packId: newPack.id, packStartedAt: null },
+            data:
+              hasUsage || categoryChanged
+                ? { packId: newPack.id }
+                : { packId: newPack.id, packStartedAt: null },
           });
         }
 
-        if (hasUsage) {
+        if (categoryChanged) {
+          const sessionDateFilter =
+            periodStart != null
+              ? {
+                  gte: periodStart,
+                  ...(periodEndExclusive ? { lt: periodEndExclusive } : {}),
+                }
+              : undefined;
+
+          await releaseFutureIncompatibleReservations(tx, {
+            memberId: input.memberId,
+            packId: oldPackId,
+            newPack,
+            periodStart,
+            periodEndExclusive,
+          });
+
+          if (hasUsage) {
+            await tx.reservation.updateMany({
+              where: {
+                memberId: input.memberId,
+                debitedPackId: oldPackId,
+                ...(sessionDateFilter ? { sessionDate: sessionDateFilter } : {}),
+              },
+              data: { debitedPackId: newPack.id },
+            });
+          }
+
+          const futureBookedCount = await countFutureBookedOnPack(tx, {
+            memberId: input.memberId,
+            packId: newPack.id,
+            pack: newPack,
+            periodStart,
+            periodEndExclusive,
+          });
+
+          await applyPackBalanceWithAdditional(tx, {
+            memberId: input.memberId,
+            pack: newPack,
+            additionalSessions,
+            consumedSessions: consumed,
+            futureBookedCount,
+            oldPackId,
+          });
+        } else if (hasUsage) {
           const sessionDateFilter =
             periodStart != null
               ? {
@@ -356,6 +622,27 @@ export async function changeMemberPackEnrollment(input: ChangeMemberPackEnrollme
         await tx.packPayment.update({
           where: { id: enrollment.packPaymentId },
           data: paymentUpdate,
+        });
+      } else if (creditTouched) {
+        await tx.memberPackEnrollment.update({
+          where: { id: enrollment.id },
+          data: { additionalSessionsCredit: additionalSessions },
+        });
+
+        const futureBookedCount = await countFutureBookedOnPack(tx, {
+          memberId: input.memberId,
+          packId: newPack.id,
+          pack: newPack,
+          periodStart,
+          periodEndExclusive,
+        });
+
+        await applyPackBalanceWithAdditional(tx, {
+          memberId: input.memberId,
+          pack: newPack,
+          additionalSessions,
+          consumedSessions: consumed,
+          futureBookedCount,
         });
       }
 

@@ -9,6 +9,12 @@ export const MEMBER_PAYMENT_STATUS_LABELS: Record<MemberPaymentStatus, string> =
   CREDIT: "Crédit",
 };
 
+/** Libellé du montant restant à payer dans la liste (acompte versé → « Reste », pas « Avance »). */
+export function memberPaymentRemainingBadgeLabel(status: MemberPaymentStatus): string {
+  if (status === "ADVANCE") return "Reste";
+  return MEMBER_PAYMENT_STATUS_LABELS[status];
+}
+
 /**
  * - Avance : acompte versé (`DEPOSIT_PENDING`) avec reste à payer.
  * - Crédit : aucun paiement encore (`ACTIVE`) — totalité du montant reste due.

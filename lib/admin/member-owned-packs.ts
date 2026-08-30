@@ -41,12 +41,15 @@ export type MemberOwnedPackDto = {
   enrollmentStatus: MemberPackEnrollmentStatus;
   packStartedAt: string | null;
   packExpiresAt: string | null;
+  prolongedAt: string | null;
   packPaymentMethod: PackPaymentMethodValue | null;
   depositPaymentMethod: PackPaymentMethodValue | null;
   totalSessions: number | null;
   consumedSessions: number;
   remainingSessions: number;
   totalPaidDinars: number;
+  additionalSessionsCredit: number;
+  categoryReassignedAt: string | null;
   courseQuotaRemaining: { courseLabel: string; consumed: number; remaining: number; total: number }[];
 };
 
@@ -400,6 +403,11 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
   // Recalcule les soldes = somme des séances restantes sur les inscriptions ouvertes du même pack.
   await syncBalancesFromOpenEnrollments(memberId, enrollmentsAsc);
 
+  const memberPackBalances = await prisma.memberPackBalance.findMany({
+    where: { memberId },
+    select: { packId: true, courseSlug: true, remaining: true },
+  });
+
   const items: MemberOwnedPackDto[] = [];
 
   for (const enrollment of enrollments) {
@@ -415,9 +423,49 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
         ? pack.courseQuotas.reduce((sum, q) => sum + q.sessionCount, 0)
         : pack.sessionCount;
 
+    let displayTotalSessions = totalSessions;
+
     let packStartedAt = enrollment.packStartedAt;
     let packExpiresAt = enrollment.packExpiresAt;
     let enrollmentStatus = enrollment.status;
+    const isProlonged = enrollment.prolongedAt != null;
+
+    if (isProlonged) {
+      const { periodEndExclusive } = getEnrollmentPeriodBounds(enrollment, enrollmentsAsc);
+      const firstConsumed = await findFirstEnrollmentConsumedSessionDate({
+        memberId,
+        packId: pack.id,
+        courseQuotas: pack.courseQuotas,
+        periodStart: enrollment.purchasedAt,
+        periodEndExclusive,
+      });
+      if (firstConsumed) {
+        const firstDay = toPrismaDateLocal(firstConsumed);
+        const startDay = packStartedAt ? toPrismaDateLocal(packStartedAt) : null;
+        if (!startDay || startDay.getTime() > firstDay.getTime()) {
+          packStartedAt = firstConsumed;
+          await prisma.memberPackEnrollment.update({
+            where: { id: enrollment.id },
+            data: { packStartedAt: firstConsumed },
+          });
+          if (isPrimary) {
+            const memberRow = await prisma.member.findUnique({
+              where: { id: memberId },
+              select: { packStartedAt: true },
+            });
+            const memberStartDay = memberRow?.packStartedAt
+              ? toPrismaDateLocal(memberRow.packStartedAt)
+              : null;
+            if (!memberStartDay || memberStartDay.getTime() > firstDay.getTime()) {
+              await prisma.member.update({
+                where: { id: memberId },
+                data: { packStartedAt: firstConsumed },
+              });
+            }
+          }
+        }
+      }
+    }
 
     let consumedSessions: number;
     let remainingSessions: number;
@@ -477,15 +525,19 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
           };
         });
       }
-      if (consumedSessions <= 0) {
+      if (!isProlonged && consumedSessions <= 0) {
         packStartedAt = null;
         packExpiresAt = null;
         enrollmentStatus = "PENDING_START";
-      } else if (fifoAlloc.firstSessionDate) {
+      } else if (!isProlonged && fifoAlloc.firstSessionDate) {
         packStartedAt = fifoAlloc.firstSessionDate;
         packExpiresAt = pack.durationDays
           ? addPackDurationToStartDate(fifoAlloc.firstSessionDate, pack.durationDays)
           : packExpiresAt;
+        enrollmentStatus = "ACTIVE";
+      } else if (isProlonged) {
+        packStartedAt = enrollment.packStartedAt ?? packStartedAt;
+        packExpiresAt = enrollment.packExpiresAt ?? packExpiresAt;
         enrollmentStatus = "ACTIVE";
       }
     } else {
@@ -521,7 +573,7 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
       remainingSessions =
         totalSessions != null ? Math.max(0, totalSessions - consumedSessions) : 0;
 
-      if (packStartedAt && consumedSessions <= 0) {
+      if (!isProlonged && packStartedAt && consumedSessions <= 0) {
         packStartedAt = null;
         packExpiresAt = null;
         enrollmentStatus = "PENDING_START";
@@ -541,6 +593,7 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
           enrollmentStatus = "ACTIVE";
         }
       } else if (
+        !isProlonged &&
         packStartedAt &&
         toPrismaDateLocal(packStartedAt).getTime() < toPrismaDateLocal(enrollment.purchasedAt).getTime()
       ) {
@@ -579,6 +632,18 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
       }
     }
 
+    if (enrollment.categoryReassignedAt != null || enrollment.additionalSessionsCredit > 0) {
+      if (displayTotalSessions != null) {
+        displayTotalSessions = displayTotalSessions + enrollment.additionalSessionsCredit;
+        remainingSessions = Math.max(0, displayTotalSessions - consumedSessions);
+      } else {
+        const balancesForPack = memberPackBalances.filter((b) => b.packId === pack.id);
+        if (balancesForPack.length > 0) {
+          remainingSessions = balancesForPack.reduce((sum, b) => sum + b.remaining, 0);
+        }
+      }
+    }
+
     const status = mapEnrollmentStatusToDisplay(
       enrollmentStatus,
       remainingSessions,
@@ -601,13 +666,16 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
       enrollmentStatus,
       packStartedAt: packStartedAt?.toISOString() ?? null,
       packExpiresAt: packExpiresAt?.toISOString() ?? null,
+      prolongedAt: enrollment.prolongedAt?.toISOString() ?? null,
       packPaymentMethod: paymentTotals.packPaymentMethod,
       depositPaymentMethod: paymentTotals.depositPaymentMethod,
-      totalSessions,
+      totalSessions: displayTotalSessions,
       consumedSessions,
       remainingSessions,
       courseQuotaRemaining,
       totalPaidDinars: paymentTotals.totalPaidDinars,
+      additionalSessionsCredit: enrollment.additionalSessionsCredit,
+      categoryReassignedAt: enrollment.categoryReassignedAt?.toISOString() ?? null,
     });
   }
 
@@ -676,6 +744,8 @@ export async function syncBalancesFromOpenEnrollments(
     closedAt: Date | null;
     packStartedAt: Date | null;
     status: string;
+    additionalSessionsCredit?: number;
+    categoryReassignedAt?: Date | null;
     pack: {
       sessionCount: number | null;
       category?: string | null;
@@ -709,6 +779,12 @@ export async function syncBalancesFromOpenEnrollments(
 
   for (const [packId, openRows] of openByPack) {
     const pack = openRows[0]!.pack;
+
+    const hasManualCredit = openRows.some(
+      (row) =>
+        (row.additionalSessionsCredit ?? 0) > 0 || row.categoryReassignedAt != null,
+    );
+    if (hasManualCredit) continue;
 
     if (openRows.length > 1) {
       const allocations = await allocateFifoPackConsumptions({

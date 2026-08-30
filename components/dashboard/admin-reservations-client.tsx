@@ -19,6 +19,7 @@ import {
   ProspectRowActions,
 } from "@/components/dashboard/reservations/prospect-row-actions";
 import { RecordProspectTrialPaymentDialog } from "@/components/dashboard/reservations/record-prospect-trial-payment-dialog";
+import { ExpiredPackMembersDrawer } from "@/components/dashboard/reservations/expired-pack-members-drawer";
 
 type SlotRow = {
   planningId: string;
@@ -211,6 +212,7 @@ export function AdminReservationsClient() {
     planningId: string;
   } | null>(null);
   const [deletingProspectId, setDeletingProspectId] = useState<string | null>(null);
+  const [expiredPackDrawerOpen, setExpiredPackDrawerOpen] = useState(false);
 
   const searchAbortRef = useRef<AbortController | null>(null);
 
@@ -804,6 +806,16 @@ export function AdminReservationsClient() {
         title="Réservations"
         description="Filtrez par date ou heure et par membre pour suivre les réservations du jour, à venir ou passées."
         showRoleLine={false}
+        actions={
+          <button
+            type="button"
+            onClick={() => setExpiredPackDrawerOpen(true)}
+            className="rounded-full border border-amber-200/90 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-950 transition hover:bg-amber-100"
+            title="Adhérentes avec pack expiré mais encore des séances à utiliser"
+          >
+            Prolongation · séances restantes
+          </button>
+        }
       />
 
       <div className="space-y-6">
@@ -921,6 +933,11 @@ export function AdminReservationsClient() {
         isSubmitting={trialPaymentSubmitting}
         onClose={() => setTrialPaymentProspect(null)}
         onConfirm={handleConfirmTrialPayment}
+      />
+
+      <ExpiredPackMembersDrawer
+        isOpen={expiredPackDrawerOpen}
+        onClose={() => setExpiredPackDrawerOpen(false)}
       />
 
       <ConfirmDialog

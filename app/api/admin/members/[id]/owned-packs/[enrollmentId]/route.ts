@@ -16,6 +16,7 @@ type Params = { params: Promise<{ id: string; enrollmentId: string }> };
 
 const bodySchema = z.object({
   packId: z.string().trim().cuid(),
+  additionalSessions: z.number().int().min(0).max(999).optional(),
   paymentMethod: z.enum(PACK_PAYMENT_METHODS).nullable().optional(),
   personalDiscount: z
     .union([
@@ -44,13 +45,14 @@ export async function PATCH(request: Request, { params }: Params) {
       memberId,
       enrollmentId,
       packId: parsed.data.packId,
+      additionalSessions: parsed.data.additionalSessions,
       paymentMethod: parsed.data.paymentMethod,
       personalDiscount: parsed.data.personalDiscount,
     });
     return Response.json({ ok: true, items });
   } catch (e) {
     const code = e instanceof Error ? e.message : "UNKNOWN";
-    const status = code === "NOT_FOUND" || code === "PACK_NOT_FOUND" ? 404 : 409;
+    const status = code === "NOT_FOUND" || code === "PACK_NOT_FOUND" ? 404 : code === "INVALID_ADDITIONAL_SESSIONS" ? 400 : 409;
     return errorResponse(changeMemberPackEnrollmentErrorMessage(code), status);
   }
 }

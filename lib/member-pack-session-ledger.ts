@@ -12,6 +12,34 @@ type PackRow = {
   courseQuotas: { courseSlug: string; sessionCount: number }[];
 };
 
+async function packMaxRemainingWithCredit(
+  tx: Prisma.TransactionClient,
+  memberId: string,
+  pack: PackRow,
+  courseSlug: string | null,
+): Promise<number | null> {
+  const creditRows = await tx.memberPackEnrollment.findMany({
+    where: {
+      memberId,
+      packId: pack.id,
+      status: { in: ["ACTIVE", "PENDING_START"] },
+      OR: [{ additionalSessionsCredit: { gt: 0 } }, { categoryReassignedAt: { not: null } }],
+    },
+    select: { additionalSessionsCredit: true },
+  });
+  const extraCredit = creditRows.reduce((sum, row) => sum + row.additionalSessionsCredit, 0);
+
+  if (pack.courseQuotas.length > 0) {
+    const quota = pack.courseQuotas.find((q) => q.courseSlug === courseSlug);
+    if (!quota) return null;
+    const isFirstQuota = pack.courseQuotas[0]?.courseSlug === courseSlug;
+    return quota.sessionCount + (isFirstQuota ? extraCredit : 0);
+  }
+
+  if (pack.sessionCount == null) return null;
+  return pack.sessionCount + extraCredit;
+}
+
 export async function debitMemberPackSession(
   tx: Prisma.TransactionClient,
   params: {
@@ -53,9 +81,12 @@ export async function creditMemberPackSession(
   const isMixed = params.pack.courseQuotas.length > 0;
   const targetCourseSlug = isMixed ? params.courseSlug : null;
 
-  const maxRemaining = isMixed
-    ? (params.pack.courseQuotas.find((q) => q.courseSlug === params.courseSlug)?.sessionCount ?? null)
-    : params.pack.sessionCount;
+  const maxRemaining = await packMaxRemainingWithCredit(
+    tx,
+    params.memberId,
+    params.pack,
+    targetCourseSlug,
+  );
 
   const updated = await tx.memberPackBalance.updateMany({
     where: {

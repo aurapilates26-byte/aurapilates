@@ -13,6 +13,7 @@ import {
   syncPublishedDeleteToDraft,
   syncPublishedUpdateToDraft,
 } from "@/lib/admin/planning-draft-sync";
+import { suppressDraftMirrorForPublishedSource } from "@/lib/admin/planning-draft-mirror-suppression";
 import { effectivePlanningCapacity } from "@/lib/planning-session-slot";
 
 const db = new PrismaClient();
@@ -133,6 +134,9 @@ export async function DELETE(_request: Request, { params }: Params) {
   if (!existing) return errorResponse("Créneau introuvable", 404);
 
   try {
+    if (existing.isDraft && existing.draftSourceId) {
+      await suppressDraftMirrorForPublishedSource(existing.draftSourceId);
+    }
     await db.planning.delete({ where: { id } });
     if (!existing.isDraft) {
       await syncPublishedDeleteToDraft(id);

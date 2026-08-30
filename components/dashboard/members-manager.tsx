@@ -7,6 +7,7 @@ import { Button, Checkbox, ConfirmDialog, Input, SelectMenu } from "@/components
 import { MemberDepositCompleteDialog } from "@/components/dashboard/member-deposit-complete-dialog";
 import {
   MEMBER_PAYMENT_STATUS_LABELS,
+  memberPaymentRemainingBadgeLabel,
   type MemberPaymentStatus,
 } from "@/lib/admin/member-payment-status";
 import { PaymentMethodBadge } from "@/components/dashboard/payment-method-badge";
@@ -16,6 +17,15 @@ import {
   type PackPaymentMethodValue,
 } from "@/lib/pack-payment-method";
 import { ListPageSummary, ListPagination } from "@/components/dashboard/list-pagination";
+import { MemberPackStateCards } from "@/components/dashboard/member-pack-state-cards";
+import {
+  MEMBER_PRIMARY_PACK_KIND_LABELS,
+  memberPrimaryPackBadgeClass,
+  type MemberPackStateFilter,
+  type MemberPrimaryPackKind,
+  type MemberPrimaryPackStateCounts,
+  emptyMemberPrimaryPackStateCounts,
+} from "@/lib/member-primary-pack-state";
 import {
   formatPackSelectOptionLabel,
   sortPacksBySessionAsc,
@@ -66,6 +76,30 @@ function formatMemberCreatedAt(iso: string): string {
     month: "2-digit",
     year: "numeric",
   });
+}
+
+function MemberPackCell({
+  memberId,
+  packName,
+  packStates,
+}: {
+  memberId: string;
+  packName: string | null | undefined;
+  packStates: Record<string, MemberPrimaryPackKind>;
+}) {
+  const kind = packStates[memberId] ?? "none";
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <span>{packName ?? "—"}</span>
+      {kind !== "none" ? (
+        <span
+          className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${memberPrimaryPackBadgeClass(kind)}`}
+        >
+          {MEMBER_PRIMARY_PACK_KIND_LABELS[kind]}
+        </span>
+      ) : null}
+    </div>
+  );
 }
 
 const memberDetailLinkClass =
@@ -276,9 +310,14 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
   const initialQrPublicIdRef = useRef("");
 
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"ALL" | "ACTIVE" | "INACTIVE">("ALL");
+  const [statusFilter, setStatusFilter] = useState<"ALL" | "ACTIVE" | "INACTIVE" | "PROSPECT">("ALL");
   const [packCategoryFilter, setPackCategoryFilter] = useState("");
   const [packFilterId, setPackFilterId] = useState<string>("ALL");
+  const [packStateFilter, setPackStateFilter] = useState<MemberPackStateFilter>("ALL");
+  const [packStates, setPackStates] = useState<Record<string, MemberPrimaryPackKind>>({});
+  const [packStateCounts, setPackStateCounts] = useState<MemberPrimaryPackStateCounts>(
+    emptyMemberPrimaryPackStateCounts,
+  );
   const [packs, setPacks] = useState<PackItem[]>([]);
 
   const [qrId, setQrId] = useState("");
@@ -344,12 +383,17 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
         if (paymentStatusFilter !== "ALL" && (m.paymentStatus ?? "PAID") !== paymentStatusFilter) {
           return false;
         }
+        if (packStateFilter !== "ALL") {
+          const kind = packStates[m.id] ?? "none";
+          if (kind !== packStateFilter) return false;
+        }
         if (statusFilter === "ALL") return true;
+        if (statusFilter === "PROSPECT") return Boolean(m.isProspectTrial);
         if (statusFilter === "ACTIVE") return m.isActive;
         return !m.isActive;
       }),
     );
-  }, [items, search, statusFilter, packFilterId, packCategoryFilter, packs, paymentStatusFilter]);
+  }, [items, search, statusFilter, packFilterId, packCategoryFilter, packs, paymentStatusFilter, packStateFilter, packStates]);
 
   const visibleItems = useMemo(() => {
     const start = (page - 1) * MEMBERS_PAGE_SIZE;
@@ -377,6 +421,21 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     return "Identifiant introuvable";
   }, [qrStatus, isFetchingQrKey, editingMemberId, qrAssignedMemberId, qrId]);
 
+  const loadPackStates = async () => {
+    try {
+      const response = await fetch("/api/admin/members/pack-states", { cache: "no-store" });
+      if (!response.ok) return;
+      const data = (await response.json()) as {
+        byMemberId?: Record<string, MemberPrimaryPackKind>;
+        counts?: MemberPrimaryPackStateCounts;
+      };
+      setPackStates(data.byMemberId ?? {});
+      setPackStateCounts(data.counts ?? emptyMemberPrimaryPackStateCounts());
+    } catch {
+      // ignore pack state refresh errors
+    }
+  };
+
   const loadMembers = async () => {
     setIsLoading(true);
     setError(null);
@@ -388,7 +447,10 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
         status: "ALL",
       });
 
-      const response = await fetch(`/api/admin/members?${params.toString()}`, { cache: "no-store" });
+      const [response] = await Promise.all([
+        fetch(`/api/admin/members?${params.toString()}`, { cache: "no-store" }),
+        loadPackStates(),
+      ]);
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(data?.error ?? "Impossible de charger les adhérentes.");
@@ -499,7 +561,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
 
   useEffect(() => {
     setPage(1);
-  }, [search, packFilterId, statusFilter, packCategoryFilter, paymentStatusFilter]);
+  }, [search, packFilterId, statusFilter, packCategoryFilter, paymentStatusFilter, packStateFilter]);
 
   useEffect(() => {
     if (page > meta.totalPages) {
@@ -960,98 +1022,90 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
       ) : (
         <div className="rounded-2xl border border-brand-medium/20 bg-white">
           <div className="border-b border-brand-medium/20 px-5 py-4">
-            <div className="flex flex-col gap-4">
-              <div className="flex w-full flex-col gap-3 md:flex-row md:items-end md:gap-4">
-                <div className="shrink-0">
-                  <p className="text-base font-semibold text-brand-dark">
-                    {paymentStatusFilter === "ADVANCE" ? "Avances en attente" : "Liste des adhérentes"}
-                  </p>
-                  <p className="mt-1 text-xs text-brand-dark/60">
-                    {search.trim() ||
-                    statusFilter !== "ALL" ||
-                    paymentStatusFilter !== "ALL" ||
-                    packCategoryFilter.trim() ||
-                    packFilterId !== "ALL"
-                      ? `${filteredItems.length} résultat(s) sur ${items.length} adhérente(s)`
-                      : `${items.length} adhérente(s) au total`}
-                  </p>
-                </div>
-
-                <div className="grid min-w-0 w-full grid-cols-1 gap-2 sm:grid-cols-2 md:flex md:min-w-0 md:flex-1 md:items-end md:gap-2">
-                  <div className="min-w-0 md:min-w-[10rem] md:flex-1">
-                    <Input
-                      id="members-search"
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                      placeholder="Nom, téléphone..."
-                      className="mt-0 py-2.5"
-                    />
-                  </div>
-                  <SelectMenu
-                    id="members-payment-status"
-                    value={paymentStatusFilter}
-                    onChange={(value) =>
-                      onPaymentStatusFilterChange?.((value as "ALL" | MemberPaymentStatus) || "ALL")
-                    }
-                    className="md:w-[8.5rem]"
-                    options={[
-                      { value: "ALL", label: "Tous paiements" },
-                      { value: "PAID", label: MEMBER_PAYMENT_STATUS_LABELS.PAID },
-                      { value: "ADVANCE", label: MEMBER_PAYMENT_STATUS_LABELS.ADVANCE },
-                      { value: "CREDIT", label: MEMBER_PAYMENT_STATUS_LABELS.CREDIT },
-                    ]}
-                  />
-                  <SelectMenu
-                    id="members-status"
-                    value={statusFilter}
-                    onChange={(value) => setStatusFilter(value)}
-                    className="md:w-[7.5rem]"
-                    options={[
-                      { value: "ALL", label: "Tous" },
-                      { value: "ACTIVE", label: "Actives" },
-                      { value: "INACTIVE", label: "Inactives" },
-                    ]}
-                  />
-                  <SelectMenu
-                    id="members-pack-category"
-                    value={packCategoryFilter}
-                    onChange={handlePackCategoryFilterChange}
-                    className="md:w-[10.5rem]"
-                    options={[
-                      { value: "", label: "Toutes catégories" },
-                      ...PACK_CATEGORY_OPTIONS.map((opt) => ({ value: opt.value, label: opt.label })),
-                    ]}
-                  />
-                  <SelectMenu
-                    id="members-pack"
-                    value={packFilterId}
-                    onChange={(value) => setPackFilterId(value)}
-                    className="md:w-[11rem]"
-                    options={[
-                      {
-                        value: "ALL",
-                        label: packCategoryFilter.trim() ? "Tous (catégorie)" : "Tous les packs",
-                      },
-                      ...packFilterOptions.map((pack) => ({ value: pack.id, label: pack.name })),
-                    ]}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSearch("");
-                      setStatusFilter("ALL");
-                      onPaymentStatusFilterChange?.("ALL");
-                      setPackCategoryFilter("");
-                      setPackFilterId("ALL");
-                    }}
-                    aria-label="Réinitialiser les filtres"
-                    title="Réinitialiser"
-                    className="flex h-[42px] w-[42px] items-center justify-center rounded-xl border border-brand-medium/30 bg-white text-lg font-semibold text-brand-dark/70 transition hover:bg-zinc-50 hover:text-brand-dark"
-                  >
-                    ×
-                  </button>
-                </div>
+            <MemberPackStateCards
+              counts={packStateCounts}
+              value={packStateFilter}
+              onChange={setPackStateFilter}
+            />
+          </div>
+          <div className="border-b border-brand-medium/20 px-5 py-4">
+            <div className="grid min-w-0 w-full grid-cols-1 gap-2 sm:grid-cols-2 md:flex md:min-w-0 md:flex-wrap md:items-end md:gap-2">
+              <div className="min-w-0 md:min-w-[10rem] md:flex-1">
+                <Input
+                  id="members-search"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Nom, téléphone..."
+                  className="mt-0 py-2.5"
+                />
               </div>
+              <SelectMenu
+                id="members-payment-status"
+                value={paymentStatusFilter}
+                onChange={(value) =>
+                  onPaymentStatusFilterChange?.((value as "ALL" | MemberPaymentStatus) || "ALL")
+                }
+                className="md:w-[8.5rem]"
+                options={[
+                  { value: "ALL", label: "Tous paiements" },
+                  { value: "PAID", label: MEMBER_PAYMENT_STATUS_LABELS.PAID },
+                  { value: "ADVANCE", label: MEMBER_PAYMENT_STATUS_LABELS.ADVANCE },
+                  { value: "CREDIT", label: MEMBER_PAYMENT_STATUS_LABELS.CREDIT },
+                ]}
+              />
+              <SelectMenu
+                id="members-status"
+                value={statusFilter}
+                onChange={(value) =>
+                  setStatusFilter((value as "ALL" | "ACTIVE" | "INACTIVE" | "PROSPECT") || "ALL")
+                }
+                className="md:w-[7.5rem]"
+                options={[
+                  { value: "ALL", label: "Tous" },
+                  { value: "ACTIVE", label: "Actives" },
+                  { value: "INACTIVE", label: "Inactives" },
+                  { value: "PROSPECT", label: "Prospect" },
+                ]}
+              />
+              <SelectMenu
+                id="members-pack-category"
+                value={packCategoryFilter}
+                onChange={handlePackCategoryFilterChange}
+                className="md:w-[10.5rem]"
+                options={[
+                  { value: "", label: "Toutes catégories" },
+                  ...PACK_CATEGORY_OPTIONS.map((opt) => ({ value: opt.value, label: opt.label })),
+                ]}
+              />
+              <SelectMenu
+                id="members-pack"
+                value={packFilterId}
+                onChange={(value) => setPackFilterId(value)}
+                className="md:w-[11rem]"
+                options={[
+                  {
+                    value: "ALL",
+                    label: packCategoryFilter.trim() ? "Tous (catégorie)" : "Tous les packs",
+                  },
+                  ...packFilterOptions.map((pack) => ({ value: pack.id, label: pack.name })),
+                ]}
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  setSearch("");
+                  setStatusFilter("ALL");
+                  onPaymentStatusFilterChange?.("ALL");
+                  setPackCategoryFilter("");
+                  setPackFilterId("ALL");
+                  setPackStateFilter("ALL");
+                }}
+                aria-label="Réinitialiser les filtres"
+                title="Réinitialiser"
+                className="flex h-[42px] w-[42px] items-center justify-center rounded-xl border border-brand-medium/30 bg-white text-lg font-semibold text-brand-dark/70 transition hover:bg-zinc-50 hover:text-brand-dark"
+              >
+                ×
+              </button>
             </div>
           </div>
           {visibleItems.length === 0 ? (
@@ -1107,7 +1161,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                             </span>
                             {(m.paymentStatus ?? "PAID") !== "PAID" ? (
                               <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-900">
-                                {MEMBER_PAYMENT_STATUS_LABELS[m.paymentStatus ?? "ADVANCE"]}
+                                {memberPaymentRemainingBadgeLabel(m.paymentStatus ?? "ADVANCE")}
                                 {m.remainingDinars != null ? ` · ${m.remainingDinars} DT` : ""}
                               </span>
                             ) : null}
@@ -1115,7 +1169,9 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                         )}
                       </div>
                     </div>
-                    <p className="text-xs text-brand-dark/75">Pack : {m.pack?.name ?? "—"}</p>
+                    <div className="text-xs text-brand-dark/75">
+                      <MemberPackCell memberId={m.id} packName={m.pack?.name} packStates={packStates} />
+                    </div>
                     {paymentStatusFilter === "ADVANCE" ? (
                       <>
                         <div className="flex flex-col gap-2 text-xs text-brand-dark/75 sm:flex-row sm:items-start sm:justify-between">
@@ -1125,7 +1181,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                             align="start"
                           />
                           <p className="sm:text-right">
-                            Solde :{" "}
+                            Reste :{" "}
                             <span className="font-semibold text-brand-dark">{m.remainingDinars ?? 0} DT</span>
                           </p>
                         </div>
@@ -1171,7 +1227,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                           <th className="px-4 py-3 text-center">Pack</th>
                           <th className="px-4 py-3 text-center">Progression</th>
                           <th className="px-4 py-3 text-center">Acompte</th>
-                          <th className="px-4 py-3 text-center">Solde</th>
+                          <th className="px-4 py-3 text-center">Reste</th>
                           <th className="px-4 py-3 text-center">Téléphone</th>
                           <th className="px-4 py-3 text-center">Date</th>
                         </>
@@ -1205,7 +1261,9 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                         </td>
                         {paymentStatusFilter === "ADVANCE" ? (
                           <>
-                            <td className="px-4 py-4 text-center text-brand-dark/80">{m.pack?.name ?? "—"}</td>
+                            <td className="px-4 py-4 text-center text-brand-dark/80">
+                              <MemberPackCell memberId={m.id} packName={m.pack?.name} packStates={packStates} />
+                            </td>
                             <td className="px-4 py-4">
                               <div className="mx-auto w-28">
                                 <DepositProgressBar
@@ -1250,7 +1308,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                                     </span>
                                     {(m.paymentStatus ?? "PAID") !== "PAID" ? (
                                       <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-900">
-                                        {MEMBER_PAYMENT_STATUS_LABELS[m.paymentStatus ?? "ADVANCE"]}
+                                        {memberPaymentRemainingBadgeLabel(m.paymentStatus ?? "ADVANCE")}
                                         {m.remainingDinars != null ? ` · ${m.remainingDinars} DT` : ""}
                                       </span>
                                     ) : null}
@@ -1258,7 +1316,9 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                                 )}
                               </div>
                             </td>
-                            <td className="px-4 py-4 text-center text-brand-dark/80">{m.pack?.name ?? "—"}</td>
+                            <td className="px-4 py-4 text-center text-brand-dark/80">
+                              <MemberPackCell memberId={m.id} packName={m.pack?.name} packStates={packStates} />
+                            </td>
                             <td className="px-4 py-4 text-center tabular-nums text-brand-dark/80">
                               {formatMemberCreatedAt(m.createdAt)}
                             </td>

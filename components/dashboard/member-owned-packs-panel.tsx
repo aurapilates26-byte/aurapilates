@@ -2,10 +2,13 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { PaymentMethodBadge } from "@/components/dashboard/payment-method-badge";
+import { useToast } from "@/components/ui/toast-provider";
 import type { MemberOwnedPackDto } from "@/lib/admin/member-owned-packs";
 import { formatPackPriceDt } from "@/lib/public-pack-display";
+import { packCategoryMenuLabel } from "@/lib/pack-categories";
 import {
   EMPTY_MEMBER_OWNED_PACKS,
+  dispatchMemberOwnedPacksChanged,
   subscribeMemberOwnedPacksChanged,
   useMemberOwnedPacksStore,
 } from "@/store/admin/member-owned-packs-store";
@@ -29,7 +32,7 @@ function formatPackSessionsValue(count: number | null): string {
   return String(count);
 }
 
-type PackBadgeKind = "consuming" | "pending" | "finished" | "expired";
+type PackBadgeKind = "consuming" | "prolonged" | "pending" | "finished" | "expired";
 
 function isPackDateExpired(pack: MemberOwnedPackDto): boolean {
   if (!pack.packExpiresAt) return false;
@@ -41,28 +44,35 @@ function isPackDateExpired(pack: MemberOwnedPackDto): boolean {
   return expiresDay.getTime() < todayStart.getTime();
 }
 
-/** Expiré · Terminé · En cours (démarré) · En attente (pas encore démarré, FIFO). */
+/** Expiré · Terminé · Prolongé · En cours · En attente. */
 function getPackBadgeKind(pack: MemberOwnedPackDto): PackBadgeKind {
   const hasRemaining =
     pack.remainingSessions > 0 ||
     (pack.totalSessions != null && pack.consumedSessions < pack.totalSessions);
 
+  if (pack.totalSessions != null && pack.remainingSessions <= 0) return "finished";
+  if (pack.consumedSessions > 0 && pack.remainingSessions <= 0) return "finished";
+
   if (hasRemaining && pack.packStartedAt && isPackDateExpired(pack)) {
     return "expired";
   }
 
+  if (hasRemaining && pack.prolongedAt) return "prolonged";
+
   if (hasRemaining && !pack.packStartedAt) return "pending";
+
   if (hasRemaining) return "consuming";
 
-  if (pack.totalSessions != null && pack.remainingSessions <= 0) return "finished";
-  if (pack.consumedSessions > 0 && pack.remainingSessions <= 0) return "finished";
   if (pack.status === "expired" || isPackDateExpired(pack)) return "expired";
   return "finished";
 }
 
 function packBadgeClass(kind: PackBadgeKind): string {
   if (kind === "consuming") {
-    return "border-indigo-200 bg-indigo-50 text-indigo-900";
+    return "border-emerald-200 bg-emerald-50 text-emerald-900";
+  }
+  if (kind === "prolonged") {
+    return "border-amber-200 bg-amber-50 text-amber-900";
   }
   if (kind === "pending") {
     return "border-amber-200 bg-amber-50 text-amber-900";
@@ -75,15 +85,42 @@ function packBadgeClass(kind: PackBadgeKind): string {
 
 function packBadgeLabel(kind: PackBadgeKind): string {
   if (kind === "consuming") return "En cours";
+  if (kind === "prolonged") return "Prolongé";
   if (kind === "pending") return "En attente";
   if (kind === "finished") return "Terminé";
   return "Expiré";
 }
 
-function InfoField({ label, children }: { label: string; children: ReactNode }) {
+function isPackManuallyModified(pack: MemberOwnedPackDto): boolean {
+  return pack.categoryReassignedAt != null || (pack.additionalSessionsCredit ?? 0) > 0;
+}
+
+function PackModifiedBadge() {
+  return (
+    <span
+      className="inline-flex rounded border border-indigo-200/80 bg-indigo-50 px-1 py-px text-[9px] font-medium leading-none text-indigo-700"
+      title="Pack modifié manuellement (catégorie ou séances supplémentaires)"
+    >
+      modifié
+    </span>
+  );
+}
+
+function InfoField({
+  label,
+  labelAddon,
+  children,
+}: {
+  label: string;
+  labelAddon?: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <div className="rounded-xl border border-brand-medium/15 bg-white/80 px-3 py-3">
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-dark/50">{label}</p>
+      <p className="flex flex-wrap items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-brand-dark/50">
+        <span>{label}</span>
+        {labelAddon}
+      </p>
       <div className="mt-1.5 text-sm font-medium text-brand-dark">{children}</div>
     </div>
   );
@@ -95,6 +132,7 @@ type MemberOwnedPacksPanelProps = {
 };
 
 export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwnedPacksPanelProps) {
+  const { toast } = useToast();
   const items = useMemberOwnedPacksStore(
     useCallback((s) => s.byMemberId[memberId] ?? EMPTY_MEMBER_OWNED_PACKS, [memberId]),
   );
@@ -104,6 +142,38 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
   const revision = useMemberOwnedPacksStore((s) => s.revision);
   const [openEnrollmentIds, setOpenEnrollmentIds] = useState<Set<string>>(() => new Set());
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  const [cancellingEnrollmentId, setCancellingEnrollmentId] = useState<string | null>(null);
+
+  const handleCancelProlongation = useCallback(
+    async (enrollmentId: string) => {
+      setCancellingEnrollmentId(enrollmentId);
+      try {
+        const res = await fetch(
+          `/api/admin/members/${encodeURIComponent(memberId)}/owned-packs/${encodeURIComponent(enrollmentId)}/prolong/cancel`,
+          { method: "POST" },
+        );
+        const data = (await res.json().catch(() => null)) as { error?: string } | null;
+        if (!res.ok) throw new Error(data?.error ?? "Annulation impossible.");
+
+        toast({
+          variant: "success",
+          title: "Prolongation annulée",
+          description: "La date d'expiration d'origine a été rétablie.",
+        });
+        dispatchMemberOwnedPacksChanged({ memberId });
+        void loadPacks(memberId);
+      } catch (e) {
+        toast({
+          variant: "error",
+          title: "Erreur",
+          description: e instanceof Error ? e.message : "Annulation impossible.",
+        });
+      } finally {
+        setCancellingEnrollmentId(null);
+      }
+    },
+    [loadPacks, memberId, toast],
+  );
 
   const togglePackOpen = (enrollmentId: string) => {
     setOpenEnrollmentIds((prev) => {
@@ -126,7 +196,9 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
             if (kept.size === prev.size && [...kept].every((id) => prev.has(id))) return prev;
             return kept;
           }
-          const firstCurrent = next.find((p) => getPackBadgeKind(p) === "consuming");
+          const firstCurrent = next.find(
+            (p) => getPackBadgeKind(p) === "consuming" || getPackBadgeKind(p) === "prolonged",
+          );
           const nextOpen = firstCurrent ? new Set([firstCurrent.enrollmentId]) : new Set<string>();
           if (nextOpen.size === prev.size && [...nextOpen].every((id) => prev.has(id))) return prev;
           return nextOpen;
@@ -156,7 +228,9 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
         if (kept.size === prev.size && [...kept].every((id) => prev.has(id))) return prev;
         return kept;
       }
-      const firstCurrent = items.find((p) => getPackBadgeKind(p) === "consuming");
+      const firstCurrent = items.find(
+        (p) => getPackBadgeKind(p) === "consuming" || getPackBadgeKind(p) === "prolonged",
+      );
       const nextOpen = firstCurrent ? new Set([firstCurrent.enrollmentId]) : new Set<string>();
       if (nextOpen.size === prev.size && [...nextOpen].every((id) => prev.has(id))) return prev;
       return nextOpen;
@@ -183,7 +257,7 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
   const currentItems = items
     .filter((p) => {
       const kind = getPackBadgeKind(p);
-      return kind === "consuming" || kind === "pending";
+      return kind === "consuming" || kind === "prolonged" || kind === "pending";
     })
     .sort((a, b) => new Date(a.purchasedAt).getTime() - new Date(b.purchasedAt).getTime());
   const historyItems = items
@@ -196,6 +270,7 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
   function renderPackCard(pack: MemberOwnedPackDto) {
     const isOpen = openEnrollmentIds.has(pack.enrollmentId);
     const badgeKind = getPackBadgeKind(pack);
+    const isModified = isPackManuallyModified(pack);
     const sessionsTotal =
       pack.totalSessions ??
       (pack.courseQuotas.length > 0
@@ -219,6 +294,11 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <p className="text-base font-semibold text-brand-dark">{pack.packName}</p>
+                {pack.category ? (
+                  <span className="inline-flex rounded-full border border-brand-medium/30 bg-white px-2 py-0.5 text-[11px] font-semibold text-brand-dark/80">
+                    {packCategoryMenuLabel(pack.category)}
+                  </span>
+                ) : null}
                 <span
                   className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${packBadgeClass(badgeKind)}`}
                 >
@@ -249,7 +329,13 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
               {pack.packExpiresAt ? formatDateFr(pack.packExpiresAt) : "—"}
             </InfoField>
             <InfoField label="Durée">{formatPackDurationLabel(pack.durationDays)}</InfoField>
-            <InfoField label="Séances">
+            {pack.category ? (
+              <InfoField label="Catégorie">{packCategoryMenuLabel(pack.category)}</InfoField>
+            ) : null}
+            <InfoField
+              label="Séances"
+              labelAddon={isModified ? <PackModifiedBadge /> : undefined}
+            >
               {pack.consumedSessions}
               {sessionsTotal != null ? ` / ${formatPackSessionsValue(sessionsTotal)}` : ""}
             </InfoField>
@@ -267,19 +353,45 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
               ))}
             </div>
           ) : null}
+
+          {badgeKind === "prolonged" ? (
+            <div className="flex justify-end border-t border-brand-medium/10 pt-3">
+              <button
+                type="button"
+                disabled={cancellingEnrollmentId === pack.enrollmentId}
+                onClick={() => void handleCancelProlongation(pack.enrollmentId)}
+                className="text-sm font-medium text-red-700 hover:text-red-800 disabled:opacity-50"
+              >
+                {cancellingEnrollmentId === pack.enrollmentId
+                  ? "Annulation…"
+                  : "Annuler la prolongation"}
+              </button>
+            </div>
+          ) : null}
         </div>
       </details>
     );
   }
 
+  const prolongedItems = currentItems.filter((p) => getPackBadgeKind(p) === "prolonged");
+  const activeItems = currentItems.filter((p) => getPackBadgeKind(p) === "consuming");
+  const pendingItems = currentItems.filter((p) => getPackBadgeKind(p) === "pending");
+
+  function renderPackSection(title: string, sectionItems: MemberOwnedPackDto[]) {
+    if (sectionItems.length === 0) return null;
+    return (
+      <div className="space-y-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-brand-dark/50">{title}</p>
+        <div className="space-y-2">{sectionItems.map(renderPackCard)}</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
-      {currentItems.length > 0 ? (
-        <div className="space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-brand-dark/50">En cours</p>
-          <div className="space-y-2">{currentItems.map(renderPackCard)}</div>
-        </div>
-      ) : null}
+      {renderPackSection("Prolongé", prolongedItems)}
+      {renderPackSection("En cours", activeItems)}
+      {renderPackSection("En attente", pendingItems)}
       {historyItems.length > 0 ? (
         <div className="space-y-2">
           <p className="text-xs font-semibold uppercase tracking-wide text-brand-dark/50">Historique</p>

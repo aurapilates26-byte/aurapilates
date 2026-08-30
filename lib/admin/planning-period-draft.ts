@@ -10,6 +10,7 @@ import {
 import { formatYmdLocal, formatYmdPrismaDate, parseYmdLocal, parseYmdToPrismaDate } from "@/lib/calendar-day";
 import { prisma } from "@/lib/prisma";
 import { getStudioBookingRules } from "@/lib/studio-booking-rules-server";
+import { clearAllDraftMirrorSuppressions } from "@/lib/admin/planning-draft-mirror-suppression";
 import { enrichPlanningPeriodConfig } from "@/lib/planning-period-status";
 import type {
   PlanningBookingWindow,
@@ -187,6 +188,7 @@ export async function clearDraftPeriodSchedule(): Promise<void> {
     }),
     prisma.planning.deleteMany({ where: { isDraft: true } }),
   ]);
+  await clearAllDraftMirrorSuppressions();
 }
 
 export async function prepareDraftFromSuggestion(

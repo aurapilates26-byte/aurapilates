@@ -28,6 +28,7 @@ type PlanningStoreState = {
     url: string,
     options?: FetchGridOptions,
   ) => Promise<AdminPlanningItem[]>;
+  removeGridItem: (cacheKey: string, itemId: string) => void;
   invalidateGridCache: () => void;
 };
 
@@ -97,6 +98,18 @@ export const usePlanningStore = create<PlanningStoreState>((set, get) => ({
       throw e;
     }
   },
+
+  removeGridItem: (cacheKey, itemId) =>
+    set((state) => {
+      const current = state.gridCache[cacheKey];
+      if (!current) return state;
+      return {
+        gridCache: {
+          ...state.gridCache,
+          [cacheKey]: current.filter((item) => item.id !== itemId),
+        },
+      };
+    }),
 
   invalidateGridCache: () =>
     set({

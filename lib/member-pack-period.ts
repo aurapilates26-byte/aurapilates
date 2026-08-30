@@ -20,11 +20,14 @@ export function isSessionDateWithinPackPeriod(
   sessionDateLocal: Date,
   packStartedAt: Date | null | undefined,
   durationDays: string | null | undefined,
+  packExpiresAt?: Date | null,
 ): boolean {
   const start = packStartDateLocal(packStartedAt);
   if (!start) return true;
   if (sessionDateLocal.getTime() < start.getTime()) return false;
-  const expiresAt = packExpiresAtLocal(packStartedAt, durationDays);
+  const expiresAt = packExpiresAt
+    ? packStartDateLocal(packExpiresAt)
+    : packExpiresAtLocal(packStartedAt, durationDays);
   if (expiresAt && sessionDateLocal.getTime() > expiresAt.getTime()) return false;
   return true;
 }
