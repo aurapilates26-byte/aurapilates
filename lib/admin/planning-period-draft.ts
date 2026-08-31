@@ -204,8 +204,11 @@ export type AdminPlanningPeriodWindow = import("@/types/admin/planning").AdminPl
 
 export async function getAdminPlanningPeriodWindow(): Promise<AdminPlanningPeriodWindow> {
   const { maybeRollForwardExpiredPublishedPeriod } = await import("@/lib/admin/planning-period-archive");
+  const { ensureDraftPeriodWithMirrors } = await import("@/lib/admin/planning-draft-sync");
   await maybeActivateScheduledDraft();
   await maybeRollForwardExpiredPublishedPeriod();
+  // Une seule synchro brouillon ici (pas à chaque GET /planning) pour éviter les doublons.
+  await ensureDraftPeriodWithMirrors();
 
   const row = await prisma.studioPlanningPeriod.findUnique({ where: { id: SINGLETON_ID } });
   if (!row) {

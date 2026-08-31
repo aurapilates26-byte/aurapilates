@@ -15,7 +15,6 @@ import { parseYmdToPrismaDate } from "@/lib/calendar-day";
 import { mapAdminPlanningItem } from "@/lib/admin/planning-map";
 import { adminPlanningPayloadSchema, planningLevelFromPayload } from "@/lib/admin/planning-payload-schema";
 import {
-  ensureDraftPeriodWithMirrors,
   syncPublishedCreateToDraft,
 } from "@/lib/admin/planning-draft-sync";
 import { effectivePlanningCapacity } from "@/lib/planning-session-slot";
@@ -92,12 +91,10 @@ export async function GET(request: Request) {
   let periodEnd: Date | null = null;
 
   if (scope === "published") {
-    await ensureDraftPeriodWithMirrors();
     const period = await getPlanningPeriodConfig();
     periodStart = parseYmdToPrismaDate(period.periodStartYmd);
     periodEnd = parseYmdToPrismaDate(period.periodEndYmd);
   } else if (scope === "draft") {
-    await ensureDraftPeriodWithMirrors();
     const window = await getAdminPlanningPeriodWindow();
     const draft = draftPeriodConfigOrNull(window.draft);
     if (!draft) {

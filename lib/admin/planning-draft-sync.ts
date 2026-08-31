@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { Planning, Prisma } from "@prisma/client";
+import { Prisma, type Planning } from "@prisma/client";
 import {
   mapArchiveRowsForCalendar,
   periodContainsYmd,
@@ -25,7 +25,7 @@ import {
   clearAllDraftMirrorSuppressions,
 } from "@/lib/admin/planning-draft-mirror-suppression";
 import { prisma } from "@/lib/prisma";
-import { proposeNextPlanningPeriod, proposePreviousPlanningPeriod } from "@/lib/planning-period-status";
+import { proposeNextPlanningPeriod } from "@/lib/planning-period-status";
 import type { PlanningPeriodConfig } from "@/types/admin/planning";
 
 const SINGLETON_ID = "singleton";
@@ -85,6 +85,43 @@ function mirrorDataFromSource(
     capacity: source.capacity,
     waitlistCapacity: source.waitlistCapacity,
   };
+}
+
+function isDraftSourceIdConflict(error: unknown): boolean {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === "P2002" &&
+    Array.isArray(error.meta?.target) &&
+    error.meta.target.includes("draftSourceId")
+  );
+}
+
+/** Retire un lien draftSourceId orphelin sur un créneau publié (ne touche pas aux données du cours). */
+async function clearStalePublishedMirrorLink(sourceId: string): Promise<void> {
+  await prisma.planning.updateMany({
+    where: { draftSourceId: sourceId, isDraft: false },
+    data: { draftSourceId: null },
+  });
+}
+
+/** Crée le miroir brouillon s'il manque, sans modifier les créneaux publiés. */
+async function createDraftMirrorIfMissing(source: Planning, draftAnchor: Date): Promise<void> {
+  const existingDraft = await prisma.planning.findFirst({
+    where: { draftSourceId: source.id, isDraft: true },
+    select: { id: true },
+  });
+  if (existingDraft) return;
+
+  await clearStalePublishedMirrorLink(source.id);
+
+  try {
+    await prisma.planning.create({
+      data: mirrorDataFromSource(source, draftAnchor),
+    });
+  } catch (error) {
+    if (isDraftSourceIdConflict(error)) return;
+    throw error;
+  }
 }
 
 function mirrorUpdateDataFromSource(
@@ -217,50 +254,21 @@ async function sourceSlotsInPeriod(period: PlanningPeriodConfig) {
   });
 }
 
-/**
- * Si la période publiée est vide mais la précédente a des créneaux,
- * copie la semaine précédente → période en cours (même logique que brouillon).
- */
-async function seedPublishedPeriodFromPreviousIfEmpty(
-  currentPeriod: PlanningPeriodConfig,
-): Promise<Planning[]> {
-  const existing = await sourceSlotsInPeriod(currentPeriod);
-  if (existing.length > 0) return existing;
-
-  const previous = proposePreviousPlanningPeriod(currentPeriod);
-  if (!previous) return [];
-
-  const previousSlots = await sourceSlotsInPeriod(previous);
-  if (previousSlots.length === 0) return [];
-
-  const created: Planning[] = [];
-  for (const slot of previousSlots) {
-    const targetAnchor = draftAnchorDateForSourceSlot(slot, previous, currentPeriod);
-    if (!targetAnchor) continue;
-    const row = await prisma.planning.create({
-      data: publishedCloneFromSource(slot, targetAnchor),
-    });
-    created.push(row);
-  }
-  return created;
-}
-
 /** Garantit la période brouillon (période suivante immédiate) + copies des créneaux en cours. */
-export async function ensureDraftPeriodWithMirrors(): Promise<void> {
+let draftMirrorSyncPromise: Promise<void> | null = null;
+
+async function runEnsureDraftPeriodWithMirrors(): Promise<void> {
   const { calendarCurrent, draft } = await getCalendarContext();
-  const sourceSlots = await seedPublishedPeriodFromPreviousIfEmpty(calendarCurrent.period);
+  // Uniquement miroir brouillon des créneaux publiés existants — jamais de copie dans la période en cours.
+  const sourceSlots = await sourceSlotsInPeriod(calendarCurrent.period);
   if (sourceSlots.length === 0) return;
 
   const sourceIds = sourceSlots.map((slot) => slot.id);
+  const eligibleSourceIds = sourceSlots
+    .filter((slot) => !slot.draftMirrorSuppressedAt)
+    .map((slot) => slot.id);
 
-  // Après publication du brouillon, d'anciens miroirs gardent draftSourceId alors qu'ils sont publiés.
-  // Ce lien unique empêche de recréer le brouillon suivant → on le retire sur les créneaux publiés.
-  if (sourceIds.length > 0) {
-    await prisma.planning.updateMany({
-      where: { isDraft: false, draftSourceId: { in: sourceIds } },
-      data: { draftSourceId: null },
-    });
-  }
+  if (eligibleSourceIds.length === 0) return;
 
   const existingMirrors = await prisma.planning.findMany({
     where: {
@@ -271,17 +279,25 @@ export async function ensureDraftPeriodWithMirrors(): Promise<void> {
   });
   const mirroredSourceIds = new Set(existingMirrors.map((row) => row.draftSourceId));
 
+  if (eligibleSourceIds.every((id) => mirroredSourceIds.has(id))) return;
+
   for (const slot of sourceSlots) {
     if (mirroredSourceIds.has(slot.id)) continue;
     if (slot.draftMirrorSuppressedAt) continue;
     const draftAnchor = draftAnchorDateForSourceSlot(slot, calendarCurrent.period, draft);
     if (!draftAnchor) continue;
-    await prisma.planning.upsert({
-      where: { draftSourceId: slot.id },
-      create: mirrorDataFromSource(slot, draftAnchor),
-      update: mirrorUpdateDataFromSource(slot, draftAnchor),
+    await createDraftMirrorIfMissing(slot, draftAnchor);
+  }
+}
+
+/** Synchro brouillon sérialisée (évite les doublons si plusieurs requêtes arrivent en parallèle). */
+export function ensureDraftPeriodWithMirrors(): Promise<void> {
+  if (!draftMirrorSyncPromise) {
+    draftMirrorSyncPromise = runEnsureDraftPeriodWithMirrors().finally(() => {
+      draftMirrorSyncPromise = null;
     });
   }
+  return draftMirrorSyncPromise;
 }
 
 function slotBelongsToPeriod(
@@ -299,11 +315,7 @@ export async function syncPublishedCreateToDraft(published: Planning): Promise<v
   const draftAnchor = draftAnchorDateForSourceSlot(published, calendarCurrent.period, draft);
   if (!draftAnchor) return;
 
-  await prisma.planning.upsert({
-    where: { draftSourceId: published.id },
-    create: mirrorDataFromSource(published, draftAnchor),
-    update: mirrorUpdateDataFromSource(published, draftAnchor),
-  });
+  await createDraftMirrorIfMissing(published, draftAnchor);
 }
 
 export async function syncPublishedUpdateToDraft(published: Planning): Promise<void> {
@@ -313,11 +325,22 @@ export async function syncPublishedUpdateToDraft(published: Planning): Promise<v
   const draftAnchor = draftAnchorDateForSourceSlot(published, calendarCurrent.period, draft);
   if (!draftAnchor) return;
 
-  await prisma.planning.upsert({
-    where: { draftSourceId: published.id },
-    create: mirrorDataFromSource(published, draftAnchor),
-    update: mirrorUpdateDataFromSource(published, draftAnchor),
+  await clearStalePublishedMirrorLink(published.id);
+
+  const existingDraft = await prisma.planning.findFirst({
+    where: { draftSourceId: published.id, isDraft: true },
+    select: { id: true },
   });
+
+  if (existingDraft) {
+    await prisma.planning.update({
+      where: { id: existingDraft.id },
+      data: mirrorUpdateDataFromSource(published, draftAnchor),
+    });
+    return;
+  }
+
+  await createDraftMirrorIfMissing(published, draftAnchor);
 }
 
 export async function syncPublishedDeleteToDraft(publishedId: string): Promise<void> {
