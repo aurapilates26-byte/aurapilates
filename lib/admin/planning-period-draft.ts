@@ -119,7 +119,7 @@ export async function publishDraftPeriod(row: StudioPlanningPeriod): Promise<voi
     }),
     prisma.planning.updateMany({
       where: { isDraft: true },
-      data: { isDraft: false, bookingWindow },
+      data: { isDraft: false, bookingWindow, draftSourceId: null },
     }),
     prisma.planning.updateMany({
       where: { isDraft: false },

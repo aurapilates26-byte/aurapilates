@@ -87,6 +87,31 @@ function mirrorDataFromSource(
   };
 }
 
+function mirrorUpdateDataFromSource(
+  source: Planning,
+  draftAnchorDate: Date,
+): Prisma.PlanningUpdateInput {
+  const dayOfWeek = prismaDayOfWeekFromLocalDate(
+    parseYmdLocal(formatYmdPrismaDate(draftAnchorDate)) ?? draftAnchorDate,
+  );
+
+  return {
+    courseSlug: source.courseSlug,
+    coach: source.coachId
+      ? { connect: { id: source.coachId } }
+      : { disconnect: true },
+    dayOfWeek,
+    anchorSessionYmd: draftAnchorDate,
+    level: source.level,
+    bookingWindow: source.bookingWindow,
+    startTime: source.startTime,
+    endTime: source.endTime,
+    durationMinutes: source.durationMinutes,
+    capacity: source.capacity,
+    waitlistCapacity: source.waitlistCapacity,
+  };
+}
+
 /** Copie publiée (sans lien draftSource) — pour peupler une période en cours vide. */
 function publishedCloneFromSource(
   source: Planning,
@@ -226,10 +251,21 @@ export async function ensureDraftPeriodWithMirrors(): Promise<void> {
   const sourceSlots = await seedPublishedPeriodFromPreviousIfEmpty(calendarCurrent.period);
   if (sourceSlots.length === 0) return;
 
+  const sourceIds = sourceSlots.map((slot) => slot.id);
+
+  // Après publication du brouillon, d'anciens miroirs gardent draftSourceId alors qu'ils sont publiés.
+  // Ce lien unique empêche de recréer le brouillon suivant → on le retire sur les créneaux publiés.
+  if (sourceIds.length > 0) {
+    await prisma.planning.updateMany({
+      where: { isDraft: false, draftSourceId: { in: sourceIds } },
+      data: { draftSourceId: null },
+    });
+  }
+
   const existingMirrors = await prisma.planning.findMany({
     where: {
       isDraft: true,
-      draftSourceId: { in: sourceSlots.map((slot) => slot.id) },
+      draftSourceId: { in: sourceIds },
     },
     select: { draftSourceId: true },
   });
@@ -240,8 +276,10 @@ export async function ensureDraftPeriodWithMirrors(): Promise<void> {
     if (slot.draftMirrorSuppressedAt) continue;
     const draftAnchor = draftAnchorDateForSourceSlot(slot, calendarCurrent.period, draft);
     if (!draftAnchor) continue;
-    await prisma.planning.create({
-      data: mirrorDataFromSource(slot, draftAnchor),
+    await prisma.planning.upsert({
+      where: { draftSourceId: slot.id },
+      create: mirrorDataFromSource(slot, draftAnchor),
+      update: mirrorUpdateDataFromSource(slot, draftAnchor),
     });
   }
 }
@@ -261,14 +299,10 @@ export async function syncPublishedCreateToDraft(published: Planning): Promise<v
   const draftAnchor = draftAnchorDateForSourceSlot(published, calendarCurrent.period, draft);
   if (!draftAnchor) return;
 
-  const existing = await prisma.planning.findFirst({
-    where: { isDraft: true, draftSourceId: published.id },
-    select: { id: true },
-  });
-  if (existing) return;
-
-  await prisma.planning.create({
-    data: mirrorDataFromSource(published, draftAnchor),
+  await prisma.planning.upsert({
+    where: { draftSourceId: published.id },
+    create: mirrorDataFromSource(published, draftAnchor),
+    update: mirrorUpdateDataFromSource(published, draftAnchor),
   });
 }
 
@@ -279,26 +313,10 @@ export async function syncPublishedUpdateToDraft(published: Planning): Promise<v
   const draftAnchor = draftAnchorDateForSourceSlot(published, calendarCurrent.period, draft);
   if (!draftAnchor) return;
 
-  const dayOfWeek = prismaDayOfWeekFromLocalDate(
-    parseYmdLocal(formatYmdPrismaDate(draftAnchor)) ?? draftAnchor,
-  );
-
   await prisma.planning.upsert({
     where: { draftSourceId: published.id },
     create: mirrorDataFromSource(published, draftAnchor),
-    update: {
-      courseSlug: published.courseSlug,
-      coachId: published.coachId,
-      dayOfWeek,
-      anchorSessionYmd: draftAnchor,
-      level: published.level,
-      bookingWindow: published.bookingWindow,
-      startTime: published.startTime,
-      endTime: published.endTime,
-      durationMinutes: published.durationMinutes,
-      capacity: published.capacity,
-      waitlistCapacity: published.waitlistCapacity,
-    },
+    update: mirrorUpdateDataFromSource(published, draftAnchor),
   });
 }
 
