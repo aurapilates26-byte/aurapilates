@@ -37,6 +37,7 @@ import {
 } from "@/lib/member-personal-discount";
 import type { PersonalDiscountType } from "@/types/admin/pack-payment";
 import { memberPrimaryPackBadgeClass } from "@/lib/member-primary-pack-state";
+import { selectBookablePackOptions } from "@/lib/bookable-pack-options";
 
 type SlotRow = {
   planningId: string;
@@ -925,7 +926,7 @@ export function MemberDetailClient({
         items: BookablePackOption[];
         emptyMessage?: string;
       };
-      const options = data.items ?? [];
+      const options = selectBookablePackOptions(data.items ?? []);
       if (options.length === 0) {
         throw new Error(
           data.emptyMessage ??

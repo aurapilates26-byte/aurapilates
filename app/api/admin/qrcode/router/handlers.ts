@@ -387,6 +387,47 @@ export async function getAdminQrKeyByPublicId(publicId: string) {
   });
 }
 
+/** Premier QR libre (page QR code) : non assigné adhérente/coach, hors archives. */
+export async function getNextAvailableAdminQrCode() {
+  const sessionResult = await requireAdminSession();
+  if ("error" in sessionResult) return sessionResult.error;
+
+  const rows = await db.qrCode.findMany({
+    where: {
+      assignedMemberId: null,
+      assignedCoachId: null,
+      status: { not: QrCodeStatus.ARCHIVED },
+    },
+    select: {
+      publicId: true,
+      qrKey: true,
+      name: true,
+      status: true,
+    },
+  });
+
+  if (rows.length === 0) {
+    return errorResponse("Aucun QR code disponible. Générez-en depuis la page QR code.", 404);
+  }
+
+  const sorted = [...rows].sort((a, b) => {
+    const statusRank = (status: QrCodeStatus) => (status === QrCodeStatus.ACTIVE ? 0 : 1);
+    const byStatus = statusRank(a.status) - statusRank(b.status);
+    if (byStatus !== 0) return byStatus;
+    return compareQrCodesBySequenceName(a, b);
+  });
+
+  const item = sorted[0]!;
+  return Response.json({
+    qrId: item.publicId,
+    qrKey: item.qrKey,
+    name: item.name,
+    status: item.status,
+    assignmentStatus: "UNASSIGNED" as const,
+    assignedMemberId: null,
+  });
+}
+
 export async function deleteAdminQrCodeByPublicId(publicId: string) {
   const sessionResult = await requireAdminSession();
   if ("error" in sessionResult) return sessionResult.error;

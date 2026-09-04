@@ -3,10 +3,7 @@ import "server-only";
 import type { MemberPackEnrollmentStatus, Prisma } from "@prisma/client";
 import { startOfLocalToday, formatYmdLocal, parseYmdToPrismaDate } from "@/lib/calendar-day";
 import {
-  allocateFifoPackConsumptions,
-  backfillEnrollmentStartFromFirstConsumption,
-  countEnrollmentConsumedSessionsByCourseInPeriod,
-  countEnrollmentConsumedSessionsInPeriod,
+  allocateConsumedSessionsAcrossMemberEnrollments,
   ensureMemberPackEnrollmentsBackfilled,
   findFirstEnrollmentConsumedSessionDate,
   getEnrollmentPaymentTotals,
@@ -20,6 +17,7 @@ import {
 import { addPackDurationToStartDate } from "@/lib/pack-duration";
 import type { PackPaymentMethodValue } from "@/lib/pack-payment-method";
 import { courseLabel } from "@/lib/course-labels";
+import { getEnrollmentPeriodBounds } from "@/lib/member-pack-enrollment-period";
 import { prisma } from "@/lib/prisma";
 
 export type MemberOwnedPackStatus = "active" | "expired" | "pending" | "replaced";
@@ -106,81 +104,8 @@ function mapEnrollmentStatusToDisplay(
   return "active";
 }
 
-function courseQuotaUsageLines(
-  pack: { courseQuotas: { courseSlug: string; sessionCount: number }[] },
-  consumedByCourse: Map<string, number>,
-): { courseLabel: string; consumed: number; remaining: number; total: number }[] {
-  return pack.courseQuotas.map((q) => {
-    const consumed = Math.min(q.sessionCount, Math.max(0, consumedByCourse.get(q.courseSlug) ?? 0));
-    return {
-      courseLabel: courseLabel(q.courseSlug),
-      consumed,
-      remaining: Math.max(0, q.sessionCount - consumed),
-      total: q.sessionCount,
-    };
-  });
-}
-
 function toPrismaDateLocal(d: Date): Date {
   return parseYmdToPrismaDate(formatYmdLocal(d))!;
-}
-
-type EnrollmentPeriodRow = {
-  id: string;
-  packId: string;
-  purchasedAt: Date;
-  closedAt: Date | null;
-  packStartedAt: Date | null;
-  status?: string;
-};
-
-/**
- * Bornes de consommation d'une inscription (FIFO par date d'achat).
- * - Fin : date d'achat du renouvellement suivant du même pack catalogue (pas un `packStartedAt`
- *   antérieur à cet achat — sinon le renouvellement « vole » les séances du pack précédent).
- * - Début : jamais avant `purchasedAt`. Pack pas encore démarré → borne = achat (évite d'absorber
- *   l'historique d'un autre pack après une modification admin).
- */
-function getEnrollmentPeriodBounds(
-  enrollment: EnrollmentPeriodRow,
-  enrollmentsAsc: EnrollmentPeriodRow[],
-): { periodStart: Date | null; periodEndExclusive: Date | null } {
-  const index = enrollmentsAsc.findIndex((row) => row.id === enrollment.id);
-  const purchased = toPrismaDateLocal(enrollment.purchasedAt);
-
-  let periodEndExclusive: Date | null = null;
-  for (let i = index + 1; i < enrollmentsAsc.length; i++) {
-    const next = enrollmentsAsc[i]!;
-    if (next.packId === enrollment.packId) {
-      // Frontière = achat du suivant (stable), pas un début d'usage éventuellement mal daté.
-      periodEndExclusive = toPrismaDateLocal(next.purchasedAt);
-      break;
-    }
-  }
-  if (periodEndExclusive == null && enrollment.closedAt) {
-    periodEndExclusive = toPrismaDateLocal(enrollment.closedAt);
-  }
-
-  let hasPreviousSamePack = false;
-  for (let i = index - 1; i >= 0; i--) {
-    if (enrollmentsAsc[i]!.packId === enrollment.packId) {
-      hasPreviousSamePack = true;
-      break;
-    }
-  }
-
-  let periodStart: Date | null = null;
-  if (hasPreviousSamePack || enrollment.status === "PENDING_START") {
-    // Renouvellement ou pack non démarré : borner à l'achat (évite d'absorber un autre historique).
-    periodStart = purchased;
-  } else if (enrollment.packStartedAt) {
-    const started = toPrismaDateLocal(enrollment.packStartedAt);
-    // Ne jamais compter avant la date d'achat (ex. packStartedAt hérité / erroné).
-    periodStart = started.getTime() >= purchased.getTime() ? started : purchased;
-  }
-  // sinon 1ᵉʳ pack ACTIVE sans début : pas de borne basse (historique legacy)
-
-  return { periodStart, periodEndExclusive };
 }
 
 /**
@@ -376,29 +301,11 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
       a.createdAt.getTime() - b.createdAt.getTime(),
   );
 
-  // Pré-calcul FIFO par pack catalogue (inscriptions du plus ancien au plus récent).
-  const fifoByEnrollmentId = new Map<
-    string,
-    Awaited<ReturnType<typeof allocateFifoPackConsumptions>> extends Map<string, infer V> ? V : never
-  >();
-  const packIds = [...new Set(enrollmentsAsc.map((e) => e.packId))];
-  for (const packId of packIds) {
-    const samePack = enrollmentsAsc.filter((e) => e.packId === packId);
-    if (samePack.length < 2) continue;
-    const pack = samePack[0]!.pack;
-    const allocations = await allocateFifoPackConsumptions({
-      memberId,
-      packId,
-      enrollmentsAsc: samePack,
-      courseQuotas: pack.courseQuotas,
-      sessionCount: pack.sessionCount,
-      category: pack.category,
-      countingMode: "display",
-    });
-    for (const [enrollmentId, alloc] of allocations) {
-      fifoByEnrollmentId.set(enrollmentId, alloc);
-    }
-  }
+  const consumptionByEnrollment = await allocateConsumedSessionsAcrossMemberEnrollments({
+    memberId,
+    enrollmentsAsc,
+    countingMode: "display",
+  });
 
   // Recalcule les soldes = somme des séances restantes sur les inscriptions ouvertes du même pack.
   await syncBalancesFromOpenEnrollments(memberId, enrollmentsAsc);
@@ -471,20 +378,11 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
     let remainingSessions: number;
     let courseQuotaRemaining: MemberOwnedPackDto["courseQuotaRemaining"] = [];
 
-    const fifoAlloc = fifoByEnrollmentId.get(enrollment.id);
+    const fifoAlloc = consumptionByEnrollment.get(enrollment.id);
 
     // Pack « 1 séance » : packStartedAt seul ne suffit pas (ex. présence puis remboursement).
-    if (totalSessions === 1 && pack.courseQuotas.length === 0 && packStartedAt && !fifoAlloc) {
-      const { periodStart, periodEndExclusive } = getEnrollmentPeriodBounds(enrollment, enrollmentsAsc);
-      const consumedRaw = await countEnrollmentConsumedSessionsInPeriod({
-        memberId,
-        packId: pack.id,
-        courseQuotas: [],
-        sessionCount: pack.sessionCount,
-        category: pack.category,
-        periodStart,
-        periodEndExclusive,
-      });
+    if (totalSessions === 1 && pack.courseQuotas.length === 0 && packStartedAt && fifoAlloc) {
+      const consumedRaw = fifoAlloc.consumedTotal;
       if (consumedRaw > 0) {
         consumedSessions = 1;
         remainingSessions = 0;
@@ -541,95 +439,8 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
         enrollmentStatus = "ACTIVE";
       }
     } else {
-      const { periodStart, periodEndExclusive } = getEnrollmentPeriodBounds(enrollment, enrollmentsAsc);
-
-      if (pack.courseQuotas.length > 0) {
-        const consumedByCourse = await countEnrollmentConsumedSessionsByCourseInPeriod({
-          memberId,
-          packId: pack.id,
-          courseQuotas: pack.courseQuotas,
-          sessionCount: pack.sessionCount,
-          category: pack.category,
-          periodStart,
-          periodEndExclusive,
-        });
-        courseQuotaRemaining = courseQuotaUsageLines(pack, consumedByCourse);
-        const consumedRaw = courseQuotaRemaining.reduce((sum, q) => sum + q.consumed, 0);
-        consumedSessions =
-          totalSessions != null ? Math.min(consumedRaw, totalSessions) : consumedRaw;
-      } else {
-        const consumedRaw = await countEnrollmentConsumedSessionsInPeriod({
-          memberId,
-          packId: pack.id,
-          courseQuotas: pack.courseQuotas,
-          sessionCount: pack.sessionCount,
-          category: pack.category,
-          periodStart,
-          periodEndExclusive,
-        });
-        consumedSessions =
-          totalSessions != null ? Math.min(consumedRaw, totalSessions) : consumedRaw;
-      }
-      remainingSessions =
-        totalSessions != null ? Math.max(0, totalSessions - consumedSessions) : 0;
-
-      if (!isProlonged && packStartedAt && consumedSessions <= 0) {
-        packStartedAt = null;
-        packExpiresAt = null;
-        enrollmentStatus = "PENDING_START";
-      } else if (!packStartedAt && consumedSessions > 0) {
-        const backfilled = await backfillEnrollmentStartFromFirstConsumption({
-          enrollmentId: enrollment.id,
-          memberId,
-          packId: pack.id,
-          courseQuotas: pack.courseQuotas,
-          durationDays: pack.durationDays,
-          periodStart,
-          periodEndExclusive,
-        });
-        if (backfilled) {
-          packStartedAt = backfilled.packStartedAt;
-          packExpiresAt = backfilled.packExpiresAt;
-          enrollmentStatus = "ACTIVE";
-        }
-      } else if (
-        !isProlonged &&
-        packStartedAt &&
-        toPrismaDateLocal(packStartedAt).getTime() < toPrismaDateLocal(enrollment.purchasedAt).getTime()
-      ) {
-        const purchased = toPrismaDateLocal(enrollment.purchasedAt);
-        const repairedStart =
-          periodStart && periodStart.getTime() >= purchased.getTime() ? periodStart : purchased;
-        if (consumedSessions <= 0) {
-          packStartedAt = null;
-          packExpiresAt = null;
-          enrollmentStatus = "PENDING_START";
-          await prisma.memberPackEnrollment.update({
-            where: { id: enrollment.id },
-            data: {
-              packStartedAt: null,
-              packExpiresAt: null,
-              status: "PENDING_START",
-              closedAt: null,
-            },
-          });
-        } else {
-          packStartedAt = repairedStart;
-          packExpiresAt = pack.durationDays
-            ? addPackDurationToStartDate(repairedStart, pack.durationDays)
-            : packExpiresAt;
-          await prisma.memberPackEnrollment.update({
-            where: { id: enrollment.id },
-            data: {
-              packStartedAt: repairedStart,
-              packExpiresAt,
-              status: enrollmentStatus === "PENDING_START" ? "ACTIVE" : enrollmentStatus,
-            },
-          });
-        }
-      } else if (packStartedAt && !packExpiresAt && pack.durationDays) {
-        packExpiresAt = addPackDurationToStartDate(packStartedAt, pack.durationDays);
-      }
+      consumedSessions = 0;
+      remainingSessions = totalSessions ?? 0;
     }
 
     if (enrollment.categoryReassignedAt != null || enrollment.additionalSessionsCredit > 0) {
@@ -705,7 +516,21 @@ export async function reopenUnusedReplacedEnrollments(memberId: string): Promise
   const all = await prisma.memberPackEnrollment.findMany({
     where: { memberId },
     orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
-    select: { id: true, packId: true, purchasedAt: true, closedAt: true, packStartedAt: true },
+    include: {
+      pack: {
+        select: {
+          sessionCount: true,
+          category: true,
+          courseQuotas: { select: { courseSlug: true, sessionCount: true } },
+        },
+      },
+    },
+  });
+
+  const allocations = await allocateConsumedSessionsAcrossMemberEnrollments({
+    memberId,
+    enrollmentsAsc: all,
+    countingMode: "display",
   });
 
   for (const enrollment of replaced) {
@@ -715,16 +540,7 @@ export async function reopenUnusedReplacedEnrollments(memberId: string): Promise
         : enrollment.pack.sessionCount;
     if (totalSessions == null || totalSessions <= 0) continue;
 
-    const { periodStart, periodEndExclusive } = getEnrollmentPeriodBounds(enrollment, all);
-    const consumed = await countEnrollmentConsumedSessionsInPeriod({
-      memberId,
-      packId: enrollment.packId,
-      courseQuotas: enrollment.pack.courseQuotas,
-      sessionCount: enrollment.pack.sessionCount,
-      category: enrollment.pack.category,
-      periodStart,
-      periodEndExclusive,
-    });
+    const consumed = allocations.get(enrollment.id)?.consumedTotal ?? 0;
     if (consumed >= totalSessions) continue;
 
     await prisma.memberPackEnrollment.update({
@@ -777,6 +593,12 @@ export async function syncBalancesFromOpenEnrollments(
     openByPack.set(row.packId, list);
   }
 
+  const allocations = await allocateConsumedSessionsAcrossMemberEnrollments({
+    memberId,
+    enrollmentsAsc: rows,
+    countingMode: "debit",
+  });
+
   for (const [packId, openRows] of openByPack) {
     const pack = openRows[0]!.pack;
 
@@ -786,83 +608,22 @@ export async function syncBalancesFromOpenEnrollments(
     );
     if (hasManualCredit) continue;
 
-    if (openRows.length > 1) {
-      const allocations = await allocateFifoPackConsumptions({
-        memberId,
-        packId,
-        enrollmentsAsc: openRows,
-        courseQuotas: pack.courseQuotas,
-        sessionCount: pack.sessionCount,
-        category: pack.category ?? null,
-      });
-
-      if (pack.courseQuotas.length > 0) {
-        const remainingBySlug = new Map<string, number>();
-        for (const quota of pack.courseQuotas) {
-          remainingBySlug.set(quota.courseSlug, 0);
-        }
-        for (const enrollment of openRows) {
-          const alloc = allocations.get(enrollment.id);
-          if (!alloc) continue;
-          for (const quota of pack.courseQuotas) {
-            const remaining = alloc.remainingByCourse.get(quota.courseSlug) ?? 0;
-            remainingBySlug.set(
-              quota.courseSlug,
-              (remainingBySlug.get(quota.courseSlug) ?? 0) + remaining,
-            );
-          }
-        }
-        await prisma.memberPackBalance.deleteMany({ where: { memberId, packId } });
-        await prisma.memberPackBalance.createMany({
-          data: pack.courseQuotas.map((quota) => ({
-            memberId,
-            packId,
-            courseSlug: quota.courseSlug,
-            remaining: remainingBySlug.get(quota.courseSlug) ?? quota.sessionCount,
-          })),
-        });
-        continue;
-      }
-
-      if (pack.sessionCount == null) continue;
-      let remainingTotal = 0;
-      for (const enrollment of openRows) {
-        remainingTotal += allocations.get(enrollment.id)?.remainingTotal ?? 0;
-      }
-      await prisma.memberPackBalance.deleteMany({ where: { memberId, packId } });
-      await prisma.memberPackBalance.create({
-        data: { memberId, packId, courseSlug: null, remaining: remainingTotal },
-      });
-      continue;
-    }
-
     if (pack.courseQuotas.length > 0) {
       const remainingBySlug = new Map<string, number>();
       for (const quota of pack.courseQuotas) {
         remainingBySlug.set(quota.courseSlug, 0);
       }
-
       for (const enrollment of openRows) {
-        const { periodStart, periodEndExclusive } = getEnrollmentPeriodBounds(enrollment, rows);
-        const consumedByCourse = await countEnrollmentConsumedSessionsByCourseInPeriod({
-          memberId,
-          packId,
-          courseQuotas: pack.courseQuotas,
-          sessionCount: pack.sessionCount,
-          category: pack.category ?? null,
-          periodStart,
-          periodEndExclusive,
-        });
+        const alloc = allocations.get(enrollment.id);
+        if (!alloc) continue;
         for (const quota of pack.courseQuotas) {
-          const consumed = consumedByCourse.get(quota.courseSlug) ?? 0;
-          const remaining = Math.max(0, quota.sessionCount - Math.min(consumed, quota.sessionCount));
+          const remaining = alloc.remainingByCourse.get(quota.courseSlug) ?? 0;
           remainingBySlug.set(
             quota.courseSlug,
             (remainingBySlug.get(quota.courseSlug) ?? 0) + remaining,
           );
         }
       }
-
       await prisma.memberPackBalance.deleteMany({ where: { memberId, packId } });
       await prisma.memberPackBalance.createMany({
         data: pack.courseQuotas.map((quota) => ({
@@ -876,46 +637,15 @@ export async function syncBalancesFromOpenEnrollments(
     }
 
     if (pack.sessionCount == null) continue;
-
     let remainingTotal = 0;
     for (const enrollment of openRows) {
-      const { periodStart, periodEndExclusive } = getEnrollmentPeriodBounds(enrollment, rows);
-
-      // Pack unique 1 séance : se baser sur les réservations encore consommatrices, pas seulement packStartedAt.
-      if (pack.sessionCount === 1) {
-        const consumed = await countEnrollmentConsumedSessionsInPeriod({
-          memberId,
-          packId,
-          courseQuotas: [],
-          sessionCount: 1,
-          category: pack.category ?? null,
-          periodStart,
-          periodEndExclusive,
-        });
-        if (consumed <= 0) remainingTotal += 1;
-        continue;
-      }
-
-      const consumed = await countEnrollmentConsumedSessionsInPeriod({
-        memberId,
-        packId,
-        courseQuotas: [],
-        sessionCount: pack.sessionCount,
-        category: pack.category ?? null,
-        periodStart,
-        periodEndExclusive,
-      });
-      remainingTotal += Math.max(0, pack.sessionCount - Math.min(consumed, pack.sessionCount));
+      const remaining = allocations.get(enrollment.id)?.remainingTotal ?? 0;
+      if (!Number.isFinite(remaining)) continue;
+      remainingTotal += remaining;
     }
-
     await prisma.memberPackBalance.deleteMany({ where: { memberId, packId } });
     await prisma.memberPackBalance.create({
-      data: {
-        memberId,
-        packId,
-        courseSlug: null,
-        remaining: remainingTotal,
-      },
+      data: { memberId, packId, courseSlug: null, remaining: remainingTotal },
     });
   }
 }

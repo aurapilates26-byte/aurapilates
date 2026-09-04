@@ -16,8 +16,17 @@ import {
 } from "@/lib/member-pack-period";
 import { debitMemberPackSession } from "@/lib/member-pack-session-ledger";
 import { activateSelectedPackOnSessionDate } from "@/lib/admin/member-pack-activation";
-import { consumeOldestOpenEnrollmentOnDebit } from "@/lib/admin/member-pack-enrollment";
+import {
+  allocateConsumedSessionsAcrossMemberEnrollments,
+  consumeOldestOpenEnrollmentOnDebit,
+} from "@/lib/admin/member-pack-enrollment";
 import { ensureMemberParallelPackStockForDebit } from "@/lib/admin/member-owned-packs";
+import type { EnrollmentConsumptionAlloc } from "@/lib/member-pack-consumption-assign";
+import {
+  remainingForCourseFromBalances,
+  totalRemainingFromBalances,
+  type PackQuotaShape,
+} from "@/lib/member-pack-recorded-remaining";
 import { prisma } from "@/lib/prisma";
 
 type ResolvePackOptions = {
@@ -65,21 +74,11 @@ type PackCandidate = {
   courseCoverageLabel: string;
 };
 
-type PackQuotaShape = {
-  sessionCount: number | null;
-  courseQuotas: { courseSlug: string; sessionCount: number }[];
-};
-
 function totalRemaining(
   balances: { courseSlug: string | null; remaining: number }[],
   pack: PackQuotaShape,
 ): number {
-  const forPack = balances.filter((b) => b.remaining > 0);
-  if (forPack.length > 0) return forPack.reduce((sum, b) => sum + b.remaining, 0);
-  if (pack.courseQuotas.length > 0) {
-    return pack.courseQuotas.reduce((sum, q) => sum + q.sessionCount, 0);
-  }
-  return pack.sessionCount ?? 0;
+  return totalRemainingFromBalances(balances, pack);
 }
 
 function remainingForCourseSlug(
@@ -87,14 +86,50 @@ function remainingForCourseSlug(
   pack: PackQuotaShape,
   courseSlug: string,
 ): number {
-  if (pack.courseQuotas.length > 0) {
-    const quota = pack.courseQuotas.find((q) => q.courseSlug === courseSlug);
-    if (!quota) return 0;
-    const balance = balances.find((b) => b.courseSlug === courseSlug);
-    if (balance) return Math.max(0, balance.remaining);
-    return quota.sessionCount;
+  return remainingForCourseFromBalances(balances, pack, courseSlug);
+}
+
+function debitRemainingFromAllocations(input: {
+  packId: string;
+  courseSlug: string;
+  pack: PackQuotaShape;
+  enrollments: {
+    id: string;
+    packId: string;
+    status: string;
+    additionalSessionsCredit?: number;
+    categoryReassignedAt?: Date | null;
+  }[];
+  allocations: Map<string, EnrollmentConsumptionAlloc>;
+}): { remainingSessions: number; remainingForCourse: number } | null {
+  const open = input.enrollments.filter(
+    (row) =>
+      row.packId === input.packId &&
+      (row.status === "ACTIVE" || row.status === "PENDING_START"),
+  );
+  if (
+    open.some(
+      (row) =>
+        (row.additionalSessionsCredit ?? 0) > 0 || row.categoryReassignedAt != null,
+    )
+  ) {
+    return null;
   }
-  return totalRemaining(balances, pack);
+
+  let remainingSessions = 0;
+  let remainingForCourse = 0;
+  for (const enrollment of open) {
+    const alloc = input.allocations.get(enrollment.id);
+    if (!alloc) continue;
+    const remaining = alloc.remainingTotal;
+    if (Number.isFinite(remaining)) remainingSessions += remaining;
+    if (input.pack.courseQuotas.length > 0) {
+      remainingForCourse += alloc.remainingByCourse.get(input.courseSlug) ?? 0;
+    } else if (Number.isFinite(remaining)) {
+      remainingForCourse += remaining;
+    }
+  }
+  return { remainingSessions, remainingForCourse };
 }
 
 function buildCourseCoverageLabel(pack: PackCandidate["pack"], courseSlug: string): string {
@@ -230,6 +265,27 @@ async function loadPackCandidates(
   });
   if (!member) return [];
 
+  const allEnrollments = await tx.memberPackEnrollment.findMany({
+    where: { memberId },
+    orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
+    include: {
+      pack: {
+        select: {
+          sessionCount: true,
+          category: true,
+          courseQuotas: { select: { courseSlug: true, sessionCount: true } },
+        },
+      },
+    },
+  });
+
+  const allocations = await allocateConsumedSessionsAcrossMemberEnrollments({
+    memberId,
+    enrollmentsAsc: allEnrollments,
+    countingMode: "debit",
+    db: tx,
+  });
+
   const packIds = new Set<string>();
   for (const balance of member.packBalances) {
     if (balance.remaining > 0) packIds.add(balance.packId);
@@ -288,7 +344,15 @@ async function loadPackCandidates(
     if (!isCourseAllowedForPack(eligibility, courseSlug)) continue;
 
     const balances = refreshedBalances.filter((b) => b.packId === pack.id);
-    const remainingForCourse = remainingForCourseSlug(balances, pack, courseSlug);
+    const fromAlloc = debitRemainingFromAllocations({
+      packId: pack.id,
+      courseSlug,
+      pack,
+      enrollments: allEnrollments,
+      allocations,
+    });
+    const remainingSessions = fromAlloc?.remainingSessions ?? totalRemaining(balances, pack);
+    const remainingForCourse = fromAlloc?.remainingForCourse ?? remainingForCourseSlug(balances, pack, courseSlug);
     if (remainingForCourse <= 0) continue;
 
     const enrollment = latestEnrollmentByPack.get(pack.id);
@@ -321,7 +385,7 @@ async function loadPackCandidates(
       packStartedAt: period.packStartedAt,
       packExpiresAt: period.packExpiresAt,
       isProlonged,
-      remainingSessions: totalRemaining(balances, pack),
+      remainingSessions,
       remainingForCourse,
       courseCoverageLabel: buildCourseCoverageLabel(pack, courseSlug),
     });
@@ -536,6 +600,7 @@ async function diagnoseEmptyBookablePacks(input: {
 
   const courseLabelFr = courseLabel(courseSlug);
   let finishedName: string | null = null;
+  let anyRemaining = false;
   let wrongCourseName: string | null = null;
   let wrongCourseCoverage: string | null = null;
   let inactiveName: string | null = null;
@@ -566,13 +631,16 @@ async function diagnoseEmptyBookablePacks(input: {
     }
 
     const remaining = remainingForCourseSlug(balances, pack, courseSlug);
-    if (remaining <= 0) {
-      finishedName ??= pack.name;
+    if (coversCourse && remaining > 0) {
+      anyRemaining = true;
       continue;
+    }
+    if (coversCourse && remaining <= 0) {
+      finishedName ??= pack.name;
     }
   }
 
-  if (finishedName) {
+  if (finishedName && !anyRemaining) {
     return `Pack ${finishedName} terminé : plus aucune séance disponible pour ce cours. Renouvelez le pack pour réserver.`;
   }
 

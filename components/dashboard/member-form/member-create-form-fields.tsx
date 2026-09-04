@@ -1,8 +1,9 @@
 "use client";
 
-import { Button, Checkbox, Input, SelectMenu, Textarea } from "@/components/ui";
+import { Checkbox, Input, SelectMenu, Textarea } from "@/components/ui";
 import { PaymentMethodPicker } from "@/components/dashboard/member-form/payment-method-picker";
 import { PersonalDiscountFields } from "@/components/dashboard/member-form/personal-discount-fields";
+import { QrIdInputField } from "@/components/dashboard/member-form/qr-id-input-field";
 import type { MemberCreateFormController } from "@/components/dashboard/member-form/use-member-create-form";
 import { formatPackSelectOptionLabel } from "@/lib/public-pack-display";
 
@@ -24,6 +25,9 @@ export function MemberCreateFormFields({
     handlePackCategoryChange,
     qrKey,
     isFetchingQrKey,
+    isPickingQr,
+    pickAvailableQr,
+    clearQrAssignment,
     qrIdentifyStatusText,
     packsForCategory,
     selectedPackListPriceDinars,
@@ -34,17 +38,19 @@ export function MemberCreateFormFields({
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <Input
+        <QrIdInputField
           id={`${idPrefix}-qrid`}
           label={`Identifiant QR (${qrIdentifyStatusText}) — optionnel`}
           value={values.qrId}
-          onChange={(e) => {
-            const next = e.target.value;
+          isPicking={isPickingQr}
+          onChange={(next) => {
             patch({ qrId: next });
             if (next.trim().length < 10) {
               form.setFormError(null);
             }
           }}
+          onPickAvailable={pickAvailableQr}
+          onClear={clearQrAssignment}
           placeholder="Ex: identifiant qr code"
         />
         <div>
@@ -55,7 +61,7 @@ export function MemberCreateFormFields({
             id={`${idPrefix}-qrkey`}
             className="mt-2 min-h-[42px] w-full rounded-xl border border-brand-medium/35 bg-zinc-50 px-4 py-2.5 text-sm text-brand-dark/80"
           >
-            {isFetchingQrKey ? "Chargement..." : qrKey ?? "—"}
+            {isFetchingQrKey || isPickingQr ? "Chargement..." : qrKey ?? "—"}
           </div>
         </div>
       </div>

@@ -9,6 +9,11 @@ import {
   PACK_SESSION_CONSUMED_WHERE,
   PACK_SESSION_DEBITED_WHERE,
 } from "@/lib/pack-session-consumption";
+import {
+  assignConsumedReservationsToEnrollments,
+  type EnrollmentConsumptionAlloc,
+  type EnrollmentConsumptionTarget,
+} from "@/lib/member-pack-consumption-assign";
 import { prisma } from "@/lib/prisma";
 
 const CONSUMING_RESERVATION_STATUSES = PACK_SESSION_DEBITED_WHERE;
@@ -262,6 +267,48 @@ export async function allocateFifoPackConsumptions(input: {
   }
 
   return result;
+}
+
+/**
+ * Attribution unique des séances consommées à toutes les inscriptions de l'adhérente
+ * (tous packs catalogue). Les présences sans `debitedPackId` ne sont plus comptées
+ * en parallèle sur chaque pack.
+ */
+export async function allocateConsumedSessionsAcrossMemberEnrollments(input: {
+  memberId: string;
+  enrollmentsAsc: EnrollmentConsumptionTarget[];
+  countingMode?: FifoCountingMode;
+  db?: Prisma.TransactionClient | typeof prisma;
+}): Promise<Map<string, EnrollmentConsumptionAlloc>> {
+  if (input.enrollmentsAsc.length === 0) return new Map();
+
+  const db = input.db ?? prisma;
+  const statusFilter =
+    input.countingMode === "debit"
+      ? CONSUMING_RESERVATION_STATUSES
+      : DISPLAY_CONSUMED_RESERVATION_STATUSES;
+
+  const reservations = await db.reservation.findMany({
+    where: {
+      memberId: input.memberId,
+      AND: [statusFilter],
+    },
+    orderBy: [{ sessionDate: "asc" }, { createdAt: "asc" }],
+    select: {
+      sessionDate: true,
+      debitedPackId: true,
+      planning: { select: { courseSlug: true } },
+    },
+  });
+
+  return assignConsumedReservationsToEnrollments(
+    input.enrollmentsAsc,
+    reservations.map((row) => ({
+      sessionDate: row.sessionDate,
+      courseSlug: row.planning.courseSlug,
+      debitedPackId: row.debitedPackId,
+    })),
+  );
 }
 
 /**

@@ -16,6 +16,7 @@ import {
   buildMemberCreateRequestBody,
   validateMemberCreateForm,
 } from "@/lib/member-form/validate-member-create";
+import { fetchNextAvailableQrCode } from "@/lib/admin/fetch-next-available-qr";
 
 const EMPTY_VALUES: MemberCreateFormValues = {
   qrId: "",
@@ -49,6 +50,7 @@ export function useMemberCreateForm({ packs, initialValues, resetKey }: UseMembe
   const [qrStatus, setQrStatus] = useState<QrLookupStatus>("UNKNOWN");
   const [qrAssignedMemberId, setQrAssignedMemberId] = useState<string | null>(null);
   const [isFetchingQrKey, setIsFetchingQrKey] = useState(false);
+  const [isPickingQr, setIsPickingQr] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
   const packsForForm = useMemo(() => packs.filter((item) => item.isActive), [packs]);
@@ -108,6 +110,32 @@ export function useMemberCreateForm({ packs, initialValues, resetKey }: UseMembe
     setQrAssignedMemberId(null);
     setFormError(null);
     setIsFetchingQrKey(false);
+    setIsPickingQr(false);
+  };
+
+  const clearQrAssignment = () => {
+    setValues((prev) => ({ ...prev, qrId: "" }));
+    setQrKey(null);
+    setQrStatus("UNKNOWN");
+    setQrAssignedMemberId(null);
+    setFormError(null);
+    setIsFetchingQrKey(false);
+  };
+
+  const pickAvailableQr = async () => {
+    setIsPickingQr(true);
+    setFormError(null);
+    try {
+      const data = await fetchNextAvailableQrCode();
+      setValues((prev) => ({ ...prev, qrId: data.qrId }));
+      setQrKey(data.qrKey);
+      setQrStatus("UNASSIGNED");
+      setQrAssignedMemberId(null);
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : "Impossible de récupérer un QR disponible.");
+    } finally {
+      setIsPickingQr(false);
+    }
   };
 
   useEffect(() => {
@@ -117,6 +145,13 @@ export function useMemberCreateForm({ packs, initialValues, resetKey }: UseMembe
 
   useEffect(() => {
     const trimmed = values.qrId.trim();
+    if (!trimmed) {
+      setQrKey(null);
+      setQrStatus("UNKNOWN");
+      setQrAssignedMemberId(null);
+      setIsFetchingQrKey(false);
+      return;
+    }
     if (trimmed.length < 10) return;
 
     let cancelled = false;
@@ -198,6 +233,9 @@ export function useMemberCreateForm({ packs, initialValues, resetKey }: UseMembe
     qrStatus,
     qrAssignedMemberId,
     isFetchingQrKey,
+    isPickingQr,
+    pickAvailableQr,
+    clearQrAssignment,
     qrIdentifyStatusText,
     packsForCategory,
     selectedPack,

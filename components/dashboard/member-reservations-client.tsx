@@ -18,6 +18,7 @@ import {
 } from "@/lib/studio-booking-rules";
 import { useMemberBookingStore } from "@/store/member/member-booking-store";
 import type { MemberPlanningWindow } from "@/types/member/booking";
+import { selectBookablePackOptions } from "@/lib/bookable-pack-options";
 
 const dayLabels: Record<number, string> = {
   0: "Dimanche",
@@ -245,7 +246,7 @@ export function MemberReservationsClient({ embedded = false }: { embedded?: bool
         items: BookablePackOption[];
         emptyMessage?: string;
       };
-      const items = data.items ?? [];
+      const items = selectBookablePackOptions(data.items ?? []);
       if (items.length === 0) {
         throw new Error(
           data.emptyMessage ??
