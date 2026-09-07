@@ -133,13 +133,22 @@ async function createDraftMirrorIfMissing(source: Planning, draftAnchor: Date): 
   });
   if (existingDraft) return;
 
-  const overlap = await findOverlappingPlanningSlot(prisma, {
+  const overlapDraft = await findOverlappingPlanningSlot(prisma, {
     anchorSessionYmd: draftAnchor,
     courseSlug: source.courseSlug,
     startTime: source.startTime,
     isDraft: true,
   });
-  if (overlap) return;
+  if (overlapDraft) return;
+
+  // Ne jamais créer un miroir sur une date déjà publiée (sinon no-op à la bascule lundi).
+  const overlapPublished = await findOverlappingPlanningSlot(prisma, {
+    anchorSessionYmd: draftAnchor,
+    courseSlug: source.courseSlug,
+    startTime: source.startTime,
+    isDraft: false,
+  });
+  if (overlapPublished) return;
 
   await clearStalePublishedMirrorLink(source.id);
 
@@ -334,7 +343,28 @@ async function getCalendarContext(): Promise<{
 
   if (!draft || draft.periodStartYmd !== expectedNext.periodStartYmd) {
     if (draft && draft.periodStartYmd !== expectedNext.periodStartYmd) {
-      await prisma.planning.deleteMany({ where: { isDraft: true } });
+      const bookedDraftCount = await prisma.reservation.count({
+        where: {
+          planning: { isDraft: true },
+          status: { in: ["BOOKED", "WAITLIST"] },
+        },
+      });
+      if (bookedDraftCount > 0) {
+        // Catch-up lundi : ne jamais wipe un brouillon qui a déjà des réservations.
+        return { published, calendarCurrent, expectedNext: draft, draft };
+      }
+      const emptyDraftIds = await prisma.planning.findMany({
+        where: {
+          isDraft: true,
+          reservations: { none: {} },
+        },
+        select: { id: true },
+      });
+      if (emptyDraftIds.length > 0) {
+        await prisma.planning.deleteMany({
+          where: { id: { in: emptyDraftIds.map((d) => d.id) } },
+        });
+      }
       await clearAllDraftMirrorSuppressions();
     }
     await saveDraftPeriodSchedule({

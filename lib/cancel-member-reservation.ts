@@ -1,5 +1,5 @@
 import { broadcastMemberBookingRefresh } from "@/lib/member-booking-stream";
-import { formatYmdPrismaDate, parseYmdLocal } from "@/lib/calendar-day";
+import { formatYmdPrismaDate, parseYmdLocal, startOfLocalToday } from "@/lib/calendar-day";
 import {
   creditMemberPackSession,
   promoteNextWaitlistReservation,
@@ -145,12 +145,33 @@ export async function cancelMemberReservation(params: {
         reservation.debitedPack ??
         (memberRow?.packId && memberRow.pack ? memberRow.pack : null);
 
-      if (wasBooked && refundable && reservation.packRefundedAt == null && packToCredit) {
+      const sessionYmd = formatYmdPrismaDate(reservation.sessionDate);
+      const sessionDay = parseYmdLocal(sessionYmd);
+      const isPastBooked =
+        wasBooked &&
+        sessionDay != null &&
+        sessionDay.getTime() < startOfLocalToday().getTime();
+
+      // BOOKED passé : déjà hors solde débitable (sync) — ne pas recréditer.
+      if (
+        wasBooked &&
+        refundable &&
+        reservation.packRefundedAt == null &&
+        packToCredit &&
+        !isPastBooked
+      ) {
         await creditMemberPackSession(tx, {
           memberId,
           pack: packToCredit,
           courseSlug: reservation.planning.courseSlug,
         });
+        await reopenSingleSessionPackAfterFullRefund(tx, {
+          memberId,
+          packId: packToCredit.id,
+          sessionCount: packToCredit.sessionCount,
+          courseQuotas: packToCredit.courseQuotas,
+        });
+      } else if (wasBooked && refundable && isPastBooked && packToCredit) {
         await reopenSingleSessionPackAfterFullRefund(tx, {
           memberId,
           packId: packToCredit.id,

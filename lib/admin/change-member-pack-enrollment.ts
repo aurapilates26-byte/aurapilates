@@ -170,57 +170,102 @@ async function applyPackBalanceWithAdditional(
     oldPackId?: string;
   },
 ): Promise<void> {
-  const { memberId, pack, additionalSessions, consumedSessions, oldPackId } = input;
-  const futureBookedCount = input.futureBookedCount ?? 0;
+  const { memberId, pack, oldPackId } = input;
 
   if (oldPackId && oldPackId !== pack.id) {
-    await tx.memberPackBalance.deleteMany({
-      where: { memberId, packId: oldPackId },
+    const otherOpenOld = await tx.memberPackEnrollment.count({
+      where: {
+        memberId,
+        packId: oldPackId,
+        status: { in: ["PENDING_START", "ACTIVE"] },
+      },
     });
+    if (otherOpenOld === 0) {
+      await tx.memberPackBalance.deleteMany({
+        where: { memberId, packId: oldPackId },
+      });
+    }
   }
+
+  // Solde partagé par packId = somme des restants de TOUTES les inscriptions ouvertes
+  // (évite d'écraser le stock d'un 2e AURA GLOW parallèle).
+  const allEnrollments = await tx.memberPackEnrollment.findMany({
+    where: { memberId },
+    orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
+    include: {
+      pack: {
+        select: {
+          sessionCount: true,
+          category: true,
+          courseQuotas: { select: { courseSlug: true, sessionCount: true } },
+        },
+      },
+    },
+  });
+
+  const { allocateConsumedSessionsAcrossMemberEnrollments } = await import(
+    "@/lib/admin/member-pack-enrollment"
+  );
+  const allocations = await allocateConsumedSessionsAcrossMemberEnrollments({
+    memberId,
+    enrollmentsAsc: allEnrollments,
+    countingMode: "debit",
+    db: tx,
+  });
+
+  const openSamePack = allEnrollments.filter(
+    (row) =>
+      row.packId === pack.id &&
+      (row.status === "ACTIVE" || row.status === "PENDING_START"),
+  );
+
   await tx.memberPackBalance.deleteMany({
     where: { memberId, packId: pack.id },
   });
 
   if (pack.courseQuotas.length > 0) {
-    const firstSlug = pack.courseQuotas[0]!.courseSlug;
-    const catalogTotal = pack.courseQuotas.reduce((sum, q) => sum + q.sessionCount, 0);
-    const remainingTotal = Math.max(
-      0,
-      catalogTotal + additionalSessions - consumedSessions - futureBookedCount,
-    );
-    let left = remainingTotal;
-    await tx.memberPackBalance.createMany({
-      data: pack.courseQuotas.map((q, index) => {
-        const isLast = index === pack.courseQuotas.length - 1;
-        const base = q.sessionCount + (q.courseSlug === firstSlug ? additionalSessions : 0);
-        const remaining = isLast ? left : Math.min(left, base);
-        left = Math.max(0, left - remaining);
-        return {
-          memberId,
-          packId: pack.id,
-          courseSlug: q.courseSlug,
-          remaining,
-        };
-      }),
-    });
+    const remainingBySlug = new Map<string, number>();
+    for (const quota of pack.courseQuotas) {
+      remainingBySlug.set(quota.courseSlug, 0);
+    }
+    for (const enrollment of openSamePack) {
+      const alloc = allocations.get(enrollment.id);
+      if (!alloc) continue;
+      for (const quota of pack.courseQuotas) {
+        remainingBySlug.set(
+          quota.courseSlug,
+          (remainingBySlug.get(quota.courseSlug) ?? 0) +
+            (alloc.remainingByCourse.get(quota.courseSlug) ?? 0),
+        );
+      }
+    }
+    const rows = [...remainingBySlug.entries()].map(([courseSlug, remaining]) => ({
+      memberId,
+      packId: pack.id,
+      courseSlug,
+      remaining,
+    }));
+    if (rows.length > 0) {
+      await tx.memberPackBalance.createMany({ data: rows, skipDuplicates: true });
+    }
     return;
   }
 
-  if (pack.sessionCount != null) {
-    const remaining = Math.max(
-      0,
-      pack.sessionCount + additionalSessions - consumedSessions - futureBookedCount,
-    );
-    await tx.memberPackBalance.create({
-      data: {
-        memberId,
-        packId: pack.id,
-        courseSlug: null,
-        remaining,
-      },
-    });
+  if (pack.sessionCount == null) return;
+
+  let remainingTotal = 0;
+  for (const enrollment of openSamePack) {
+    const remaining = allocations.get(enrollment.id)?.remainingTotal ?? 0;
+    if (Number.isFinite(remaining)) remainingTotal += remaining;
   }
+  await tx.memberPackBalance.create({
+    data: {
+      memberId,
+      packId: pack.id,
+      courseSlug: null,
+      remaining: remainingTotal,
+    },
+  });
 }
 
 function resolvePersonalDiscountInput(
@@ -277,18 +322,17 @@ export async function changeMemberPackEnrollment(input: ChangeMemberPackEnrollme
         orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
         select: {
           id: true,
+          packId: true,
           purchasedAt: true,
           packStartedAt: true,
           closedAt: true,
           status: true,
         },
       });
-      const idx = siblingEnrollments.findIndex((e) => e.id === enrollment.id);
-      const next = idx >= 0 ? siblingEnrollments[idx + 1] : null;
-      const periodStart = enrollment.purchasedAt;
-      const periodEndExclusive = next
-        ? (next.packStartedAt ?? next.purchasedAt)
-        : enrollment.closedAt;
+      const { getEnrollmentPeriodBounds } = await import("@/lib/member-pack-enrollment-period");
+      const bounds = getEnrollmentPeriodBounds(enrollment, siblingEnrollments);
+      const periodStart = bounds.periodStart ?? enrollment.purchasedAt;
+      const periodEndExclusive = bounds.periodEndExclusive;
 
       const consumed = await countEnrollmentConsumedSessionsInPeriod({
         memberId: input.memberId,
@@ -396,13 +440,19 @@ export async function changeMemberPackEnrollment(input: ChangeMemberPackEnrollme
         if (categoryChanged) {
           enrollmentUpdateData.additionalSessionsCredit = additionalSessions;
           enrollmentUpdateData.categoryReassignedAt = new Date();
-        } else if (hasUsage) {
-          // Même catégorie + usage : conserver dates et statut.
         } else {
-          enrollmentUpdateData.packStartedAt = null;
-          enrollmentUpdateData.packExpiresAt = null;
-          enrollmentUpdateData.status = "PENDING_START";
-          enrollmentUpdateData.closedAt = null;
+          if (
+            input.additionalSessions !== undefined &&
+            enrollment.categoryReassignedAt != null
+          ) {
+            enrollmentUpdateData.additionalSessionsCredit = additionalSessions;
+          }
+          if (!hasUsage) {
+            enrollmentUpdateData.packStartedAt = null;
+            enrollmentUpdateData.packExpiresAt = null;
+            enrollmentUpdateData.status = "PENDING_START";
+            enrollmentUpdateData.closedAt = null;
+          }
         }
 
         await tx.memberPackEnrollment.update({
@@ -558,6 +608,19 @@ export async function changeMemberPackEnrollment(input: ChangeMemberPackEnrollme
             where: { memberId: input.memberId, packId: oldPackId },
             data: { packId: newPack.id },
           });
+
+          if (
+            input.additionalSessions !== undefined &&
+            (categoryChanged || enrollment.categoryReassignedAt != null)
+          ) {
+            await applyPackBalanceWithAdditional(tx, {
+              memberId: input.memberId,
+              pack: newPack,
+              additionalSessions,
+              consumedSessions: consumed,
+              oldPackId,
+            });
+          }
         } else {
           const otherOpenSameOldPack = await tx.memberPackEnrollment.count({
             where: {
@@ -623,7 +686,11 @@ export async function changeMemberPackEnrollment(input: ChangeMemberPackEnrollme
           where: { id: enrollment.packPaymentId },
           data: paymentUpdate,
         });
-      } else if (creditTouched) {
+      }
+
+      // Indépendant du paiement : le dialog envoie souvent la remise à chaque save,
+      // ce qui prenait la branche paiement et sautait la maj des séances supplémentaires (5→6 restait 1/6).
+      if (!packChanged && creditTouched) {
         await tx.memberPackEnrollment.update({
           where: { id: enrollment.id },
           data: { additionalSessionsCredit: additionalSessions },

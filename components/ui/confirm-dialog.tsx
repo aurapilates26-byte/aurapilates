@@ -8,6 +8,7 @@ type ConfirmDialogProps = {
   title: string;
   description?: string;
   confirmText?: string;
+  confirmingText?: string;
   cancelText?: string;
   isConfirming?: boolean;
   onConfirm: () => void;
@@ -19,6 +20,7 @@ export function ConfirmDialog({
   title,
   description,
   confirmText = "Confirmer",
+  confirmingText = "Suppression…",
   cancelText = "Annuler",
   isConfirming = false,
   onConfirm,
@@ -45,7 +47,7 @@ export function ConfirmDialog({
             disabled={isConfirming}
             className="border-brand-dark/30 bg-brand-dark text-white hover:bg-brand-dark/90"
           >
-            {isConfirming ? "Suppression…" : confirmText}
+            {isConfirming ? confirmingText : confirmText}
           </Button>
         </>
       }

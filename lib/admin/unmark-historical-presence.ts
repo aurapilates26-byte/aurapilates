@@ -76,8 +76,16 @@ export async function unmarkHistoricalPresence(reservationId: string): Promise<U
           sessionDate: true,
           status: true,
           createdAt: true,
+          debitedPackId: true,
           attendance: { select: { markedBy: true, markedAt: true } },
           planning: { select: { courseSlug: true } },
+          debitedPack: {
+            select: {
+              id: true,
+              sessionCount: true,
+              courseQuotas: { select: { courseSlug: true, sessionCount: true } },
+            },
+          },
           member: {
             select: {
               packId: true,
@@ -106,15 +114,19 @@ export async function unmarkHistoricalPresence(reservationId: string): Promise<U
       await tx.checkIn.deleteMany({ where: { reservationId } });
       await tx.attendance.delete({ where: { reservationId } });
 
-      if (packCredited && reservation.member.packId && reservation.member.pack) {
+      const packToCredit =
+        reservation.debitedPack ??
+        (reservation.member.packId && reservation.member.pack ? reservation.member.pack : null);
+
+      if (packCredited && packToCredit) {
         await creditMemberPackSession(tx, {
           memberId: reservation.memberId,
-          pack: reservation.member.pack,
+          pack: packToCredit,
           courseSlug: reservation.planning.courseSlug,
         });
         await resetPackStartWhenNoConsumption(tx, {
           memberId: reservation.memberId,
-          packId: reservation.member.pack.id,
+          packId: packToCredit.id,
         });
       }
 

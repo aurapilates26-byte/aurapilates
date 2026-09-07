@@ -1,7 +1,7 @@
 import "server-only";
 
 import { Prisma, type MemberPackEnrollmentStatus } from "@prisma/client";
-import { formatYmdLocal, parseYmdToPrismaDate } from "@/lib/calendar-day";
+import { formatYmdLocal, parseYmdToPrismaDate, startOfLocalToday } from "@/lib/calendar-day";
 import { addPackDurationToStartDate } from "@/lib/pack-duration";
 import { packExpiresAtLocal, packStartDateLocal } from "@/lib/member-pack-period";
 import { getEligibilityForPack } from "@/lib/pack-eligibility";
@@ -20,6 +20,22 @@ const CONSUMING_RESERVATION_STATUSES = PACK_SESSION_DEBITED_WHERE;
 
 /** Présence réelle ou annulation tardive — pour l'affichage « séances consommées ». */
 const DISPLAY_CONSUMED_RESERVATION_STATUSES = PACK_SESSION_CONSUMED_WHERE;
+
+function toPrismaDateLocal(d: Date): Date {
+  return parseYmdToPrismaDate(formatYmdLocal(d))!;
+}
+
+/**
+ * Un BOOKED dont la date de séance est passée n'occupe plus le solde réservable
+ * (créneau passé sans présence / sans annulation formelle).
+ */
+function reservationOccupiesDebitBalance(
+  row: { status: string; sessionDate: Date },
+  today: Date = startOfLocalToday(),
+): boolean {
+  if (row.status !== "BOOKED") return true;
+  return toPrismaDateLocal(row.sessionDate).getTime() >= today.getTime();
+}
 
 export async function closeOpenEnrollmentsForPack(
   tx: Prisma.TransactionClient,
@@ -165,7 +181,7 @@ export type FifoCountingMode = "debit" | "display";
 export async function allocateFifoPackConsumptions(input: {
   memberId: string;
   packId: string;
-  enrollmentsAsc: { id: string }[];
+  enrollmentsAsc: { id: string; additionalSessionsCredit?: number }[];
   courseQuotas: { courseSlug: string; sessionCount: number }[];
   sessionCount: number | null;
   category?: string | null;
@@ -174,18 +190,20 @@ export async function allocateFifoPackConsumptions(input: {
   const result = new Map<string, FifoEnrollmentAllocation>();
   const quotas = input.courseQuotas;
   const hasQuotas = quotas.length > 0;
-  const totalCap = hasQuotas
+  const catalogCap = hasQuotas
     ? quotas.reduce((sum, q) => sum + q.sessionCount, 0)
     : input.sessionCount;
 
   for (const enrollment of input.enrollmentsAsc) {
+    const credit = Math.max(0, enrollment.additionalSessionsCredit ?? 0);
+    const totalCap = catalogCap != null ? catalogCap + credit : null;
     const consumedByCourse = new Map<string, number>();
     const remainingByCourse = new Map<string, number>();
     if (hasQuotas) {
-      for (const q of quotas) {
+      quotas.forEach((q, index) => {
         consumedByCourse.set(q.courseSlug, 0);
-        remainingByCourse.set(q.courseSlug, q.sessionCount);
-      }
+        remainingByCourse.set(q.courseSlug, q.sessionCount + (index === 0 ? credit : 0));
+      });
     }
     result.set(enrollment.id, {
       enrollmentId: enrollment.id,
@@ -229,12 +247,18 @@ export async function allocateFifoPackConsumptions(input: {
     },
     orderBy: [{ sessionDate: "asc" }, { createdAt: "asc" }],
     select: {
+      status: true,
       sessionDate: true,
       planning: { select: { courseSlug: true } },
     },
   });
 
-  for (const reservation of reservations) {
+  const occupying =
+    input.countingMode === "display"
+      ? reservations
+      : reservations.filter((row) => reservationOccupiesDebitBalance(row));
+
+  for (const reservation of occupying) {
     const courseSlug = reservation.planning.courseSlug;
     for (const enrollment of input.enrollmentsAsc) {
       const alloc = result.get(enrollment.id)!;
@@ -244,9 +268,8 @@ export async function allocateFifoPackConsumptions(input: {
       if (hasQuotas) {
         const remainingForCourse = alloc.remainingByCourse.get(courseSlug) ?? 0;
         if (remainingForCourse <= 0) {
-          // Quota cours épuisé sur ce pack, mais d'autres séances restent →
-          // ne pas ouvrir le pack suivant (finir d'abord le plus ancien).
-          break;
+          // Quota de ce cours épuisé sur cette inscription → essayer l'inscription suivante.
+          continue;
         }
         alloc.remainingByCourse.set(courseSlug, remainingForCourse - 1);
         alloc.consumedByCourse.set(
@@ -260,7 +283,13 @@ export async function allocateFifoPackConsumptions(input: {
       }
 
       alloc.consumedTotal += 1;
-      alloc.remainingTotal = totalCap != null ? Math.max(0, totalCap - alloc.consumedTotal) : 0;
+      const credit = Math.max(
+        0,
+        input.enrollmentsAsc.find((e) => e.id === enrollment.id)?.additionalSessionsCredit ?? 0,
+      );
+      const enrollmentCap = catalogCap != null ? catalogCap + credit : null;
+      alloc.remainingTotal =
+        enrollmentCap != null ? Math.max(0, enrollmentCap - alloc.consumedTotal) : 0;
       if (!alloc.firstSessionDate) alloc.firstSessionDate = reservation.sessionDate;
       break;
     }
@@ -295,15 +324,21 @@ export async function allocateConsumedSessionsAcrossMemberEnrollments(input: {
     },
     orderBy: [{ sessionDate: "asc" }, { createdAt: "asc" }],
     select: {
+      status: true,
       sessionDate: true,
       debitedPackId: true,
       planning: { select: { courseSlug: true } },
     },
   });
 
+  const forAssign =
+    input.countingMode === "debit"
+      ? reservations.filter((row) => reservationOccupiesDebitBalance(row))
+      : reservations;
+
   return assignConsumedReservationsToEnrollments(
     input.enrollmentsAsc,
-    reservations.map((row) => ({
+    forAssign.map((row) => ({
       sessionDate: row.sessionDate,
       courseSlug: row.planning.courseSlug,
       debitedPackId: row.debitedPackId,
@@ -330,7 +365,7 @@ export async function repairFifoEnrollmentActivationForPack(input: {
       status: { in: ["PENDING_START", "ACTIVE"] },
     },
     orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
-    select: { id: true, packStartedAt: true, status: true },
+    select: { id: true, packStartedAt: true, status: true, additionalSessionsCredit: true },
   });
   if (enrollments.length <= 1) return;
 
@@ -413,7 +448,13 @@ export async function consumeOldestOpenEnrollmentOnDebit(
       status: { in: ["PENDING_START", "ACTIVE"] },
     },
     orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
-    select: { id: true, purchasedAt: true, status: true, packStartedAt: true },
+    select: {
+      id: true,
+      purchasedAt: true,
+      status: true,
+      packStartedAt: true,
+      additionalSessionsCredit: true,
+    },
   });
   if (openEnrollments.length === 0) return;
 
@@ -472,13 +513,15 @@ async function countPackConsumingReservations(
   memberId: string,
   packId: string,
 ): Promise<number> {
-  return tx.reservation.count({
+  const rows = await tx.reservation.findMany({
     where: {
       memberId,
       debitedPackId: packId,
       AND: [CONSUMING_RESERVATION_STATUSES],
     },
+    select: { status: true, sessionDate: true },
   });
+  return rows.filter((row) => reservationOccupiesDebitBalance(row)).length;
 }
 
 /**

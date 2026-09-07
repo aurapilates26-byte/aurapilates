@@ -202,8 +202,9 @@ export async function activatePartialDraftPublication(row: StudioPlanningPeriod)
 }
 
 /**
- * Samedi 13h → phase partielle (lun–sam brouillon + dimanche période actuelle).
- * Dimanche 13h → publication complète.
+ * Samedi 13h → phase partielle (lun–sam du brouillon visibles + dimanche de la période actuelle conservé).
+ * Dimanche 13h → bascule complète (dimanche du brouillon visible + brouillon devient période en cours).
+ * Rattrapage lundi si le cron de dimanche a été manqué.
  * Sans brouillon : ne fait rien.
  */
 export async function maybeRunStaggeredDraftPublication(now: Date = new Date()): Promise<boolean> {
@@ -217,19 +218,63 @@ export async function maybeRunStaggeredDraftPublication(now: Date = new Date()):
     periodStartFromRow(row.periodStartDate),
   );
   const todayYmd = formatYmdLocal(startOfLocalToday());
-
-  const partialAt = row.draftPublishAt?.getTime();
   const nowMs = now.getTime();
+  const partialAt = row.draftPublishAt?.getTime();
+  const fullAt = row.draftSundayPublishAt?.getTime() ?? null;
 
-  // Bascule complète uniquement après le dernier jour de la période affichée (pas le dimanche 13h).
-  if (todayYmd > published.periodEndYmd) {
+  // Dimanche 13h : bascule complète (dimanche du brouillon + période suivante).
+  // Rattrapage si on est déjà après la fin de période (lundi) et que le cron a été manqué.
+  const shouldFullPublish =
+    (fullAt != null && nowMs >= fullAt) || todayYmd > published.periodEndYmd;
+
+  if (shouldFullPublish) {
     const { ensureDraftPeriodWithMirrors } = await import("@/lib/admin/planning-draft-sync");
     await ensureDraftPeriodWithMirrors();
+
+    // Relire après ensure : ne jamais publier avec une config brouillon obsolète.
+    const fresh = await prisma.studioPlanningPeriod.findUnique({ where: { id: SINGLETON_ID } });
+    if (!fresh?.draftPeriodStartDate || !fresh.draftBookingWindow) {
+      return false;
+    }
+
+    const draftSlotCount = await prisma.planning.count({ where: { isDraft: true } });
+    if (draftSlotCount === 0) {
+      // Brouillon programmé mais vide : éviter une semaine vide.
+      const { clearDraftPeriodScheduleSafe } = await import("@/lib/admin/planning-period-draft");
+      await clearDraftPeriodScheduleSafe();
+      const { maybeRollForwardExpiredPublishedPeriod } = await import(
+        "@/lib/admin/planning-period-archive"
+      );
+      const rolled = await maybeRollForwardExpiredPublishedPeriod();
+      if (rolled) {
+        await ensureDraftPeriodWithMirrors();
+        return true;
+      }
+      return false;
+    }
+
     const { publishDraftPeriod } = await import("@/lib/admin/planning-period-draft");
-    await publishDraftPeriod(row);
+    const result = await publishDraftPeriod(fresh);
+    if (!result.ok) {
+      // Brouillon inutilisable (rien à publier, pas de créneaux déjà sur la semaine) :
+      // bascule via roll-forward + clone, sans wipe aveugle des résas brouillon.
+      const { clearDraftPeriodScheduleSafe } = await import("@/lib/admin/planning-period-draft");
+      await clearDraftPeriodScheduleSafe();
+      const { maybeRollForwardExpiredPublishedPeriod } = await import(
+        "@/lib/admin/planning-period-archive"
+      );
+      const rolled = await maybeRollForwardExpiredPublishedPeriod();
+      if (rolled) {
+        await ensureDraftPeriodWithMirrors();
+        return true;
+      }
+      return false;
+    }
+    await ensureDraftPeriodWithMirrors();
     return true;
   }
 
+  // Samedi 13h : lun–sam du brouillon publics, dimanche de la période en cours conservé.
   if (
     partialAt != null &&
     nowMs >= partialAt &&

@@ -15,7 +15,10 @@ function toPrismaDateLocal(d: Date): Date {
 
 /**
  * Bornes de consommation d'une inscription (FIFO par date d'achat).
- * - Fin : date d'achat du renouvellement suivant du même pack catalogue.
+ * - Fin : uniquement `closedAt` si l'inscription est vraiment fermée (épuisée / expirée).
+ *   On ne coupe plus à l'achat du renouvellement suivant : deux packs parallèles du même
+ *   catalogue se consomment en FIFO (ancien d'abord, puis le suivant), y compris après
+ *   la date d'achat du pack neuf — sinon les séances restantes de l'ancien restent bloquées.
  * - Début : renouvellement / PENDING_START → date d'achat.
  *   Premier pack catalogue : pas de borne basse, même si `packStartedAt` est renseigné.
  *   Sinon les présences legacy (`debitedPackId` null) avant la 1ʳᵉ réservation sortent du compteur.
@@ -24,23 +27,18 @@ export function getEnrollmentPeriodBounds(
   enrollment: EnrollmentPeriodRow,
   enrollmentsAsc: EnrollmentPeriodRow[],
 ): { periodStart: Date | null; periodEndExclusive: Date | null } {
-  const index = enrollmentsAsc.findIndex((row) => row.id === enrollment.id);
   const purchased = toPrismaDateLocal(enrollment.purchasedAt);
 
-  let periodEndExclusive: Date | null = null;
-  for (let i = index + 1; i < enrollmentsAsc.length; i++) {
-    const next = enrollmentsAsc[i]!;
-    if (next.packId === enrollment.packId) {
-      periodEndExclusive = toPrismaDateLocal(next.purchasedAt);
-      break;
-    }
-  }
-  if (periodEndExclusive == null && enrollment.closedAt) {
-    periodEndExclusive = toPrismaDateLocal(enrollment.closedAt);
-  }
+  // Fermeture réelle seulement — pas la date d'achat du pack suivant (packs parallèles).
+  const periodEndExclusive =
+    enrollment.closedAt &&
+    enrollment.status !== "ACTIVE" &&
+    enrollment.status !== "PENDING_START"
+      ? toPrismaDateLocal(enrollment.closedAt)
+      : null;
 
   let hasPreviousSamePack = false;
-  for (let i = index - 1; i >= 0; i--) {
+  for (let i = enrollmentsAsc.findIndex((row) => row.id === enrollment.id) - 1; i >= 0; i--) {
     if (enrollmentsAsc[i]!.packId === enrollment.packId) {
       hasPreviousSamePack = true;
       break;

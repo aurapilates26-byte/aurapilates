@@ -279,10 +279,16 @@ async function loadPackCandidates(
     },
   });
 
-  const allocations = await allocateConsumedSessionsAcrossMemberEnrollments({
+  const debitAllocations = await allocateConsumedSessionsAcrossMemberEnrollments({
     memberId,
     enrollmentsAsc: allEnrollments,
     countingMode: "debit",
+    db: tx,
+  });
+  const displayAllocations = await allocateConsumedSessionsAcrossMemberEnrollments({
+    memberId,
+    enrollmentsAsc: allEnrollments,
+    countingMode: "display",
     db: tx,
   });
 
@@ -295,26 +301,6 @@ async function loadPackCandidates(
   }
   if (member.packId) packIds.add(member.packId);
   if (packIds.size === 0) return [];
-
-  const latestEnrollmentByPack = new Map<
-    string,
-    {
-      purchasedAt: Date;
-      packStartedAt: Date | null;
-      packExpiresAt: Date | null;
-      prolongedAt: Date | null;
-    }
-  >();
-  for (const enrollment of member.packEnrollments) {
-    if (!latestEnrollmentByPack.has(enrollment.packId)) {
-      latestEnrollmentByPack.set(enrollment.packId, {
-        purchasedAt: enrollment.purchasedAt,
-        packStartedAt: enrollment.packStartedAt,
-        packExpiresAt: enrollment.packExpiresAt,
-        prolongedAt: enrollment.prolongedAt,
-      });
-    }
-  }
 
   const refreshedBalances = await tx.memberPackBalance.findMany({
     where: { memberId, packId: { in: [...packIds] } },
@@ -344,49 +330,115 @@ async function loadPackCandidates(
     if (!isCourseAllowedForPack(eligibility, courseSlug)) continue;
 
     const balances = refreshedBalances.filter((b) => b.packId === pack.id);
-    const fromAlloc = debitRemainingFromAllocations({
-      packId: pack.id,
-      courseSlug,
-      pack,
-      enrollments: allEnrollments,
-      allocations,
-    });
-    const remainingSessions = fromAlloc?.remainingSessions ?? totalRemaining(balances, pack);
-    const remainingForCourse = fromAlloc?.remainingForCourse ?? remainingForCourseSlug(balances, pack, courseSlug);
-    if (remainingForCourse <= 0) continue;
+    const openEnrollments = allEnrollments
+      .filter(
+        (row) =>
+          row.packId === pack.id &&
+          (row.status === "ACTIVE" || row.status === "PENDING_START"),
+      )
+      .sort(
+        (a, b) =>
+          a.purchasedAt.getTime() - b.purchasedAt.getTime() ||
+          a.createdAt.getTime() - b.createdAt.getTime(),
+      );
 
-    const enrollment = latestEnrollmentByPack.get(pack.id);
-    // PENDING_START ou sans date : ne pas hériter d'un packStartedAt erroné / expiré.
-    const unstartedEnrollment = member.packEnrollments.find(
-      (e) =>
-        e.packId === pack.id &&
-        (e.status === "PENDING_START" || !e.packStartedAt),
-    );
-    const openEnrollment = unstartedEnrollment ?? enrollment;
-    const isProlonged = member.packEnrollments.some(
-      (e) => e.packId === pack.id && e.prolongedAt != null,
+    const hasManualCredit = openEnrollments.some(
+      (row) =>
+        (row.additionalSessionsCredit ?? 0) > 0 || row.categoryReassignedAt != null,
     );
 
-    const period = unstartedEnrollment
-      ? { packStartedAt: null as Date | null, packExpiresAt: null as Date | null }
-      : resolvePackPeriod({
-          packId: pack.id,
-          memberPackId: member.packId,
-          memberPackStartedAt: member.packStartedAt,
-          enrollmentStartedAt: openEnrollment?.packStartedAt ?? null,
-          enrollmentExpiresAt: openEnrollment?.packExpiresAt ?? null,
-        });
+    // Inscription FIFO encore débitable pour ce cours (ancien pack d'abord).
+    let fifoEnrollment: (typeof openEnrollments)[number] | null = null;
+    let debitRemainingForCourse = 0;
+    if (!hasManualCredit) {
+      for (const enrollment of openEnrollments) {
+        const alloc = debitAllocations.get(enrollment.id);
+        if (!alloc) continue;
+        const forCourse =
+          pack.courseQuotas.length > 0
+            ? (alloc.remainingByCourse.get(courseSlug) ?? 0)
+            : Number.isFinite(alloc.remainingTotal)
+              ? alloc.remainingTotal
+              : 0;
+        if (forCourse <= 0) continue;
+        fifoEnrollment = enrollment;
+        debitRemainingForCourse = forCourse;
+        break;
+      }
+    }
+
+    if (!fifoEnrollment) {
+      const fromAlloc = debitRemainingFromAllocations({
+        packId: pack.id,
+        courseSlug,
+        pack,
+        enrollments: allEnrollments,
+        allocations: debitAllocations,
+      });
+      const remainingForCourse =
+        fromAlloc?.remainingForCourse ?? remainingForCourseSlug(balances, pack, courseSlug);
+      if (remainingForCourse <= 0) continue;
+
+      const latest = openEnrollments[openEnrollments.length - 1] ?? null;
+      const unstarted = openEnrollments.find(
+        (e) => e.status === "PENDING_START" || !e.packStartedAt,
+      );
+      const openEnrollment = unstarted ?? latest;
+      const period = unstarted
+        ? { packStartedAt: null as Date | null, packExpiresAt: null as Date | null }
+        : resolvePackPeriod({
+            packId: pack.id,
+            memberPackId: member.packId,
+            memberPackStartedAt: member.packStartedAt,
+            enrollmentStartedAt: openEnrollment?.packStartedAt ?? null,
+            enrollmentExpiresAt: openEnrollment?.packExpiresAt ?? null,
+          });
+
+      candidates.push({
+        packId: pack.id,
+        packName: pack.name,
+        pack,
+        purchasedAt: openEnrollment?.purchasedAt ?? new Date(0),
+        packStartedAt: period.packStartedAt,
+        packExpiresAt: period.packExpiresAt,
+        isProlonged: openEnrollments.some((e) => e.prolongedAt != null),
+        remainingSessions: fromAlloc?.remainingSessions ?? totalRemaining(balances, pack),
+        remainingForCourse,
+        courseCoverageLabel: buildCourseCoverageLabel(pack, courseSlug),
+      });
+      continue;
+    }
+
+    // Affichage = mode présence (comme le panneau packs), bookabilité = mode débit.
+    const displayAlloc = displayAllocations.get(fifoEnrollment.id);
+    const total = totalSessionsForPack(pack);
+    const displayConsumed = displayAlloc?.consumedTotal ?? 0;
+    const displayRemaining =
+      total != null
+        ? Math.max(0, total - Math.min(displayConsumed, total))
+        : (displayAlloc?.remainingTotal ?? 0);
+
+    const period =
+      fifoEnrollment.status === "PENDING_START" || !fifoEnrollment.packStartedAt
+        ? { packStartedAt: null as Date | null, packExpiresAt: null as Date | null }
+        : resolvePackPeriod({
+            packId: pack.id,
+            memberPackId: member.packId,
+            memberPackStartedAt: member.packStartedAt,
+            enrollmentStartedAt: fifoEnrollment.packStartedAt,
+            enrollmentExpiresAt: fifoEnrollment.packExpiresAt,
+          });
 
     candidates.push({
       packId: pack.id,
       packName: pack.name,
       pack,
-      purchasedAt: openEnrollment?.purchasedAt ?? enrollment?.purchasedAt ?? new Date(0),
+      purchasedAt: fifoEnrollment.purchasedAt,
       packStartedAt: period.packStartedAt,
       packExpiresAt: period.packExpiresAt,
-      isProlonged,
-      remainingSessions,
-      remainingForCourse,
+      isProlonged: fifoEnrollment.prolongedAt != null,
+      remainingSessions: displayRemaining,
+      remainingForCourse: debitRemainingForCourse,
       courseCoverageLabel: buildCourseCoverageLabel(pack, courseSlug),
     });
   }

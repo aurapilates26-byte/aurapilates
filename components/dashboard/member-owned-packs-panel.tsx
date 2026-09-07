@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { PaymentMethodBadge } from "@/components/dashboard/payment-method-badge";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast-provider";
 import type { MemberOwnedPackDto } from "@/lib/admin/member-owned-packs";
 import { formatPackPriceDt } from "@/lib/public-pack-display";
@@ -91,6 +92,14 @@ function packBadgeLabel(kind: PackBadgeKind): string {
   return "Expiré";
 }
 
+/** Pack expiré avec séances restantes — même critère que Réservations. */
+function canProlongExpiredPack(pack: MemberOwnedPackDto): boolean {
+  if (pack.remainingSessions <= 0) return false;
+  if (pack.prolongedAt) return false;
+  if (getPackBadgeKind(pack) !== "expired") return false;
+  return true;
+}
+
 function isPackManuallyModified(pack: MemberOwnedPackDto): boolean {
   return pack.categoryReassignedAt != null || (pack.additionalSessionsCredit ?? 0) > 0;
 }
@@ -143,6 +152,10 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
   const [openEnrollmentIds, setOpenEnrollmentIds] = useState<Set<string>>(() => new Set());
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [cancellingEnrollmentId, setCancellingEnrollmentId] = useState<string | null>(null);
+  const [packToDelete, setPackToDelete] = useState<MemberOwnedPackDto | null>(null);
+  const [isDeletingPack, setIsDeletingPack] = useState(false);
+  const [packToProlong, setPackToProlong] = useState<MemberOwnedPackDto | null>(null);
+  const [isProlongingPack, setIsProlongingPack] = useState(false);
 
   const handleCancelProlongation = useCallback(
     async (enrollmentId: string) => {
@@ -174,6 +187,77 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
     },
     [loadPacks, memberId, toast],
   );
+
+  const handleConfirmDeletePack = useCallback(async () => {
+    if (!packToDelete) return;
+
+    setIsDeletingPack(true);
+    try {
+      const res = await fetch(
+        `/api/admin/members/${encodeURIComponent(memberId)}/owned-packs/${encodeURIComponent(packToDelete.enrollmentId)}`,
+        { method: "DELETE" },
+      );
+      const data = (await res.json().catch(() => null)) as {
+        error?: string;
+        items?: MemberOwnedPackDto[];
+      } | null;
+      if (!res.ok) throw new Error(data?.error ?? "Suppression impossible.");
+
+      toast({
+        variant: "success",
+        title: "Pack supprimé",
+        description: "Le pack et l'encaissement caisse ont été retirés.",
+      });
+      if (data?.items) {
+        useMemberOwnedPacksStore.getState().setPacks(memberId, data.items);
+      }
+      dispatchMemberOwnedPacksChanged({ memberId, items: data?.items });
+      setPackToDelete(null);
+      void loadPacks(memberId);
+    } catch (e) {
+      toast({
+        variant: "error",
+        title: "Erreur",
+        description: e instanceof Error ? e.message : "Suppression impossible.",
+      });
+    } finally {
+      setIsDeletingPack(false);
+    }
+  }, [loadPacks, memberId, packToDelete, toast]);
+
+  const handleConfirmProlongPack = useCallback(async () => {
+    if (!packToProlong) return;
+
+    setIsProlongingPack(true);
+    try {
+      const res = await fetch(
+        `/api/admin/members/${encodeURIComponent(memberId)}/owned-packs/${encodeURIComponent(packToProlong.enrollmentId)}/prolong`,
+        { method: "POST" },
+      );
+      const data = (await res.json().catch(() => null)) as {
+        error?: string;
+        packExpiresAt?: string | null;
+      } | null;
+      if (!res.ok) throw new Error(data?.error ?? "Prolongation impossible.");
+
+      toast({
+        variant: "success",
+        title: "Pack prolongé",
+        description: `${packToProlong.packName} — nouvelle fin ${formatDateFr(data?.packExpiresAt ?? null)}. Les séances restantes sont conservées.`,
+      });
+      setPackToProlong(null);
+      // Un seul signal : les abonnés (packs + réservations + fiche) rechargent sans double GET.
+      dispatchMemberOwnedPacksChanged({ memberId });
+    } catch (e) {
+      toast({
+        variant: "error",
+        title: "Erreur",
+        description: e instanceof Error ? e.message : "Prolongation impossible.",
+      });
+    } finally {
+      setIsProlongingPack(false);
+    }
+  }, [memberId, packToProlong, toast]);
 
   const togglePackOpen = (enrollmentId: string) => {
     setOpenEnrollmentIds((prev) => {
@@ -260,9 +344,13 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
       return kind === "consuming" || kind === "prolonged" || kind === "pending";
     })
     .sort((a, b) => new Date(a.purchasedAt).getTime() - new Date(b.purchasedAt).getTime());
+  const expiredProlongableItems = items
+    .filter((p) => canProlongExpiredPack(p))
+    .sort((a, b) => new Date(b.purchasedAt).getTime() - new Date(a.purchasedAt).getTime());
   const historyItems = items
     .filter((p) => {
       const kind = getPackBadgeKind(p);
+      if (canProlongExpiredPack(p)) return false;
       return kind === "finished" || kind === "expired";
     })
     .sort((a, b) => new Date(b.purchasedAt).getTime() - new Date(a.purchasedAt).getTime());
@@ -304,6 +392,11 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
                 >
                   {packBadgeLabel(badgeKind)}
                 </span>
+                {canProlongExpiredPack(pack) ? (
+                  <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-900">
+                    Prolongation
+                  </span>
+                ) : null}
               </div>
               <p className="mt-1 text-xs text-brand-dark/55">
                 {pack.consumedSessions}
@@ -354,18 +447,52 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
             </div>
           ) : null}
 
-          {badgeKind === "prolonged" ? (
-            <div className="flex justify-end border-t border-brand-medium/10 pt-3">
-              <button
-                type="button"
-                disabled={cancellingEnrollmentId === pack.enrollmentId}
-                onClick={() => void handleCancelProlongation(pack.enrollmentId)}
-                className="text-sm font-medium text-red-700 hover:text-red-800 disabled:opacity-50"
-              >
-                {cancellingEnrollmentId === pack.enrollmentId
-                  ? "Annulation…"
-                  : "Annuler la prolongation"}
-              </button>
+          {badgeKind === "prolonged" || pack.consumedSessions === 0 || canProlongExpiredPack(pack) ? (
+            <div className="flex flex-wrap items-center justify-end gap-3 border-t border-brand-medium/10 pt-3">
+              {canProlongExpiredPack(pack) ? (
+                <button
+                  type="button"
+                  disabled={
+                    isProlongingPack ||
+                    isDeletingPack ||
+                    cancellingEnrollmentId === pack.enrollmentId
+                  }
+                  onClick={() => setPackToProlong(pack)}
+                  className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1.5 text-sm font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+                >
+                  Prolongation
+                </button>
+              ) : null}
+              {badgeKind === "prolonged" ? (
+                <button
+                  type="button"
+                  disabled={
+                    cancellingEnrollmentId === pack.enrollmentId ||
+                    (isDeletingPack && packToDelete?.enrollmentId === pack.enrollmentId) ||
+                    isProlongingPack
+                  }
+                  onClick={() => void handleCancelProlongation(pack.enrollmentId)}
+                  className="text-sm font-medium text-red-700 hover:text-red-800 disabled:opacity-50"
+                >
+                  {cancellingEnrollmentId === pack.enrollmentId
+                    ? "Annulation…"
+                    : "Annuler la prolongation"}
+                </button>
+              ) : null}
+              {pack.consumedSessions === 0 ? (
+                <button
+                  type="button"
+                  disabled={
+                    isDeletingPack ||
+                    cancellingEnrollmentId === pack.enrollmentId ||
+                    isProlongingPack
+                  }
+                  onClick={() => setPackToDelete(pack)}
+                  className="text-sm font-medium text-red-700 hover:text-red-800 disabled:opacity-50"
+                >
+                  Supprimer le pack
+                </button>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -387,17 +514,60 @@ export function MemberOwnedPacksPanel({ memberId, reloadToken = 0 }: MemberOwned
     );
   }
 
+  const deleteDialogDescription = packToDelete
+    ? [
+        packToDelete.isRenewal
+          ? `Supprimer l'achat « ${packToDelete.packName} » pour cette adhérente ?`
+          : `Supprimer le pack « ${packToDelete.packName} » pour cette adhérente ?`,
+        packToDelete.totalPaidDinars > 0
+          ? `L'encaissement de ${packToDelete.totalPaidDinars} DT sera aussi retiré de la caisse.`
+          : "S'il existe un encaissement lié, il sera aussi retiré de la caisse.",
+      ].join(" ")
+    : undefined;
+
   return (
     <div className="space-y-4">
       {renderPackSection("Prolongé", prolongedItems)}
       {renderPackSection("En cours", activeItems)}
       {renderPackSection("En attente", pendingItems)}
+      {renderPackSection("Expiré · séances restantes", expiredProlongableItems)}
       {historyItems.length > 0 ? (
         <div className="space-y-2">
           <p className="text-xs font-semibold uppercase tracking-wide text-brand-dark/50">Historique</p>
           <div className="space-y-2">{historyItems.map(renderPackCard)}</div>
         </div>
       ) : null}
+
+      <ConfirmDialog
+        isOpen={Boolean(packToProlong)}
+        title="Prolonger ce pack ?"
+        description={
+          packToProlong
+            ? `« ${packToProlong.packName} » est expiré et il reste ${packToProlong.remainingSessions} séance${packToProlong.remainingSessions > 1 ? "s" : ""}. La validité reprend aujourd’hui ; les séances restantes sont conservées.`
+            : undefined
+        }
+        confirmText="Prolonger"
+        confirmingText="Prolongation…"
+        cancelText="Annuler"
+        isConfirming={isProlongingPack}
+        onClose={() => {
+          if (!isProlongingPack) setPackToProlong(null);
+        }}
+        onConfirm={() => void handleConfirmProlongPack()}
+      />
+
+      <ConfirmDialog
+        isOpen={Boolean(packToDelete)}
+        title="Supprimer ce pack ?"
+        description={deleteDialogDescription}
+        confirmText="Supprimer"
+        cancelText="Annuler"
+        isConfirming={isDeletingPack}
+        onClose={() => {
+          if (!isDeletingPack) setPackToDelete(null);
+        }}
+        onConfirm={() => void handleConfirmDeletePack()}
+      />
     </div>
   );
 }

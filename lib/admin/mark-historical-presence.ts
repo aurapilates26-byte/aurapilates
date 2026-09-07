@@ -225,13 +225,40 @@ export async function markHistoricalPresence(input: {
           }
 
           if (existing?.status === "BOOKED") {
+            // BOOKED futur : déjà débité à la réservation.
+            // BOOKED passé : hors solde débitable → débiter à la présence historique.
+            const needsDebit =
+              sessionDateLocal.getTime() < startOfLocalToday().getTime();
+            let debitedPackId = existing.debitedPackId ?? preferredPackId;
+            let packStartAdjusted = false;
+
+            if (needsDebit) {
+              const selected = await preparePackForAdminPresenceDebit(tx, {
+                memberId: input.memberId,
+                memberPackId: member.packId,
+                memberPackStartedAt: member.packStartedAt,
+                courseSlug: planning.courseSlug,
+                sessionDateDb,
+                sessionDateLocal,
+                preferredPackId,
+              });
+              await debitSelectedPackSession(tx, {
+                memberId: input.memberId,
+                pack: selected.pack,
+                courseSlug: planning.courseSlug,
+                sessionDateDb,
+              });
+              debitedPackId = selected.pack.id;
+              packStartAdjusted = true;
+            }
+
             await tx.reservation.update({
               where: { id: existing.id },
               data: {
                 status: "ATTENDED",
                 source: "ADMIN",
                 createdByUserId: input.createdByUserId ?? null,
-                debitedPackId: existing.debitedPackId ?? preferredPackId,
+                debitedPackId,
               },
             });
             await tx.attendance.create({
@@ -243,7 +270,11 @@ export async function markHistoricalPresence(input: {
                 markedBy: HISTORICAL_PRESENCE_MARKED_BY.BOOKED,
               },
             });
-            return { reservationId: existing.id, alreadyMarked: false, packStartAdjusted: false };
+            return {
+              reservationId: existing.id,
+              alreadyMarked: false,
+              packStartAdjusted,
+            };
           }
 
           if (existing?.status === "CANCELLED" && !existing.packRefundedAt) {

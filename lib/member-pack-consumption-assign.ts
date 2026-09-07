@@ -3,6 +3,7 @@ import { getEnrollmentPeriodBounds, type EnrollmentPeriodRow } from "@/lib/membe
 import { getEligibilityForPack, isCourseAllowedForPack } from "@/lib/pack-eligibility";
 
 export type EnrollmentConsumptionTarget = EnrollmentPeriodRow & {
+  additionalSessionsCredit?: number;
   pack: {
     sessionCount: number | null;
     category?: string | null;
@@ -39,11 +40,18 @@ function sessionInPeriod(
   return true;
 }
 
-function packCap(pack: EnrollmentConsumptionTarget["pack"]): number | null {
+function catalogPackCap(pack: EnrollmentConsumptionTarget["pack"]): number | null {
   if (pack.courseQuotas.length > 0) {
     return pack.courseQuotas.reduce((sum, q) => sum + q.sessionCount, 0);
   }
   return pack.sessionCount;
+}
+
+/** Capacité inscription = catalogue + séances supplémentaires. */
+export function enrollmentSessionCap(enrollment: EnrollmentConsumptionTarget): number | null {
+  const base = catalogPackCap(enrollment.pack);
+  if (base == null) return null;
+  return base + Math.max(0, enrollment.additionalSessionsCredit ?? 0);
 }
 
 /**
@@ -56,18 +64,21 @@ export function assignConsumedReservationsToEnrollments(
 ): Map<string, EnrollmentConsumptionAlloc> {
   const result = new Map<string, EnrollmentConsumptionAlloc>();
   const boundsById = new Map<string, { periodStart: Date | null; periodEndExclusive: Date | null }>();
+  const capById = new Map<string, number | null>();
 
   for (const enrollment of enrollmentsAsc) {
     const pack = enrollment.pack;
     const hasQuotas = pack.courseQuotas.length > 0;
-    const totalCap = packCap(pack);
+    const credit = Math.max(0, enrollment.additionalSessionsCredit ?? 0);
+    const totalCap = enrollmentSessionCap(enrollment);
+    capById.set(enrollment.id, totalCap);
     const consumedByCourse = new Map<string, number>();
     const remainingByCourse = new Map<string, number>();
     if (hasQuotas) {
-      for (const q of pack.courseQuotas) {
+      pack.courseQuotas.forEach((q, index) => {
         consumedByCourse.set(q.courseSlug, 0);
-        remainingByCourse.set(q.courseSlug, q.sessionCount);
-      }
+        remainingByCourse.set(q.courseSlug, q.sessionCount + (index === 0 ? credit : 0));
+      });
     }
     result.set(enrollment.id, {
       enrollmentId: enrollment.id,
@@ -116,7 +127,7 @@ export function assignConsumedReservationsToEnrollments(
       );
     }
     alloc.consumedTotal += 1;
-    const totalCap = packCap(pack);
+    const totalCap = capById.get(chosen.id) ?? null;
     alloc.remainingTotal =
       totalCap != null ? Math.max(0, totalCap - alloc.consumedTotal) : Number.POSITIVE_INFINITY;
     if (!alloc.firstSessionDate) alloc.firstSessionDate = reservation.sessionDate;

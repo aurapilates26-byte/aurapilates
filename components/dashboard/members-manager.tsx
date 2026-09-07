@@ -62,9 +62,14 @@ function memberMatchesSearch(member: MemberItem, query: string): boolean {
   );
 }
 
-function sortMembersByCreatedAtDesc(members: MemberItem[]): MemberItem[] {
+function memberPackAddedAt(member: Pick<MemberItem, "lastPackPurchasedAt" | "createdAt">): string {
+  return member.lastPackPurchasedAt || member.createdAt;
+}
+
+function sortMembersByLatestPackDesc(members: MemberItem[]): MemberItem[] {
   return [...members].sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    (a, b) =>
+      new Date(memberPackAddedAt(b)).getTime() - new Date(memberPackAddedAt(a)).getTime(),
   );
 }
 
@@ -253,6 +258,8 @@ type MemberItem = {
   remainingDinars?: number | null;
   depositPaymentMethod?: "CASH" | "CHECK" | "TPE" | null;
   createdAt: string;
+  /** Date d'achat / ajout du dernier pack (sinon date de création membre). */
+  lastPackPurchasedAt?: string;
   updatedAt: string;
   qrCode:
     | {
@@ -369,7 +376,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
   }, [packFilterId, packs, packsForListFilter]);
 
   const filteredItems = useMemo(() => {
-    return sortMembersByCreatedAtDesc(
+    return sortMembersByLatestPackDesc(
       items.filter((m) => {
         if (!memberMatchesSearch(m, search)) return false;
         if (packFilterId !== "ALL" && m.pack?.id !== packFilterId) return false;
@@ -456,7 +463,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
         throw new Error(data?.error ?? "Impossible de charger les adhérentes.");
       }
       const data = (await response.json()) as MembersResponse;
-      const sorted = sortMembersByCreatedAtDesc(data.items);
+      const sorted = sortMembersByLatestPackDesc(data.items);
       setItems(sorted);
       if (onUnpaidCountChange) {
         onUnpaidCountChange(sorted.filter((m) => (m.paymentStatus ?? "PAID") === "ADVANCE").length);
@@ -1141,8 +1148,8 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                         </p>
                         <p className="mt-1 text-xs text-brand-dark/65">
                           {paymentStatusFilter === "ADVANCE"
-                            ? `Inscrite le ${formatMemberCreatedAt(m.createdAt)}`
-                            : `Ajoutée le ${formatMemberCreatedAt(m.createdAt)}`}
+                            ? `Inscrite le ${formatMemberCreatedAt(memberPackAddedAt(m))}`
+                            : `Ajoutée le ${formatMemberCreatedAt(memberPackAddedAt(m))}`}
                         </p>
                       </div>
                       <div className="flex flex-wrap items-center gap-1.5">
@@ -1286,7 +1293,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                             </td>
                             <td className="px-4 py-4 text-center text-brand-dark/80">{m.phone ?? "—"}</td>
                             <td className="px-4 py-4 text-center tabular-nums text-brand-dark/80">
-                              {formatMemberCreatedAt(m.createdAt)}
+                              {formatMemberCreatedAt(memberPackAddedAt(m))}
                             </td>
                           </>
                         ) : (
@@ -1320,7 +1327,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                               <MemberPackCell memberId={m.id} packName={m.pack?.name} packStates={packStates} />
                             </td>
                             <td className="px-4 py-4 text-center tabular-nums text-brand-dark/80">
-                              {formatMemberCreatedAt(m.createdAt)}
+                              {formatMemberCreatedAt(memberPackAddedAt(m))}
                             </td>
                             <td className="px-4 py-4 text-center">
                               <span

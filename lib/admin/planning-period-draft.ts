@@ -96,16 +96,25 @@ export function buildDraftScheduleFromRow(row: StudioPlanningPeriod): PlanningPe
   };
 }
 
-export async function publishDraftPeriod(row: StudioPlanningPeriod): Promise<void> {
-  if (!row.draftPeriodStartDate || !row.draftBookingWindow) return;
+export type PublishDraftPeriodResult = {
+  ok: boolean;
+  /** Nombre de créneaux brouillon basculés en publiés. */
+  publishedCount: number;
+  /** Singleton avancé alors que les créneaux étaient déjà publiés sur la semaine brouillon. */
+  adoptedExisting?: boolean;
+};
 
-  const { archiveCurrentPublishedPeriod } = await import("@/lib/admin/planning-period-archive");
-  await archiveCurrentPublishedPeriod();
+/**
+ * Bascule le brouillon en période publiée.
+ * - Ne détruit plus les brouillons en chevauchement avant d'avoir un plan de secours
+ *   (évite le no-op silencieux + semaine vide).
+ * - Si tous les brouillons chevauchent déjà du publié : avance le singleton (adopt).
+ */
+export async function publishDraftPeriod(row: StudioPlanningPeriod): Promise<PublishDraftPeriodResult> {
+  if (!row.draftPeriodStartDate || !row.draftBookingWindow) {
+    return { ok: false, publishedCount: 0 };
+  }
 
-  const bookingWindow = row.draftBookingWindow;
-  const periodStartDate = row.draftPeriodStartDate;
-
-  // Supprime les brouillons qui chevauchent déjà un créneau publié (évite les doublons à la bascule).
   const drafts = await prisma.planning.findMany({
     where: { isDraft: true },
     select: {
@@ -116,8 +125,14 @@ export async function publishDraftPeriod(row: StudioPlanningPeriod): Promise<voi
     },
   });
   const { findOverlappingPlanningSlot } = await import("@/lib/admin/planning-slot-duplicate");
+  const publishableIds: string[] = [];
+  const overlappingDraftIds: string[] = [];
+
   for (const draft of drafts) {
-    if (!draft.anchorSessionYmd) continue;
+    if (!draft.anchorSessionYmd) {
+      overlappingDraftIds.push(draft.id);
+      continue;
+    }
     const overlap = await findOverlappingPlanningSlot(prisma, {
       anchorSessionYmd: draft.anchorSessionYmd,
       courseSlug: draft.courseSlug,
@@ -125,9 +140,64 @@ export async function publishDraftPeriod(row: StudioPlanningPeriod): Promise<voi
       isDraft: false,
     });
     if (overlap) {
-      await prisma.planning.delete({ where: { id: draft.id } });
+      overlappingDraftIds.push(draft.id);
+      continue;
     }
+    publishableIds.push(draft.id);
   }
+
+  if (publishableIds.length === 0) {
+    const draftCfg = buildPlanningPeriodConfig(
+      toPlanningBookingWindow(row.draftBookingWindow),
+      periodStartFromRow(row.draftPeriodStartDate),
+    );
+    const periodStart = parseYmdToPrismaDate(draftCfg.periodStartYmd);
+    const periodEnd = parseYmdToPrismaDate(draftCfg.periodEndYmd);
+    const alreadyPublishedCount =
+      periodStart && periodEnd
+        ? await prisma.planning.count({
+            where: {
+              isDraft: false,
+              anchorSessionYmd: { gte: periodStart, lte: periodEnd },
+            },
+          })
+        : 0;
+
+    if (alreadyPublishedCount === 0) {
+      return { ok: false, publishedCount: 0 };
+    }
+
+    const { archiveCurrentPublishedPeriod } = await import("@/lib/admin/planning-period-archive");
+    await archiveCurrentPublishedPeriod();
+
+    await prisma.$transaction([
+      prisma.studioPlanningPeriod.update({
+        where: { id: SINGLETON_ID },
+        data: {
+          bookingWindow: row.draftBookingWindow,
+          periodStartDate: row.draftPeriodStartDate,
+          draftPeriodStartDate: null,
+          draftBookingWindow: null,
+          draftPublishAt: null,
+          draftSundayPublishAt: null,
+          draftPublicationPhase: null,
+        },
+      }),
+      prisma.planning.updateMany({
+        where: { isDraft: false },
+        data: { bookingWindow: row.draftBookingWindow },
+      }),
+    ]);
+
+    await safelyCleanupDraftSlotsAfterPublish(overlappingDraftIds);
+    return { ok: true, publishedCount: 0, adoptedExisting: true };
+  }
+
+  const { archiveCurrentPublishedPeriod } = await import("@/lib/admin/planning-period-archive");
+  await archiveCurrentPublishedPeriod();
+
+  const bookingWindow = row.draftBookingWindow;
+  const periodStartDate = row.draftPeriodStartDate;
 
   await prisma.$transaction([
     prisma.studioPlanningPeriod.update({
@@ -143,7 +213,7 @@ export async function publishDraftPeriod(row: StudioPlanningPeriod): Promise<voi
       },
     }),
     prisma.planning.updateMany({
-      where: { isDraft: true },
+      where: { id: { in: publishableIds } },
       data: { isDraft: false, bookingWindow, draftSourceId: null },
     }),
     prisma.planning.updateMany({
@@ -151,6 +221,94 @@ export async function publishDraftPeriod(row: StudioPlanningPeriod): Promise<voi
       data: { bookingWindow },
     }),
   ]);
+
+  await safelyCleanupDraftSlotsAfterPublish(overlappingDraftIds);
+  return { ok: true, publishedCount: publishableIds.length };
+}
+
+/**
+ * Nettoie les brouillons restants sans casser les réservations :
+ * - sans résa → suppression
+ * - avec résa + chevauchement publié → bascule des résas puis suppression
+ * - avec résa sans chevauchement → promotion en publié
+ */
+async function safelyCleanupDraftSlotsAfterPublish(draftIds: string[]): Promise<void> {
+  if (draftIds.length === 0) {
+    const leftover = await prisma.planning.findMany({
+      where: { isDraft: true },
+      select: { id: true },
+    });
+    draftIds = leftover.map((d) => d.id);
+  }
+  if (draftIds.length === 0) return;
+
+  const { findOverlappingPlanningSlot } = await import("@/lib/admin/planning-slot-duplicate");
+
+  for (const id of draftIds) {
+    const draft = await prisma.planning.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        isDraft: true,
+        courseSlug: true,
+        startTime: true,
+        anchorSessionYmd: true,
+      },
+    });
+    if (!draft?.isDraft) continue;
+
+    const reservationCount = await prisma.reservation.count({
+      where: { planningId: draft.id },
+    });
+
+    if (reservationCount === 0) {
+      await prisma.planning.delete({ where: { id: draft.id } });
+      continue;
+    }
+
+    let publishedId: string | null = null;
+    if (draft.anchorSessionYmd) {
+      const overlap = await findOverlappingPlanningSlot(prisma, {
+        anchorSessionYmd: draft.anchorSessionYmd,
+        courseSlug: draft.courseSlug,
+        startTime: draft.startTime,
+        isDraft: false,
+      });
+      publishedId = overlap?.id ?? null;
+    }
+
+    if (publishedId) {
+      const reservations = await prisma.reservation.findMany({
+        where: { planningId: draft.id },
+        select: { id: true, memberId: true, sessionDate: true },
+      });
+      for (const reservation of reservations) {
+        const clash = await prisma.reservation.findFirst({
+          where: {
+            memberId: reservation.memberId,
+            planningId: publishedId,
+            sessionDate: reservation.sessionDate,
+          },
+          select: { id: true },
+        });
+        if (clash) {
+          await prisma.reservation.delete({ where: { id: reservation.id } });
+        } else {
+          await prisma.reservation.update({
+            where: { id: reservation.id },
+            data: { planningId: publishedId },
+          });
+        }
+      }
+      await prisma.planning.delete({ where: { id: draft.id } });
+      continue;
+    }
+
+    await prisma.planning.update({
+      where: { id: draft.id },
+      data: { isDraft: false, draftSourceId: null },
+    });
+  }
 }
 
 /** Bascule auto : samedi 13h (partiel) puis dimanche 13h (complet). */
@@ -214,19 +372,43 @@ export async function saveDraftPeriodSchedule(input: {
 }
 
 export async function clearDraftPeriodSchedule(): Promise<void> {
-  await prisma.$transaction([
-    prisma.studioPlanningPeriod.update({
-      where: { id: SINGLETON_ID },
-      data: {
-        draftPeriodStartDate: null,
-        draftBookingWindow: null,
-        draftPublishAt: null,
-        draftSundayPublishAt: null,
-        draftPublicationPhase: null,
-      },
-    }),
-    prisma.planning.deleteMany({ where: { isDraft: true } }),
-  ]);
+  await clearDraftPeriodScheduleSafe();
+}
+
+/**
+ * Efface la programmation brouillon. Ne supprime un créneau brouillon que s'il
+ * n'a aucune réservation (évite le wipe cascade du catch-up lundi).
+ */
+export async function clearDraftPeriodScheduleSafe(): Promise<void> {
+  await prisma.studioPlanningPeriod.update({
+    where: { id: SINGLETON_ID },
+    data: {
+      draftPeriodStartDate: null,
+      draftBookingWindow: null,
+      draftPublishAt: null,
+      draftSundayPublishAt: null,
+      draftPublicationPhase: null,
+    },
+  });
+
+  const drafts = await prisma.planning.findMany({
+    where: { isDraft: true },
+    select: { id: true },
+  });
+  for (const draft of drafts) {
+    const reservationCount = await prisma.reservation.count({
+      where: { planningId: draft.id },
+    });
+    if (reservationCount === 0) {
+      await prisma.planning.delete({ where: { id: draft.id } });
+    } else {
+      // Conserve les créneaux réservés en les passant publiés (période sera réalignée).
+      await prisma.planning.update({
+        where: { id: draft.id },
+        data: { isDraft: false, draftSourceId: null },
+      });
+    }
+  }
   await clearAllDraftMirrorSuppressions();
 }
 

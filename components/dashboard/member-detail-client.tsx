@@ -1779,7 +1779,12 @@ export function MemberDetailClient({
                             : "Pas encore démarré"}
                         </InfoField>
                         <InfoField label="Séances utilisées">{selectedPack.consumedSessions}</InfoField>
-                        <InfoField label="Séances restantes">{selectedPack.remainingSessions}</InfoField>
+                        <InfoField label="Séances restantes (fiche)">
+                          {selectedPack.remainingSessions}
+                        </InfoField>
+                        <InfoField label="Encore réservables">
+                          {selectedPack.remainingForCourse}
+                        </InfoField>
                       </div>
                     </div>
                   );

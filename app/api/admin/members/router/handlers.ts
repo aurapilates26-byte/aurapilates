@@ -96,6 +96,7 @@ function mapMember(
     pack: { id: string; name: string; durationDays: string | null } | null;
     assignedQrCodes: { publicId: string; qrKey: string; status: string; updatedAt: Date }[];
     convertedFromProspects?: { id: string; status: string }[];
+    packEnrollments?: { purchasedAt: Date }[];
   },
   paymentTotals?: {
     totalPaid: number;
@@ -109,6 +110,7 @@ function mapMember(
     record.packStartedAt && record.pack?.durationDays
       ? addPackDurationToStartDate(record.packStartedAt, record.pack.durationDays)
       : null;
+  const lastPackPurchasedAt = record.packEnrollments?.[0]?.purchasedAt ?? record.createdAt;
 
   return {
     id: record.id,
@@ -150,6 +152,8 @@ function mapMember(
             : null,
     }),
     createdAt: record.createdAt,
+    /** Date d'ajout / achat du dernier pack (colonne liste adhérentes). */
+    lastPackPurchasedAt,
     updatedAt: record.updatedAt,
     qrCode: qr
       ? {
@@ -166,6 +170,11 @@ const memberListInclude = {
   user: { select: { email: true } },
   pack: { select: { id: true, name: true, durationDays: true } },
   packPayments: { select: { amountDinars: true, packId: true, paymentKind: true, paymentMethod: true } },
+  packEnrollments: {
+    orderBy: [{ purchasedAt: "desc" as const }, { createdAt: "desc" as const }],
+    take: 1,
+    select: { purchasedAt: true },
+  },
   assignedQrCodes: {
     orderBy: { updatedAt: "desc" as const },
     take: 1,

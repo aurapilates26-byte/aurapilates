@@ -6,6 +6,10 @@ import {
   changeMemberPackEnrollmentAndList,
   changeMemberPackEnrollmentErrorMessage,
 } from "@/lib/admin/change-member-pack-enrollment";
+import {
+  deleteMemberPackEnrollmentAndList,
+  deleteMemberPackEnrollmentErrorMessage,
+} from "@/lib/admin/delete-member-pack-enrollment";
 import { PACK_PAYMENT_METHODS } from "@/lib/pack-payment-method";
 
 function errorResponse(message: string, status: number) {
@@ -54,5 +58,23 @@ export async function PATCH(request: Request, { params }: Params) {
     const code = e instanceof Error ? e.message : "UNKNOWN";
     const status = code === "NOT_FOUND" || code === "PACK_NOT_FOUND" ? 404 : code === "INVALID_ADDITIONAL_SESSIONS" ? 400 : 409;
     return errorResponse(changeMemberPackEnrollmentErrorMessage(code), status);
+  }
+}
+
+export async function DELETE(_request: Request, { params }: Params) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return errorResponse("Unauthorized", 401);
+  if (!isStaffRole(session.user.role)) return errorResponse("Forbidden", 403);
+
+  const { id: memberId, enrollmentId } = await params;
+
+  try {
+    const items = await deleteMemberPackEnrollmentAndList({ memberId, enrollmentId });
+    return Response.json({ ok: true, items });
+  } catch (e) {
+    const code = e instanceof Error ? e.message : "UNKNOWN";
+    const status =
+      code === "NOT_FOUND" ? 404 : code === "HAS_CONSUMED_SESSIONS" ? 409 : 400;
+    return errorResponse(deleteMemberPackEnrollmentErrorMessage(code), status);
   }
 }

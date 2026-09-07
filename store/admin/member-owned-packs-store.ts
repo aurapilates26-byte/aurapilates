@@ -62,6 +62,9 @@ export function selectOwnedPacksForMember(memberId: string) {
     state.byMemberId[memberId] ?? EMPTY_MEMBER_OWNED_PACKS;
 }
 
+/** Une seule requête HTTP par adhérente si plusieurs panneaux rechargent en parallèle. */
+const inflightLoadPacks = new Map<string, Promise<MemberOwnedPackDto[]>>();
+
 export const useMemberOwnedPacksStore = create<MemberOwnedPacksStoreState>((set, get) => ({
   byMemberId: {},
   loadingByMemberId: {},
@@ -83,35 +86,46 @@ export const useMemberOwnedPacksStore = create<MemberOwnedPacksStoreState>((set,
     }),
 
   loadPacks: async (memberId) => {
-    set((state) => ({
-      loadingByMemberId: { ...state.loadingByMemberId, [memberId]: true },
-      errorByMemberId: { ...state.errorByMemberId, [memberId]: null },
-    }));
-    try {
-      const response = await fetch(`/api/admin/members/${encodeURIComponent(memberId)}/owned-packs`, {
-        cache: "no-store",
-      });
-      if (!response.ok) {
-        const data = (await response.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(data?.error ?? "Chargement impossible.");
-      }
-      const data = (await response.json()) as { items: MemberOwnedPackDto[] };
-      const items = sortOwnedPacks(data.items ?? []);
+    const existing = inflightLoadPacks.get(memberId);
+    if (existing) return existing;
+
+    const promise = (async (): Promise<MemberOwnedPackDto[]> => {
       set((state) => ({
-        byMemberId: { ...state.byMemberId, [memberId]: items },
-        loadingByMemberId: { ...state.loadingByMemberId, [memberId]: false },
+        loadingByMemberId: { ...state.loadingByMemberId, [memberId]: true },
         errorByMemberId: { ...state.errorByMemberId, [memberId]: null },
-        revision: state.revision + 1,
       }));
-      return items;
-    } catch (e) {
-      const message = e instanceof Error ? e.message : "Erreur";
-      set((state) => ({
-        loadingByMemberId: { ...state.loadingByMemberId, [memberId]: false },
-        errorByMemberId: { ...state.errorByMemberId, [memberId]: message },
-      }));
-      throw e;
-    }
+      try {
+        const response = await fetch(`/api/admin/members/${encodeURIComponent(memberId)}/owned-packs`, {
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          const data = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(data?.error ?? "Chargement impossible.");
+        }
+        const data = (await response.json()) as { items: MemberOwnedPackDto[] };
+        const items = sortOwnedPacks(data.items ?? []);
+        set((state) => ({
+          byMemberId: { ...state.byMemberId, [memberId]: items },
+          loadingByMemberId: { ...state.loadingByMemberId, [memberId]: false },
+          errorByMemberId: { ...state.errorByMemberId, [memberId]: null },
+          revision: state.revision + 1,
+        }));
+        return items;
+      } catch (e) {
+        const message = e instanceof Error ? e.message : "Erreur";
+        set((state) => ({
+          loadingByMemberId: { ...state.loadingByMemberId, [memberId]: false },
+          errorByMemberId: { ...state.errorByMemberId, [memberId]: message },
+        }));
+        // Ne pas relancer : les appels `void loadPacks()` provoquaient un overlay Next.js.
+        return get().byMemberId[memberId] ?? [];
+      } finally {
+        inflightLoadPacks.delete(memberId);
+      }
+    })();
+
+    inflightLoadPacks.set(memberId, promise);
+    return promise;
   },
 
   consumeOldestOpenPackOptimistic: (memberId, packId, sessionDateIso) => {
