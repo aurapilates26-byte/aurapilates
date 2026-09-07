@@ -93,6 +93,11 @@ export async function maybeRollForwardExpiredPublishedPeriod(): Promise<boolean>
     await prisma.planning.updateMany({
       data: { bookingWindow: next.bookingWindow as BookingWindow },
     });
+
+    // Sans brouillon : recopier les créneaux de la période expirée vers la nouvelle période.
+    const { clonePublishedSlotsBetweenPeriods } = await import("@/lib/admin/planning-draft-sync");
+    await clonePublishedSlotsBetweenPeriods(config, next);
+
     rolled = true;
   }
 

@@ -10,9 +10,9 @@ import {
 } from "@/lib/admin/planning-admin-calendar-period";
 import { buildPlanningPeriodConfig } from "@/lib/admin/planning-period-config";
 import {
-  draftPeriodConfigOrNull,
   saveDraftPeriodSchedule,
 } from "@/lib/admin/planning-period-draft";
+import { findOverlappingPlanningSlot } from "@/lib/admin/planning-slot-duplicate";
 import {
   addLocalDays,
   formatYmdLocal,
@@ -25,7 +25,10 @@ import {
   clearAllDraftMirrorSuppressions,
 } from "@/lib/admin/planning-draft-mirror-suppression";
 import { prisma } from "@/lib/prisma";
-import { proposeNextPlanningPeriod } from "@/lib/planning-period-status";
+import {
+  proposeNextPlanningPeriod,
+  proposePreviousPlanningPeriod,
+} from "@/lib/planning-period-status";
 import type { PlanningPeriodConfig } from "@/types/admin/planning";
 
 const SINGLETON_ID = "singleton";
@@ -104,6 +107,24 @@ async function clearStalePublishedMirrorLink(sourceId: string): Promise<void> {
   });
 }
 
+function occurrenceKey(slot: Pick<Planning, "courseSlug" | "startTime" | "anchorSessionYmd">): string {
+  const ymd = slot.anchorSessionYmd ? formatYmdPrismaDate(slot.anchorSessionYmd) : "null";
+  return `${ymd}|${slot.courseSlug}|${slot.startTime}`;
+}
+
+/** Garde un seul créneau par date + cours + heure (évite de propager des doublons). */
+function dedupeSlotsByOccurrence(slots: Planning[]): Planning[] {
+  const byKey = new Map<string, Planning>();
+  for (const slot of slots) {
+    const key = occurrenceKey(slot);
+    const existing = byKey.get(key);
+    if (!existing || slot.createdAt < existing.createdAt) {
+      byKey.set(key, slot);
+    }
+  }
+  return [...byKey.values()];
+}
+
 /** Crée le miroir brouillon s'il manque, sans modifier les créneaux publiés. */
 async function createDraftMirrorIfMissing(source: Planning, draftAnchor: Date): Promise<void> {
   const existingDraft = await prisma.planning.findFirst({
@@ -111,6 +132,14 @@ async function createDraftMirrorIfMissing(source: Planning, draftAnchor: Date): 
     select: { id: true },
   });
   if (existingDraft) return;
+
+  const overlap = await findOverlappingPlanningSlot(prisma, {
+    anchorSessionYmd: draftAnchor,
+    courseSlug: source.courseSlug,
+    startTime: source.startTime,
+    isDraft: true,
+  });
+  if (overlap) return;
 
   await clearStalePublishedMirrorLink(source.id);
 
@@ -150,28 +179,102 @@ function mirrorUpdateDataFromSource(
 }
 
 /** Copie publiée (sans lien draftSource) — pour peupler une période en cours vide. */
-function publishedCloneFromSource(
+async function createPublishedCloneIfMissing(
   source: Planning,
   targetAnchorDate: Date,
-): Prisma.PlanningCreateInput {
+): Promise<boolean> {
+  const overlap = await findOverlappingPlanningSlot(prisma, {
+    anchorSessionYmd: targetAnchorDate,
+    courseSlug: source.courseSlug,
+    startTime: source.startTime,
+    isDraft: false,
+  });
+  if (overlap) return false;
+
   const dayOfWeek = prismaDayOfWeekFromLocalDate(
     parseYmdLocal(formatYmdPrismaDate(targetAnchorDate)) ?? targetAnchorDate,
   );
 
-  return {
-    courseSlug: source.courseSlug,
-    coach: source.coachId ? { connect: { id: source.coachId } } : undefined,
-    dayOfWeek,
-    anchorSessionYmd: targetAnchorDate,
-    isDraft: false,
-    level: source.level,
-    bookingWindow: source.bookingWindow,
-    startTime: source.startTime,
-    endTime: source.endTime,
-    durationMinutes: source.durationMinutes,
-    capacity: source.capacity,
-    waitlistCapacity: source.waitlistCapacity,
-  };
+  await prisma.planning.create({
+    data: {
+      courseSlug: source.courseSlug,
+      coach: source.coachId ? { connect: { id: source.coachId } } : undefined,
+      dayOfWeek,
+      anchorSessionYmd: targetAnchorDate,
+      isDraft: false,
+      level: source.level,
+      bookingWindow: source.bookingWindow,
+      startTime: source.startTime,
+      endTime: source.endTime,
+      durationMinutes: source.durationMinutes,
+      capacity: source.capacity,
+      waitlistCapacity: source.waitlistCapacity,
+    },
+  });
+  return true;
+}
+
+/**
+ * Si la période publiée est vide, la peuple depuis la période précédente
+ * (après un roll-forward sans brouillon, ou une publication vide).
+ */
+export async function ensureEmptyPublishedPeriodSeeded(
+  publishedPeriod?: PlanningPeriodConfig,
+): Promise<number> {
+  const published = publishedPeriod ?? (await readPublishedConfig());
+  const existing = await sourceSlotsInPeriod(published);
+  if (existing.length > 0) return 0;
+
+  const previous = proposePreviousPlanningPeriod(published);
+  if (!previous) return 0;
+
+  const sourceSlots = dedupeSlotsByOccurrence(await sourceSlotsInPeriod(previous));
+  if (sourceSlots.length === 0) return 0;
+
+  let created = 0;
+  for (const slot of sourceSlots) {
+    const anchorYmd = slot.anchorSessionYmd ? formatYmdPrismaDate(slot.anchorSessionYmd) : null;
+    if (!anchorYmd) continue;
+    const shifted = shiftAnchorToDraftPeriod(
+      anchorYmd,
+      previous.periodStartYmd,
+      published.periodStartYmd,
+    );
+    const targetAnchor = parseYmdToPrismaDate(shifted);
+    if (!targetAnchor) continue;
+    if (await createPublishedCloneIfMissing(slot, targetAnchor)) {
+      created += 1;
+    }
+  }
+  return created;
+}
+
+/** Clone les créneaux publiés d'une période vers une autre (roll-forward sans brouillon). */
+export async function clonePublishedSlotsBetweenPeriods(
+  sourcePeriod: PlanningPeriodConfig,
+  targetPeriod: PlanningPeriodConfig,
+): Promise<number> {
+  if (sourcePeriod.periodStartYmd === targetPeriod.periodStartYmd) return 0;
+
+  const sourceSlots = dedupeSlotsByOccurrence(await sourceSlotsInPeriod(sourcePeriod));
+  if (sourceSlots.length === 0) return 0;
+
+  let created = 0;
+  for (const slot of sourceSlots) {
+    const anchorYmd = slot.anchorSessionYmd ? formatYmdPrismaDate(slot.anchorSessionYmd) : null;
+    if (!anchorYmd) continue;
+    const shifted = shiftAnchorToDraftPeriod(
+      anchorYmd,
+      sourcePeriod.periodStartYmd,
+      targetPeriod.periodStartYmd,
+    );
+    const targetAnchor = parseYmdToPrismaDate(shifted);
+    if (!targetAnchor) continue;
+    if (await createPublishedCloneIfMissing(slot, targetAnchor)) {
+      created += 1;
+    }
+  }
+  return created;
 }
 
 function periodStartFromRow(periodStartDate: Date): Date {
@@ -210,6 +313,7 @@ async function readDraftConfig(): Promise<PlanningPeriodConfig | null> {
 }
 
 async function getCalendarContext(): Promise<{
+  published: PlanningPeriodConfig;
   calendarCurrent: CalendarCurrentPeriod;
   expectedNext: PlanningPeriodConfig;
   draft: PlanningPeriodConfig;
@@ -223,7 +327,9 @@ async function getCalendarContext(): Promise<{
     throw new Error("Impossible de déterminer la période en cours.");
   }
 
-  const expectedNext = proposeNextPlanningPeriod(calendarCurrent.period);
+  // Brouillon = toujours la période APRÈS le singleton publié (jamais les dates publiées).
+  // Utiliser calendarCurrent ici créait des miroirs sur la période en cours → doublons à la publication.
+  const expectedNext = proposeNextPlanningPeriod(published);
   let draft = await readDraftConfig();
 
   if (!draft || draft.periodStartYmd !== expectedNext.periodStartYmd) {
@@ -238,7 +344,7 @@ async function getCalendarContext(): Promise<{
     draft = expectedNext;
   }
 
-  return { calendarCurrent, expectedNext, draft };
+  return { published, calendarCurrent, expectedNext, draft };
 }
 
 async function sourceSlotsInPeriod(period: PlanningPeriodConfig) {
@@ -258,17 +364,18 @@ async function sourceSlotsInPeriod(period: PlanningPeriodConfig) {
 let draftMirrorSyncPromise: Promise<void> | null = null;
 
 async function runEnsureDraftPeriodWithMirrors(): Promise<void> {
-  const { calendarCurrent, draft } = await getCalendarContext();
-  // Uniquement miroir brouillon des créneaux publiés existants — jamais de copie dans la période en cours.
-  const sourceSlots = await sourceSlotsInPeriod(calendarCurrent.period);
+  const { published, draft } = await getCalendarContext();
+
+  await ensureEmptyPublishedPeriodSeeded(published);
+
+  // Miroir depuis la période publiée (en cours) → brouillon suivant uniquement.
+  const sourceSlots = dedupeSlotsByOccurrence(await sourceSlotsInPeriod(published));
   if (sourceSlots.length === 0) return;
 
   const sourceIds = sourceSlots.map((slot) => slot.id);
-  const eligibleSourceIds = sourceSlots
-    .filter((slot) => !slot.draftMirrorSuppressedAt)
-    .map((slot) => slot.id);
+  const eligibleSources = sourceSlots.filter((slot) => !slot.draftMirrorSuppressedAt);
 
-  if (eligibleSourceIds.length === 0) return;
+  if (eligibleSources.length === 0) return;
 
   const existingMirrors = await prisma.planning.findMany({
     where: {
@@ -279,13 +386,15 @@ async function runEnsureDraftPeriodWithMirrors(): Promise<void> {
   });
   const mirroredSourceIds = new Set(existingMirrors.map((row) => row.draftSourceId));
 
-  if (eligibleSourceIds.every((id) => mirroredSourceIds.has(id))) return;
+  if (eligibleSources.every((slot) => mirroredSourceIds.has(slot.id))) return;
 
-  for (const slot of sourceSlots) {
+  for (const slot of eligibleSources) {
     if (mirroredSourceIds.has(slot.id)) continue;
-    if (slot.draftMirrorSuppressedAt) continue;
-    const draftAnchor = draftAnchorDateForSourceSlot(slot, calendarCurrent.period, draft);
+    const draftAnchor = draftAnchorDateForSourceSlot(slot, published, draft);
     if (!draftAnchor) continue;
+    const draftYmd = formatYmdPrismaDate(draftAnchor);
+    // Jamais de miroir sur les dates de la période publiée.
+    if (periodContainsYmd(published, draftYmd)) continue;
     await createDraftMirrorIfMissing(slot, draftAnchor);
   }
 }
@@ -308,39 +417,41 @@ function slotBelongsToPeriod(
   return periodContainsYmd(period, formatYmdPrismaDate(slot.anchorSessionYmd));
 }
 
-export async function syncPublishedCreateToDraft(published: Planning): Promise<void> {
-  if (published.draftMirrorSuppressedAt) return;
-  const { calendarCurrent, draft } = await getCalendarContext();
-  if (!slotBelongsToPeriod(published, calendarCurrent.period)) return;
-  const draftAnchor = draftAnchorDateForSourceSlot(published, calendarCurrent.period, draft);
+export async function syncPublishedCreateToDraft(publishedSlot: Planning): Promise<void> {
+  if (publishedSlot.draftMirrorSuppressedAt) return;
+  const { published, draft } = await getCalendarContext();
+  if (!slotBelongsToPeriod(publishedSlot, published)) return;
+  const draftAnchor = draftAnchorDateForSourceSlot(publishedSlot, published, draft);
   if (!draftAnchor) return;
+  if (periodContainsYmd(published, formatYmdPrismaDate(draftAnchor))) return;
 
-  await createDraftMirrorIfMissing(published, draftAnchor);
+  await createDraftMirrorIfMissing(publishedSlot, draftAnchor);
 }
 
-export async function syncPublishedUpdateToDraft(published: Planning): Promise<void> {
-  if (published.draftMirrorSuppressedAt) return;
-  const { calendarCurrent, draft } = await getCalendarContext();
-  if (!slotBelongsToPeriod(published, calendarCurrent.period)) return;
-  const draftAnchor = draftAnchorDateForSourceSlot(published, calendarCurrent.period, draft);
+export async function syncPublishedUpdateToDraft(publishedSlot: Planning): Promise<void> {
+  if (publishedSlot.draftMirrorSuppressedAt) return;
+  const { published, draft } = await getCalendarContext();
+  if (!slotBelongsToPeriod(publishedSlot, published)) return;
+  const draftAnchor = draftAnchorDateForSourceSlot(publishedSlot, published, draft);
   if (!draftAnchor) return;
+  if (periodContainsYmd(published, formatYmdPrismaDate(draftAnchor))) return;
 
-  await clearStalePublishedMirrorLink(published.id);
+  await clearStalePublishedMirrorLink(publishedSlot.id);
 
   const existingDraft = await prisma.planning.findFirst({
-    where: { draftSourceId: published.id, isDraft: true },
+    where: { draftSourceId: publishedSlot.id, isDraft: true },
     select: { id: true },
   });
 
   if (existingDraft) {
     await prisma.planning.update({
       where: { id: existingDraft.id },
-      data: mirrorUpdateDataFromSource(published, draftAnchor),
+      data: mirrorUpdateDataFromSource(publishedSlot, draftAnchor),
     });
     return;
   }
 
-  await createDraftMirrorIfMissing(published, draftAnchor);
+  await createDraftMirrorIfMissing(publishedSlot, draftAnchor);
 }
 
 export async function syncPublishedDeleteToDraft(publishedId: string): Promise<void> {

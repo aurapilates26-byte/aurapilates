@@ -104,6 +104,31 @@ export async function publishDraftPeriod(row: StudioPlanningPeriod): Promise<voi
 
   const bookingWindow = row.draftBookingWindow;
   const periodStartDate = row.draftPeriodStartDate;
+
+  // Supprime les brouillons qui chevauchent déjà un créneau publié (évite les doublons à la bascule).
+  const drafts = await prisma.planning.findMany({
+    where: { isDraft: true },
+    select: {
+      id: true,
+      courseSlug: true,
+      startTime: true,
+      anchorSessionYmd: true,
+    },
+  });
+  const { findOverlappingPlanningSlot } = await import("@/lib/admin/planning-slot-duplicate");
+  for (const draft of drafts) {
+    if (!draft.anchorSessionYmd) continue;
+    const overlap = await findOverlappingPlanningSlot(prisma, {
+      anchorSessionYmd: draft.anchorSessionYmd,
+      courseSlug: draft.courseSlug,
+      startTime: draft.startTime,
+      isDraft: false,
+    });
+    if (overlap) {
+      await prisma.planning.delete({ where: { id: draft.id } });
+    }
+  }
+
   await prisma.$transaction([
     prisma.studioPlanningPeriod.update({
       where: { id: SINGLETON_ID },
@@ -154,6 +179,20 @@ export async function saveDraftPeriodSchedule(input: {
   const staggered = computeStaggeredPublishTimes(input.periodStartYmd.trim());
   if (!staggered) {
     throw new Error("Date de début du brouillon invalide.");
+  }
+
+  const publishedRow = await prisma.studioPlanningPeriod.findUnique({ where: { id: SINGLETON_ID } });
+  if (publishedRow) {
+    const publishedBookingWindow = toPlanningBookingWindow(publishedRow.bookingWindow);
+    const published = buildPlanningPeriodConfig(
+      publishedBookingWindow,
+      periodStartFromRow(publishedRow.periodStartDate),
+    );
+    if (input.periodStartYmd.trim() <= published.periodEndYmd) {
+      throw new Error(
+        `La prochaine période doit commencer après le ${published.periodEndYmd} (période en cours).`,
+      );
+    }
   }
 
   const row = await prisma.studioPlanningPeriod.update({
