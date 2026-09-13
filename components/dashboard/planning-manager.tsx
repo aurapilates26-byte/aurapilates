@@ -25,7 +25,6 @@ import { buildPeriodDaySelectOptions, weekdayDateLineForPeriod, weekdaysPresentI
 import {
   periodContainsYmd,
   resolveCalendarCurrentPeriod,
-  resolveNextPlanningPeriod,
   resolvePeriodConfigForSessionYmd,
   todayYmdLocal,
   yesterdayYmdLocal,
@@ -225,7 +224,6 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
     );
 
     const calendarCurrent = resolveCalendarCurrentPeriod(todayYmd, periodConfig, ascending);
-    const nextPeriod = resolveNextPlanningPeriod(calendarCurrent);
 
     const slots: PlanningGridNavSlot[] = [];
 
@@ -258,10 +256,27 @@ export const PlanningManager = forwardRef<PlanningManagerHandle, PlanningManager
       });
     }
 
-    if (nextPeriod) {
+    // Dimanche 13h : le singleton est déjà sur la semaine suivante alors que
+    // « aujourd'hui » est encore dans la semaine calendaire précédente.
+    // Exposer la période publiée anticipée entre la semaine courante et le brouillon.
+    if (
+      periodConfig &&
+      calendarCurrent &&
+      periodConfig.periodStartYmd > calendarCurrent.period.periodEndYmd
+    ) {
+      slots.push({
+        kind: "published",
+        period: periodConfig,
+        sessionScope: "published",
+      });
+    }
+
+    // Toujours le vrai brouillon DB — jamais proposeNext(calendrier), sinon après
+    // bascule dimanche : colonnes 14–20 + items brouillon 21–27 → grille vide / total 55.
+    if (draftPeriodConfig) {
       slots.push({
         kind: "draft",
-        period: nextPeriod,
+        period: draftPeriodConfig,
         sessionScope: "draft",
       });
     }

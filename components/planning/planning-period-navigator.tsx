@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import type { PlanningGridNavSlot } from "@/types/admin/planning";
 import { formatPlanningPeriodRangeCompactFr } from "@/lib/planning-period-range-label";
+import { formatYmdLocal, startOfLocalToday } from "@/lib/calendar-day";
 
 type PlanningPeriodNavigatorProps = {
   slot: PlanningGridNavSlot | null;
@@ -14,8 +15,12 @@ type PlanningPeriodNavigatorProps = {
 };
 
 function scopeBadgeLabel(slot: PlanningGridNavSlot): string | null {
-  if (slot.kind === "published") return "Période en cours";
   if (slot.kind === "draft") return "Prochaine période · brouillon";
+  if (slot.kind === "published") {
+    const todayYmd = formatYmdLocal(startOfLocalToday());
+    if (slot.period.periodStartYmd > todayYmd) return "Période publiée · à venir";
+    return "Période en cours";
+  }
   return "Historique";
 }
 
