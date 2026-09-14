@@ -59,7 +59,8 @@ export async function createPackEnrollmentAfterPayment(
   input: {
     memberId: string;
     packId: string;
-    packPaymentId: string;
+    /** null = renouvellement / création en mode Crédit (pas d'encaissement). */
+    packPaymentId: string | null;
     purchasedAt: Date;
   },
 ): Promise<string> {

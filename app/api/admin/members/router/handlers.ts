@@ -31,7 +31,10 @@ import {
 import { deriveMemberPaymentStatus } from "@/lib/admin/member-payment-status";
 import { ensurePaidTrialProspectMembersLinked } from "@/lib/admin/session-prospect";
 import { addParallelMemberPack } from "@/lib/admin/member-owned-packs";
-import { closeOpenEnrollmentsForPack } from "@/lib/admin/member-pack-enrollment";
+import {
+  closeOpenEnrollmentsForPack,
+  createPackEnrollmentAfterPayment,
+} from "@/lib/admin/member-pack-enrollment";
 import {
   decidePackRenewal,
   loadMemberPackState,
@@ -470,7 +473,14 @@ export async function createAdminMember(request: Request) {
         precomputed: paymentPrecomputed,
         paymentMethod: paymentMethod!,
       });
-    } else if (!isCreditMode) {
+    } else if (isCreditMode) {
+      await createPackEnrollmentAfterPayment(tx, {
+        memberId: member.id,
+        packId: memberData.packId,
+        packPaymentId: null,
+        purchasedAt: paymentPrecomputed.paidAt,
+      });
+    } else {
       const noteParts = ["Création adhérente"];
       if (personalDiscount?.reason) {
         noteParts.push(`Remise perso: ${personalDiscount.reason}`);
@@ -952,7 +962,16 @@ export async function renewAdminMemberPackById(id: string, request: Request) {
         precomputed: paymentPrecomputed,
         paymentMethod: paymentMethod!,
       });
-    } else if (!isCreditMode) {
+    } else if (isCreditMode) {
+      // Crédit = pas d'encaissement, mais inscription PENDING_START obligatoire
+      // (sinon pas de pack « En attente » et soldes fantômes au prochain renouvellement).
+      await createPackEnrollmentAfterPayment(tx, {
+        memberId: id,
+        packId,
+        packPaymentId: null,
+        purchasedAt: paymentPrecomputed.paidAt,
+      });
+    } else {
       const noteParts = [
         decision.mode === "queued" ? "Renouvellement pack (pack parallèle)" : "Renouvellement pack",
       ];

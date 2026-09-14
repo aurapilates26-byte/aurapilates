@@ -324,7 +324,17 @@ export async function convertSessionProspectToMember(input: {
         precomputed: paymentPrecomputed,
         paymentMethod: input.body.paymentMethod!,
       });
-    } else if (!isCreditMode) {
+    } else if (isCreditMode) {
+      const { createPackEnrollmentAfterPayment } = await import(
+        "@/lib/admin/member-pack-enrollment"
+      );
+      await createPackEnrollmentAfterPayment(tx, {
+        memberId: member.id,
+        packId: input.body.packId,
+        packPaymentId: null,
+        purchasedAt: paymentPrecomputed.paidAt,
+      });
+    } else {
       await recordAutoPackPaymentInTransaction(tx, {
         memberId: member.id,
         packId: input.body.packId,

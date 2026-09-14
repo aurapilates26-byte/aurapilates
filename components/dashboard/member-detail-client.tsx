@@ -8,7 +8,7 @@ import { Button, Checkbox, ConfirmDialog, Input, Modal, SelectMenu, Textarea } f
 import { DatePicker } from "@/components/ui/date-picker";
 import { useToast } from "@/components/ui/toast-provider";
 import type { MemberDetailData, PackFormItem } from "@/lib/admin/member-detail-server";
-import { packRenewalMessageFr, type PackRenewalDecision } from "@/lib/admin/member-pack-renewal";
+import { packRenewalMessageFr, type PackRenewalDecision } from "@/lib/admin/member-pack-renewal-decision";
 import { formatYmdLocal, parseYmdLocal, startOfLocalToday } from "@/lib/calendar-day";
 import { PACK_CATEGORY_OPTIONS, normalizePackCategory } from "@/lib/pack-categories";
 import { planningLevelBadgeClass } from "@/lib/planning-level-badge";

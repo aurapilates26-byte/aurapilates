@@ -650,6 +650,18 @@ export async function syncBalancesFromOpenEnrollments(
       countingMode: "debit",
     });
 
+    // Packs sans inscription ouverte → supprimer soldes fantômes (ex. 5 restantes alors que Terminé).
+    const packIdsWithBalances = [...new Set(rows.map((r) => r.packId))];
+    const memberRow = await prisma.member.findUnique({
+      where: { id: memberId },
+      select: { packId: true },
+    });
+    if (memberRow?.packId) packIdsWithBalances.push(memberRow.packId);
+    for (const packId of new Set(packIdsWithBalances)) {
+      if (openByPack.has(packId)) continue;
+      await prisma.memberPackBalance.deleteMany({ where: { memberId, packId } });
+    }
+
     for (const [packId, openRows] of openByPack) {
       const pack = openRows[0]!.pack;
 

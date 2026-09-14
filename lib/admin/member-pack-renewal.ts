@@ -1,79 +1,23 @@
+import "server-only";
+
 import type { Prisma } from "@prisma/client";
-import { startOfLocalToday } from "@/lib/calendar-day";
-import { packExpiresAtLocal } from "@/lib/member-pack-period";
+import { allocateConsumedSessionsAcrossMemberEnrollments } from "@/lib/admin/member-pack-enrollment";
 import { prisma } from "@/lib/prisma";
+import type { MemberPackState } from "@/lib/admin/member-pack-renewal-decision";
 
-export type MemberPackRenewalMode = "immediate" | "queued";
-
-export type MemberPackState = {
-  packId: string | null;
-  packStartedAt: Date | null;
-  durationDays: string | null;
-  sessionCount: number | null;
-  courseQuotas: { courseSlug: string; sessionCount: number }[];
-  balances: { packId: string; courseSlug: string | null; remaining: number }[];
-};
-
-export type PackRenewalDecision = {
-  mode: MemberPackRenewalMode;
-  remainingSessions: number;
-  isExpired: boolean;
-  hasActivePack: boolean;
-};
-
-function startOfLocalDay(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
-}
-
-export function isMemberPackExpiredByDate(
-  packStartedAt: Date | null | undefined,
-  durationDays: string | null | undefined,
-  today: Date = startOfLocalToday()
-): boolean {
-  if (!packStartedAt) return false;
-  const expires = packExpiresAtLocal(packStartedAt, durationDays);
-  if (!expires) return false;
-  return expires.getTime() < startOfLocalDay(today).getTime();
-}
-
-/** Séances restantes sur le pack actuellement assigné à l'adhérente. */
-export function getRemainingSessionsForPack(state: MemberPackState): number {
-  if (!state.packId) return 0;
-
-  const balancesForPack = state.balances.filter((b) => b.packId === state.packId);
-  if (balancesForPack.length > 0) {
-    return balancesForPack.reduce((sum, b) => sum + Math.max(0, b.remaining), 0);
-  }
-
-  if (state.courseQuotas.length > 0) {
-    return state.courseQuotas.reduce((sum, q) => sum + q.sessionCount, 0);
-  }
-
-  return state.sessionCount ?? 0;
-}
-
-/**
- * Détermine si un nouveau pack doit être mis en file d'attente ou activé tout de suite.
- * File d'attente si le pack actuel n'est pas expiré et contient encore des séances.
- */
-export function decidePackRenewal(state: MemberPackState, today: Date = startOfLocalToday()): PackRenewalDecision {
-  if (!state.packId) {
-    return { mode: "immediate", remainingSessions: 0, isExpired: false, hasActivePack: false };
-  }
-
-  const isExpired = isMemberPackExpiredByDate(state.packStartedAt, state.durationDays, today);
-  const remainingSessions = getRemainingSessionsForPack(state);
-
-  if (isExpired || remainingSessions <= 0) {
-    return { mode: "immediate", remainingSessions, isExpired, hasActivePack: true };
-  }
-
-  return { mode: "queued", remainingSessions, isExpired: false, hasActivePack: true };
-}
+export {
+  decidePackRenewal,
+  getRemainingSessionsForPack,
+  isMemberPackExpiredByDate,
+  packRenewalMessageFr,
+  type MemberPackRenewalMode,
+  type MemberPackState,
+  type PackRenewalDecision,
+} from "@/lib/admin/member-pack-renewal-decision";
 
 export async function loadMemberPackState(
   tx: typeof prisma | Prisma.TransactionClient,
-  memberId: string
+  memberId: string,
 ): Promise<MemberPackState | null> {
   const member = await tx.member.findUnique({
     where: { id: memberId },
@@ -85,14 +29,70 @@ export async function loadMemberPackState(
           id: true,
           durationDays: true,
           sessionCount: true,
+          category: true,
           courseQuotas: { select: { courseSlug: true, sessionCount: true } },
         },
       },
       packBalances: { select: { packId: true, courseSlug: true, remaining: true } },
+      packEnrollments: {
+        orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
+        select: {
+          id: true,
+          packId: true,
+          status: true,
+          purchasedAt: true,
+          closedAt: true,
+          packStartedAt: true,
+          additionalSessionsCredit: true,
+          pack: {
+            select: {
+              sessionCount: true,
+              category: true,
+              courseQuotas: { select: { courseSlug: true, sessionCount: true } },
+            },
+          },
+        },
+      },
     },
   });
 
   if (!member) return null;
+
+  let balances = member.packBalances;
+
+  // Source de vérité = inscriptions ouvertes + FIFO (comme le badge Terminé / En cours).
+  if (member.packId) {
+    const openForPack = member.packEnrollments.filter(
+      (e) =>
+        e.packId === member.packId &&
+        (e.status === "ACTIVE" || e.status === "PENDING_START"),
+    );
+
+    if (openForPack.length === 0) {
+      balances = member.packBalances.filter((b) => b.packId !== member.packId);
+    } else {
+      const allocations = await allocateConsumedSessionsAcrossMemberEnrollments({
+        memberId,
+        enrollmentsAsc: member.packEnrollments,
+        countingMode: "display",
+        db: tx,
+      });
+      let remainingTotal = 0;
+      for (const enrollment of openForPack) {
+        const alloc = allocations.get(enrollment.id);
+        if (!alloc) continue;
+        remainingTotal += Math.max(0, alloc.remainingTotal);
+      }
+      balances = [
+        ...member.packBalances.filter((b) => b.packId !== member.packId),
+        {
+          packId: member.packId,
+          courseSlug: null,
+          remaining: remainingTotal,
+        },
+      ];
+    }
+  }
 
   return {
     packId: member.packId,
@@ -100,17 +100,21 @@ export async function loadMemberPackState(
     durationDays: member.pack?.durationDays ?? null,
     sessionCount: member.pack?.sessionCount ?? null,
     courseQuotas: member.pack?.courseQuotas ?? [],
-    balances: member.packBalances,
+    balances,
   };
 }
 
 export async function resetMemberPackBalancesForPack(
   tx: typeof prisma | Prisma.TransactionClient,
-  input: { memberId: string; packId: string }
+  input: { memberId: string; packId: string },
 ) {
   const pack = await tx.pack.findUnique({
     where: { id: input.packId },
-    select: { id: true, sessionCount: true, courseQuotas: { select: { courseSlug: true, sessionCount: true } } },
+    select: {
+      id: true,
+      sessionCount: true,
+      courseQuotas: { select: { courseSlug: true, sessionCount: true } },
+    },
   });
   if (!pack) return;
 
@@ -144,7 +148,7 @@ export async function resetMemberPackBalancesForPack(
 
 async function nextPendingPosition(
   tx: typeof prisma | Prisma.TransactionClient,
-  memberId: string
+  memberId: string,
 ): Promise<number> {
   const last = await tx.memberPendingPack.findFirst({
     where: { memberId },
@@ -156,7 +160,7 @@ async function nextPendingPosition(
 
 export async function queueMemberPendingPack(
   tx: typeof prisma | Prisma.TransactionClient,
-  input: { memberId: string; packId: string }
+  input: { memberId: string; packId: string },
 ) {
   const position = await nextPendingPosition(tx, input.memberId);
   return tx.memberPendingPack.create({
@@ -168,7 +172,7 @@ export async function queueMemberPendingPack(
 /** Active le prochain pack en attente (remplace le pack courant sur la fiche membre). */
 export async function activateNextPendingPack(
   tx: typeof prisma | Prisma.TransactionClient,
-  memberId: string
+  memberId: string,
 ): Promise<boolean> {
   const pending = await tx.memberPendingPack.findFirst({
     where: { memberId },
@@ -214,20 +218,4 @@ export async function listMemberPendingPacks(memberId: string) {
       pack: { select: { id: true, name: true, durationDays: true, sessionCount: true } },
     },
   });
-}
-
-export function packRenewalMessageFr(decision: PackRenewalDecision, queuedPackName?: string): string {
-  if (decision.mode === "immediate") {
-    if (!decision.hasActivePack) {
-      return "Le pack sera activé dès la première réservation.";
-    }
-    if (decision.isExpired) {
-      return "Le pack actuel est expiré : le nouveau pack remplace l'ancien et démarrera à la première réservation.";
-    }
-    return "Les séances du pack actuel sont épuisées : le nouveau pack est activé et démarrera à la première réservation.";
-  }
-
-  const sessionsWord = decision.remainingSessions === 1 ? "séance" : "séances";
-  const packLabel = queuedPackName ? ` « ${queuedPackName} »` : "";
-  return `Le pack${packLabel} a été ajouté. L'adhérente dispose maintenant de plusieurs packs utilisables en parallèle (${decision.remainingSessions} ${sessionsWord} restantes sur le pack précédent).`;
 }
