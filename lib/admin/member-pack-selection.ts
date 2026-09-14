@@ -2,13 +2,14 @@ import "server-only";
 
 import type { Prisma } from "@prisma/client";
 import { courseLabel } from "@/lib/course-labels";
-import { startOfLocalToday } from "@/lib/calendar-day";
+import { startOfLocalToday, formatYmdPrismaDate, parseYmdLocal } from "@/lib/calendar-day";
 import { PACK_ERRORS } from "@/lib/create-member-reservation";
 import {
   getEligibilityForPack,
   isCourseAllowedForPack,
   type PackEligibility,
 } from "@/lib/pack-eligibility";
+import { addPackDurationToStartDate } from "@/lib/pack-duration";
 import {
   isSessionDateWithinPackPeriod,
   packExpiresAtLocal,
@@ -185,9 +186,78 @@ function isPackUnused(candidate: PackCandidate): boolean {
   return candidate.remainingSessions >= total;
 }
 
+/**
+ * Expiration candidate : durée depuis démarrage (comme la fiche), pas la DB périmée.
+ * Prolongation admin → date stockée.
+ */
 function resolveCandidateExpiresAt(candidate: PackCandidate): Date | null {
+  if (candidate.isProlonged && candidate.packExpiresAt) {
+    return packStartDateLocal(candidate.packExpiresAt);
+  }
+  const fromDuration = packExpiresAtLocal(candidate.packStartedAt, candidate.pack.durationDays);
+  if (fromDuration) return fromDuration;
   if (candidate.packExpiresAt) return packStartDateLocal(candidate.packExpiresAt);
-  return packExpiresAtLocal(candidate.packStartedAt, candidate.pack.durationDays);
+  return null;
+}
+
+/**
+ * Période bookable = même vérité que le panneau packs (1ʳᵉ séance FIFO display + durée).
+ * Ne jamais faire confiance seul à enrollment.packExpiresAt (souvent une ancienne activation).
+ */
+function resolveBookingPeriodFromDisplayFifo(input: {
+  enrollment: {
+    status: string;
+    packStartedAt: Date | null;
+    packExpiresAt: Date | null;
+    prolongedAt: Date | null;
+  };
+  displayAlloc: EnrollmentConsumptionAlloc | undefined;
+  durationDays: string | null;
+  packId: string;
+  memberPackId: string | null;
+  memberPackStartedAt: Date | null;
+}): { packStartedAt: Date | null; packExpiresAt: Date | null } {
+  if (input.enrollment.prolongedAt) {
+    return {
+      packStartedAt: input.enrollment.packStartedAt,
+      packExpiresAt: input.enrollment.packExpiresAt,
+    };
+  }
+
+  const consumed = input.displayAlloc?.consumedTotal ?? 0;
+  const firstRaw = input.displayAlloc?.firstSessionDate ?? null;
+
+  // Aucune conso FIFO → pack non démarré (1ʳᵉ réservation autorisée).
+  if (consumed <= 0 || !firstRaw) {
+    if (
+      input.enrollment.status === "PENDING_START" ||
+      !input.enrollment.packStartedAt ||
+      consumed <= 0
+    ) {
+      return { packStartedAt: null, packExpiresAt: null };
+    }
+  }
+
+  if (firstRaw) {
+    const firstYmd = formatYmdPrismaDate(firstRaw);
+    const firstLocal = parseYmdLocal(firstYmd) ?? packStartDateLocal(firstRaw);
+    const expires =
+      firstLocal && input.durationDays
+        ? addPackDurationToStartDate(firstLocal, input.durationDays)
+        : input.enrollment.packExpiresAt;
+    return {
+      packStartedAt: firstLocal ?? firstRaw,
+      packExpiresAt: expires,
+    };
+  }
+
+  return resolvePackPeriod({
+    packId: input.packId,
+    memberPackId: input.memberPackId,
+    memberPackStartedAt: input.memberPackStartedAt,
+    enrollmentStartedAt: input.enrollment.packStartedAt,
+    enrollmentExpiresAt: input.enrollment.packExpiresAt,
+  });
 }
 
 function isCandidateValidForSessionDate(
@@ -386,12 +456,20 @@ async function loadPackCandidates(
       const openEnrollment = unstarted ?? latest;
       const period = unstarted
         ? { packStartedAt: null as Date | null, packExpiresAt: null as Date | null }
-        : resolvePackPeriod({
+        : resolveBookingPeriodFromDisplayFifo({
+            enrollment: openEnrollment ?? {
+              status: "PENDING_START",
+              packStartedAt: null,
+              packExpiresAt: null,
+              prolongedAt: null,
+            },
+            displayAlloc: openEnrollment
+              ? displayAllocations.get(openEnrollment.id)
+              : undefined,
+            durationDays: pack.durationDays,
             packId: pack.id,
             memberPackId: member.packId,
             memberPackStartedAt: member.packStartedAt,
-            enrollmentStartedAt: openEnrollment?.packStartedAt ?? null,
-            enrollmentExpiresAt: openEnrollment?.packExpiresAt ?? null,
           });
 
       candidates.push({
@@ -418,16 +496,14 @@ async function loadPackCandidates(
         ? Math.max(0, total - Math.min(displayConsumed, total))
         : (displayAlloc?.remainingTotal ?? 0);
 
-    const period =
-      fifoEnrollment.status === "PENDING_START" || !fifoEnrollment.packStartedAt
-        ? { packStartedAt: null as Date | null, packExpiresAt: null as Date | null }
-        : resolvePackPeriod({
-            packId: pack.id,
-            memberPackId: member.packId,
-            memberPackStartedAt: member.packStartedAt,
-            enrollmentStartedAt: fifoEnrollment.packStartedAt,
-            enrollmentExpiresAt: fifoEnrollment.packExpiresAt,
-          });
+    const period = resolveBookingPeriodFromDisplayFifo({
+      enrollment: fifoEnrollment,
+      displayAlloc,
+      durationDays: pack.durationDays,
+      packId: pack.id,
+      memberPackId: member.packId,
+      memberPackStartedAt: member.packStartedAt,
+    });
 
     candidates.push({
       packId: pack.id,

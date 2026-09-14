@@ -3,6 +3,8 @@ import "server-only";
 import {
   classifyPrimaryPackKind,
   emptyMemberPrimaryPackStateCounts,
+  isPackDateExpired,
+  resolveEffectivePackExpiresAt,
   type MemberPrimaryPackKind,
   type MemberPrimaryPackStateCounts,
 } from "@/lib/member-primary-pack-state";
@@ -15,8 +17,11 @@ type EnrollmentRow = {
   packStartedAt: Date | null;
   packExpiresAt: Date | null;
   prolongedAt: Date | null;
+  purchasedAt: Date;
+  createdAt: Date;
   pack: {
     sessionCount: number | null;
+    durationDays: string | null;
     courseQuotas: { sessionCount: number }[];
   };
 };
@@ -28,14 +33,42 @@ function packTotalSessions(pack: EnrollmentRow["pack"]): number | null {
   return pack.sessionCount;
 }
 
+/**
+ * Pack principal affiché dans le tableau = plus récente inscription ouverte
+ * (même règle que la fiche). Si plusieurs ACTIVE (legacy), on préfère une
+ * inscription dont l'expiration effective n'est pas dépassée — évite le badge
+ * « Expiré » alors que le renouvellement courant est encore valide (Fatma Msekni).
+ */
 function pickPrimaryEnrollment(
   memberId: string,
   packId: string,
   enrollmentsByMember: Map<string, EnrollmentRow[]>,
 ): EnrollmentRow | null {
-  const list = (enrollmentsByMember.get(memberId) ?? []).filter((row) => row.packId === packId);
-  const open = list.find((row) => row.status === "ACTIVE" || row.status === "PENDING_START");
-  return open ?? list[0] ?? null;
+  const list = (enrollmentsByMember.get(memberId) ?? [])
+    .filter((row) => row.packId === packId)
+    .slice()
+    .sort(
+      (a, b) =>
+        b.purchasedAt.getTime() - a.purchasedAt.getTime() ||
+        b.createdAt.getTime() - a.createdAt.getTime(),
+    );
+
+  const open = list.filter((row) => row.status === "ACTIVE" || row.status === "PENDING_START");
+  if (open.length === 0) return list[0] ?? null;
+
+  const stillValid = open.find((row) => {
+    const expiresAt = resolveEffectivePackExpiresAt({
+      packStartedAt: row.packStartedAt,
+      packExpiresAt: row.packExpiresAt,
+      prolongedAt: row.prolongedAt,
+      durationDays: row.pack.durationDays,
+    });
+    // Pas encore démarré → candidat valide (En attente).
+    if (!row.packStartedAt) return true;
+    return !isPackDateExpired(expiresAt);
+  });
+
+  return stillValid ?? open[0] ?? null;
 }
 
 function remainingSessionsForPack(
@@ -79,6 +112,7 @@ export async function loadMemberPrimaryPackStates(): Promise<{
       pack: {
         select: {
           sessionCount: true,
+          durationDays: true,
           courseQuotas: { select: { sessionCount: true } },
         },
       },
@@ -126,10 +160,17 @@ export async function loadMemberPrimaryPackStates(): Promise<{
         const consumedSessions =
           totalSessions != null ? Math.max(0, totalSessions - remainingSessions) : 0;
 
+        const packExpiresAt = resolveEffectivePackExpiresAt({
+          packStartedAt: enrollment.packStartedAt,
+          packExpiresAt: enrollment.packExpiresAt,
+          prolongedAt: enrollment.prolongedAt,
+          durationDays: enrollment.pack.durationDays,
+        });
+
         kind = classifyPrimaryPackKind({
           hasPack: true,
           packStartedAt: enrollment.packStartedAt,
-          packExpiresAt: enrollment.packExpiresAt,
+          packExpiresAt,
           prolongedAt: enrollment.prolongedAt,
           consumedSessions,
           totalSessions,

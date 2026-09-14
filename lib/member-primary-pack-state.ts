@@ -1,4 +1,11 @@
-import { startOfLocalToday } from "@/lib/calendar-day";
+import {
+  formatYmdLocal,
+  formatYmdPrismaDate,
+  parseYmdLocal,
+  parseYmdToPrismaDate,
+  startOfLocalToday,
+} from "@/lib/calendar-day";
+import { addPackDurationToStartDate } from "@/lib/pack-duration";
 
 export type MemberPrimaryPackKind =
   | "consuming"
@@ -41,13 +48,53 @@ export function emptyMemberPrimaryPackStateCounts(): MemberPrimaryPackStateCount
   };
 }
 
-function isPackDateExpired(packExpiresAt: Date | string | null): boolean {
+/** Jour calendaire d'une date pack (@db.Date Prisma ou Date locale). */
+function packCalendarYmd(d: Date): string {
+  const isPrismaDateUtcMidnight =
+    d.getUTCHours() === 0 &&
+    d.getUTCMinutes() === 0 &&
+    d.getUTCSeconds() === 0 &&
+    d.getUTCMilliseconds() === 0;
+  return isPrismaDateUtcMidnight ? formatYmdPrismaDate(d) : formatYmdLocal(d);
+}
+
+/**
+ * Compare la date d'expiration au jour studio, sans biais de fuseau
+ * (évite Expiré à tort sur le VPS).
+ */
+export function isPackDateExpired(packExpiresAt: Date | string | null): boolean {
   if (!packExpiresAt) return false;
   const expires = packExpiresAt instanceof Date ? packExpiresAt : new Date(packExpiresAt);
   if (Number.isNaN(expires.getTime())) return false;
-  const today = startOfLocalToday();
-  const expiresDay = new Date(expires.getFullYear(), expires.getMonth(), expires.getDate());
-  return expiresDay.getTime() < today.getTime();
+  const expiresYmd =
+    packExpiresAt instanceof Date ? packCalendarYmd(expires) : formatYmdLocal(expires);
+  const todayYmd = formatYmdLocal(startOfLocalToday());
+  return expiresYmd < todayYmd;
+}
+
+/**
+ * Expiration effective pour le badge liste — même règle que la fiche :
+ * start + durée, sauf prolongation admin (date stockée).
+ */
+export function resolveEffectivePackExpiresAt(input: {
+  packStartedAt: Date | null;
+  packExpiresAt: Date | null;
+  prolongedAt: Date | null;
+  durationDays: string | null;
+}): Date | null {
+  if (input.prolongedAt != null) return input.packExpiresAt;
+  if (input.packStartedAt && input.durationDays) {
+    const startYmd = packCalendarYmd(input.packStartedAt);
+    const startLocal = parseYmdLocal(startYmd);
+    if (startLocal) {
+      const endLocal = addPackDurationToStartDate(startLocal, input.durationDays);
+      if (endLocal) {
+        return parseYmdToPrismaDate(formatYmdLocal(endLocal)) ?? endLocal;
+      }
+    }
+    return addPackDurationToStartDate(input.packStartedAt, input.durationDays) ?? input.packExpiresAt;
+  }
+  return input.packExpiresAt;
 }
 
 /** Aligné sur le badge pack de la fiche adhérente (pack principal). */
