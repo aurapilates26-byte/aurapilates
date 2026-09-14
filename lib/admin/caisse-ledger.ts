@@ -53,7 +53,11 @@ export function buildCaisseLedger(input: {
           ? p.packSaleTotalDinars != null
             ? ` · solde ${p.amountDinars} DT (vente ${p.packSaleTotalDinars} DT)`
             : " · solde"
-          : "";
+          : p.paymentKind === "CREDIT"
+            ? p.packSaleTotalDinars != null
+              ? ` · crédit (reste ${p.packSaleTotalDinars} DT à encaisser)`
+              : " · crédit"
+            : "";
     entries.push({
       id: `pack-${p.id}`,
       kind: "INCOME_PACK",

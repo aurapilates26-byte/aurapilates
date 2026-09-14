@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "PackPaymentKind" ADD VALUE IF NOT EXISTS 'CREDIT';

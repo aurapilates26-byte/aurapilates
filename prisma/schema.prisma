@@ -79,6 +79,8 @@ enum PackPaymentKind {
   FULL
   DEPOSIT
   BALANCE
+  /// Vente à crédit : aucun encaissement (amountDinars = 0), total dû dans packSaleTotalDinars.
+  CREDIT
 }
 
 /// Moyen d'encaissement (espèce, chèque, TPE).

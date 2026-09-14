@@ -325,14 +325,16 @@ export async function convertSessionProspectToMember(input: {
         paymentMethod: input.body.paymentMethod!,
       });
     } else if (isCreditMode) {
-      const { createPackEnrollmentAfterPayment } = await import(
-        "@/lib/admin/member-pack-enrollment"
-      );
-      await createPackEnrollmentAfterPayment(tx, {
+      await recordAutoPackPaymentInTransaction(tx, {
         memberId: member.id,
         packId: input.body.packId,
-        packPaymentId: null,
-        purchasedAt: paymentPrecomputed.paidAt,
+        recordedByUserId: input.adminUserId,
+        precomputed: paymentPrecomputed,
+        personalDiscount: personalDiscountInput,
+        amountDinars: 0,
+        paymentKind: "CREDIT",
+        packSaleTotalDinars: expectedPackAmountDinars,
+        note: `Crédit — conversion prospect · séance ${sessionDateYmd}`,
       });
     } else {
       await recordAutoPackPaymentInTransaction(tx, {

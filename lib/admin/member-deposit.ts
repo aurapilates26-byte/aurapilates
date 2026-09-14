@@ -152,6 +152,7 @@ export type CreateMemberDepositPaymentInput = {
   recordedByUserId: string;
   precomputed: NonNullable<Awaited<ReturnType<typeof precomputePackPayment>>>;
   paymentMethod: PackPaymentMethod;
+  note?: string | null;
 };
 
 export async function recordDepositOnMemberCreate(input: CreateMemberDepositPaymentInput) {
@@ -171,7 +172,7 @@ export async function recordDepositOnMemberCreate(input: CreateMemberDepositPaym
     paymentKind: "DEPOSIT",
     packSaleTotalDinars: input.expectedPackAmountDinars,
     paymentMethod: input.paymentMethod,
-    note: "Acompte à l'inscription",
+    note: input.note?.trim() || "Acompte",
   });
 }
 

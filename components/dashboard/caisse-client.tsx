@@ -1798,6 +1798,24 @@ function PackInstallmentCell({
   payment: PackPaymentDto;
   relatedDeposit?: PackPaymentDto;
 }) {
+  if (p.paymentKind === "CREDIT") {
+    const total = p.packSaleTotalDinars;
+    return (
+      <div className="mx-auto flex max-w-full flex-col items-center gap-1.5 text-center">
+        <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-950">
+          Crédit
+        </span>
+        {total != null ? (
+          <p className="text-xs font-medium text-amber-900/90">
+            À encaisser <span className="font-bold tabular-nums">{formatDt(total)}</span>
+          </p>
+        ) : (
+          <p className="text-xs text-brand-dark/55">Montant dû non renseigné</p>
+        )}
+      </div>
+    );
+  }
+
   if (p.paymentKind === "FULL") {
     return <span className="text-xs text-brand-dark/35">—</span>;
   }
@@ -1856,6 +1874,19 @@ function PackPaymentMethodCell({ payment: p }: { payment: PackPaymentDto }) {
 }
 
 function PackAmountCell({ payment: p }: { payment: PackPaymentDto }) {
+  if (p.paymentKind === "CREDIT") {
+    const due = p.packSaleTotalDinars;
+    return (
+      <div className="text-center">
+        <p className="font-bold tabular-nums text-amber-900">{formatDt(0)}</p>
+        <p className="mt-0.5 text-[11px] font-medium text-brand-dark/55">Encaissé</p>
+        {due != null ? (
+          <p className="mt-1 text-xs font-semibold tabular-nums text-amber-900">Dû {formatDt(due)}</p>
+        ) : null}
+      </div>
+    );
+  }
+
   if (p.paymentKind === "DEPOSIT" || p.paymentKind === "BALANCE") {
     return (
       <div className="text-center">
@@ -1980,7 +2011,8 @@ function PackRevenueCard({
   stepLabel?: string;
 }) {
   const hasDiscount = packPaymentHasRealDiscount(p);
-  const hasInstallment = p.paymentKind === "DEPOSIT" || p.paymentKind === "BALANCE";
+  const hasInstallment =
+    p.paymentKind === "DEPOSIT" || p.paymentKind === "BALANCE" || p.paymentKind === "CREDIT";
 
   return (
     <div className={embedded ? undefined : "rounded-xl border border-brand-medium/15 bg-zinc-50/60 p-4"}>

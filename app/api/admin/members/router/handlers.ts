@@ -31,10 +31,7 @@ import {
 import { deriveMemberPaymentStatus } from "@/lib/admin/member-payment-status";
 import { ensurePaidTrialProspectMembersLinked } from "@/lib/admin/session-prospect";
 import { addParallelMemberPack } from "@/lib/admin/member-owned-packs";
-import {
-  closeOpenEnrollmentsForPack,
-  createPackEnrollmentAfterPayment,
-} from "@/lib/admin/member-pack-enrollment";
+import { closeOpenEnrollmentsForPack } from "@/lib/admin/member-pack-enrollment";
 import {
   decidePackRenewal,
   loadMemberPackState,
@@ -99,7 +96,12 @@ function mapMember(
     pack: { id: string; name: string; durationDays: string | null } | null;
     assignedQrCodes: { publicId: string; qrKey: string; status: string; updatedAt: Date }[];
     convertedFromProspects?: { id: string; status: string }[];
-    packEnrollments?: { purchasedAt: Date }[];
+    packEnrollments?: {
+      purchasedAt: Date;
+      packId?: string;
+      packPaymentId?: string | null;
+      status?: string;
+    }[];
   },
   paymentTotals?: {
     totalPaid: number;
@@ -172,11 +174,26 @@ function mapMember(
 const memberListInclude = {
   user: { select: { email: true } },
   pack: { select: { id: true, name: true, durationDays: true } },
-  packPayments: { select: { amountDinars: true, packId: true, paymentKind: true, paymentMethod: true } },
+  packPayments: {
+    select: {
+      id: true,
+      amountDinars: true,
+      packId: true,
+      paymentKind: true,
+      paymentMethod: true,
+      packSaleTotalDinars: true,
+      paidAt: true,
+    },
+  },
   packEnrollments: {
+    where: { status: { in: ["PENDING_START" as const, "ACTIVE" as const] } },
     orderBy: [{ purchasedAt: "desc" as const }, { createdAt: "desc" as const }],
-    take: 1,
-    select: { purchasedAt: true },
+    select: {
+      packId: true,
+      packPaymentId: true,
+      purchasedAt: true,
+      status: true,
+    },
   },
   assignedQrCodes: {
     orderBy: { updatedAt: "desc" as const },
@@ -190,40 +207,73 @@ const memberListInclude = {
   },
 } satisfies Prisma.MemberInclude;
 
+/**
+ * Totaux paiement de la vente courante uniquement (inscription ouverte),
+ * pas tous les anciens FULL du même catalogue (sinon Crédit/Avance → Payé à tort).
+ */
 function paymentTotalsForMemberRow(member: MemberListRow): {
   totalPaid: number;
   depositPaid: number;
   depositPaymentMethod: "CASH" | "CHECK" | "TPE" | null;
   packPaymentMethod: "CASH" | "CHECK" | "TPE" | null;
 } {
-  if (!member.packId) {
-    return { totalPaid: 0, depositPaid: 0, depositPaymentMethod: null, packPaymentMethod: null };
+  const empty = {
+    totalPaid: 0,
+    depositPaid: 0,
+    depositPaymentMethod: null as "CASH" | "CHECK" | "TPE" | null,
+    packPaymentMethod: null as "CASH" | "CHECK" | "TPE" | null,
+  };
+  if (!member.packId) return empty;
+
+  const currentEnrollment =
+    member.packEnrollments.find((e) => e.packId === member.packId) ?? null;
+  if (!currentEnrollment) return empty;
+
+  // Crédit sans encaissement lié → 0 payé, reste = expectedPackAmount.
+  if (!currentEnrollment.packPaymentId) return empty;
+
+  const primary = member.packPayments.find((p) => p.id === currentEnrollment.packPaymentId);
+  if (!primary || primary.packId !== member.packId) return empty;
+
+  if (primary.paymentKind === "CREDIT") {
+    return empty;
   }
 
-  let totalPaid = 0;
-  let depositPaid = 0;
-  let depositPaymentMethod: "CASH" | "CHECK" | "TPE" | null = null;
-  let fullPaymentMethod: "CASH" | "CHECK" | "TPE" | null = null;
-  let balancePaymentMethod: "CASH" | "CHECK" | "TPE" | null = null;
-
-  for (const p of member.packPayments) {
-    if (p.packId !== member.packId) continue;
-    totalPaid += p.amountDinars;
-    if (p.paymentKind === "DEPOSIT") {
-      depositPaid += p.amountDinars;
-      depositPaymentMethod = p.paymentMethod;
+  if (primary.paymentKind === "DEPOSIT" && primary.packSaleTotalDinars != null) {
+    const related = member.packPayments.filter(
+      (p) =>
+        p.packId === member.packId &&
+        p.packSaleTotalDinars === primary.packSaleTotalDinars &&
+        p.paidAt.getTime() >= primary.paidAt.getTime(),
+    );
+    let totalPaid = 0;
+    let depositPaid = 0;
+    let depositPaymentMethod: "CASH" | "CHECK" | "TPE" | null = null;
+    let balancePaymentMethod: "CASH" | "CHECK" | "TPE" | null = null;
+    for (const p of related) {
+      totalPaid += p.amountDinars;
+      if (p.paymentKind === "DEPOSIT") {
+        depositPaid += p.amountDinars;
+        depositPaymentMethod = p.paymentMethod;
+      }
+      if (p.paymentKind === "BALANCE") {
+        balancePaymentMethod = p.paymentMethod;
+      }
     }
-    if (p.paymentKind === "FULL") {
-      fullPaymentMethod = p.paymentMethod;
-    }
-    if (p.paymentKind === "BALANCE") {
-      balancePaymentMethod = p.paymentMethod;
-    }
+    return {
+      totalPaid,
+      depositPaid,
+      depositPaymentMethod,
+      packPaymentMethod: balancePaymentMethod ?? depositPaymentMethod,
+    };
   }
 
-  const packPaymentMethod = fullPaymentMethod ?? balancePaymentMethod ?? depositPaymentMethod;
-
-  return { totalPaid, depositPaid, depositPaymentMethod, packPaymentMethod };
+  return {
+    totalPaid: primary.amountDinars,
+    depositPaid: 0,
+    depositPaymentMethod: null,
+    packPaymentMethod: primary.paymentMethod,
+  };
 }
 
 function mapMemberListRow(member: MemberListRow) {
@@ -474,11 +524,16 @@ export async function createAdminMember(request: Request) {
         paymentMethod: paymentMethod!,
       });
     } else if (isCreditMode) {
-      await createPackEnrollmentAfterPayment(tx, {
+      await recordAutoPackPaymentInTransaction(tx, {
         memberId: member.id,
         packId: memberData.packId,
-        packPaymentId: null,
-        purchasedAt: paymentPrecomputed.paidAt,
+        recordedByUserId: adminUserId,
+        precomputed: paymentPrecomputed,
+        personalDiscount: personalDiscountInput,
+        amountDinars: 0,
+        paymentKind: "CREDIT",
+        packSaleTotalDinars: expectedPackAmountDinars,
+        note: "Crédit — montant à encaisser",
       });
     } else {
       const noteParts = ["Création adhérente"];
@@ -961,15 +1016,25 @@ export async function renewAdminMemberPackById(id: string, request: Request) {
         recordedByUserId: adminUserId,
         precomputed: paymentPrecomputed,
         paymentMethod: paymentMethod!,
+        note:
+          decision.mode === "queued"
+            ? "Acompte — renouvellement pack (parallèle)"
+            : "Acompte — renouvellement pack",
       });
     } else if (isCreditMode) {
-      // Crédit = pas d'encaissement, mais inscription PENDING_START obligatoire
-      // (sinon pas de pack « En attente » et soldes fantômes au prochain renouvellement).
-      await createPackEnrollmentAfterPayment(tx, {
+      await recordAutoPackPaymentInTransaction(tx, {
         memberId: id,
         packId,
-        packPaymentId: null,
-        purchasedAt: paymentPrecomputed.paidAt,
+        recordedByUserId: adminUserId,
+        precomputed: paymentPrecomputed,
+        personalDiscount: personalDiscountInput,
+        amountDinars: 0,
+        paymentKind: "CREDIT",
+        packSaleTotalDinars: expectedPackAmountDinars,
+        note:
+          decision.mode === "queued"
+            ? "Crédit — renouvellement pack (parallèle)"
+            : "Crédit — renouvellement pack",
       });
     } else {
       const noteParts = [

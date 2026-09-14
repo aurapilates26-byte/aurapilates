@@ -792,6 +792,14 @@ export async function getEnrollmentPaymentTotals(
     return { totalPaidDinars: 0, packPaymentMethod: null, depositPaymentMethod: null };
   }
 
+  if (payment.paymentKind === "CREDIT") {
+    return {
+      totalPaidDinars: 0,
+      packPaymentMethod: null,
+      depositPaymentMethod: null,
+    };
+  }
+
   if (payment.paymentKind === "DEPOSIT" && payment.packSaleTotalDinars != null) {
     const related = await prisma.packPayment.findMany({
       where: {
