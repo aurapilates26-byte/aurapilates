@@ -8,7 +8,7 @@ import {
   findFirstEnrollmentConsumedSessionDate,
   getEnrollmentPaymentTotals,
   reopenSingleSessionPackAfterFullRefund,
-  repairFifoEnrollmentActivationForPack,
+  repairFifoEnrollmentActivationForMember,
   resetPackStartWhenNoConsumption,
 } from "@/lib/admin/member-pack-enrollment";
 import {
@@ -217,37 +217,8 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
   await repairEnrollmentStartsBeforePurchase(memberId);
 
   // FIFO : finir le pack le plus ancien avant d'ouvrir le suivant (réattribue les conso + reset à 0).
-  {
-    const openForRepair = await prisma.memberPackEnrollment.findMany({
-      where: { memberId, status: { in: ["PENDING_START", "ACTIVE"] } },
-      select: {
-        packId: true,
-        pack: {
-          select: {
-            durationDays: true,
-            sessionCount: true,
-            category: true,
-            courseQuotas: { select: { courseSlug: true, sessionCount: true } },
-          },
-        },
-      },
-    });
-    const seenPackIds = new Set<string>();
-    for (const row of openForRepair) {
-      if (seenPackIds.has(row.packId)) continue;
-      seenPackIds.add(row.packId);
-      const samePackCount = openForRepair.filter((e) => e.packId === row.packId).length;
-      if (samePackCount < 2) continue;
-      await repairFifoEnrollmentActivationForPack({
-        memberId,
-        packId: row.packId,
-        durationDays: row.pack.durationDays,
-        courseQuotas: row.pack.courseQuotas,
-        sessionCount: row.pack.sessionCount,
-        category: row.pack.category,
-      });
-    }
-  }
+  // Aligne packStartedAt / packExpiresAt DB sur le FIFO d'affichage (évite toast ≠ fiche).
+  await repairFifoEnrollmentActivationForMember(memberId);
 
   const member = await prisma.member.findUnique({
     where: { id: memberId },
@@ -437,12 +408,53 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
         packStartedAt = null;
         packExpiresAt = null;
         enrollmentStatus = "PENDING_START";
+        // Persiste le même état que l'UI (la réservation lit la DB).
+        if (
+          enrollment.packStartedAt != null ||
+          enrollment.packExpiresAt != null ||
+          enrollment.status !== "PENDING_START"
+        ) {
+          await prisma.memberPackEnrollment.update({
+            where: { id: enrollment.id },
+            data: {
+              packStartedAt: null,
+              packExpiresAt: null,
+              status: "PENDING_START",
+              closedAt: null,
+            },
+          });
+        }
       } else if (!isProlonged && fifoAlloc.firstSessionDate) {
         packStartedAt = fifoAlloc.firstSessionDate;
         packExpiresAt = pack.durationDays
           ? addPackDurationToStartDate(fifoAlloc.firstSessionDate, pack.durationDays)
           : packExpiresAt;
         enrollmentStatus = "ACTIVE";
+        const startDay = packStartedAt ? toPrismaDateLocal(packStartedAt) : null;
+        const expDay = packExpiresAt ? toPrismaDateLocal(packExpiresAt) : null;
+        const dbStart = enrollment.packStartedAt
+          ? toPrismaDateLocal(enrollment.packStartedAt)
+          : null;
+        const dbExp = enrollment.packExpiresAt
+          ? toPrismaDateLocal(enrollment.packExpiresAt)
+          : null;
+        const startMismatch =
+          (startDay == null) !== (dbStart == null) ||
+          (startDay != null && dbStart != null && startDay.getTime() !== dbStart.getTime());
+        const expMismatch =
+          (expDay == null) !== (dbExp == null) ||
+          (expDay != null && dbExp != null && expDay.getTime() !== dbExp.getTime());
+        if (startMismatch || expMismatch || enrollment.status !== "ACTIVE") {
+          await prisma.memberPackEnrollment.update({
+            where: { id: enrollment.id },
+            data: {
+              packStartedAt,
+              packExpiresAt,
+              status: "ACTIVE",
+              closedAt: null,
+            },
+          });
+        }
       } else if (isProlonged) {
         packStartedAt = enrollment.packStartedAt ?? packStartedAt;
         packExpiresAt = enrollment.packExpiresAt ?? packExpiresAt;
@@ -726,6 +738,8 @@ async function prepareOpenEnrollmentsForBooking(memberId: string): Promise<void>
 export async function ensureMemberParallelPackStockForDebit(memberId: string): Promise<void> {
   await reopenUnusedReplacedEnrollments(memberId);
   await repairEnrollmentStartsBeforePurchase(memberId);
+  // Même FIFO que la fiche adhérente → packExpiresAt DB = Expiration affichée.
+  await repairFifoEnrollmentActivationForMember(memberId);
   await prepareOpenEnrollmentsForBooking(memberId);
   await syncBalancesFromOpenEnrollments(memberId);
 }

@@ -463,7 +463,11 @@ async function main() {
   const blocks = parsePgCopyBlocks(sql);
 
   console.log(`Backup : ${BACKUP_PATH}`);
-  resetDatabase();
+  if (process.env.SKIP_DB_RESET === "1") {
+    console.log("→ SKIP_DB_RESET=1 : reset Prisma ignoré (schéma déjà en place)…");
+  } else {
+    resetDatabase();
+  }
 
   console.log("→ Import des données…");
   for (const table of IMPORT_TABLES) {

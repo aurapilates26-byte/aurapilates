@@ -346,44 +346,58 @@ export async function allocateConsumedSessionsAcrossMemberEnrollments(input: {
   );
 }
 
-/**
- * Réalignement DB : packStartedAt / status selon l'attribution FIFO.
- * Les inscriptions sans conso FIFO repassent à 0 (Pas encore démarré).
- */
-export async function repairFifoEnrollmentActivationForPack(input: {
-  memberId: string;
-  packId: string;
-  durationDays: string | null;
-  courseQuotas: { courseSlug: string; sessionCount: number }[];
-  sessionCount: number | null;
-  category?: string | null;
-}): Promise<void> {
-  const enrollments = await prisma.memberPackEnrollment.findMany({
-    where: {
-      memberId: input.memberId,
-      packId: input.packId,
-      status: { in: ["PENDING_START", "ACTIVE"] },
-    },
-    orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
-    select: { id: true, packStartedAt: true, status: true, additionalSessionsCredit: true },
-  });
-  if (enrollments.length <= 1) return;
+function samePrismaDay(a: Date | null | undefined, b: Date | null | undefined): boolean {
+  if (a == null && b == null) return true;
+  if (a == null || b == null) return false;
+  return toPrismaDateLocal(a).getTime() === toPrismaDateLocal(b).getTime();
+}
 
-  const allocations = await allocateFifoPackConsumptions({
-    memberId: input.memberId,
-    packId: input.packId,
+/**
+ * Réalignement DB pour toute l'adhérente : packStartedAt / packExpiresAt / status
+ * selon la **même** attribution FIFO que l'affichage fiche
+ * (`allocateConsumedSessionsAcrossMemberEnrollments`, mode display).
+ *
+ * Évite le conflit UI vs réservation (ex. Expiration affichée 16/10 alors que
+ * le toast bloquait au 07/08 car la DB gardait une ancienne date d'activation).
+ * Les inscriptions prolongées (`prolongedAt`) ne sont pas écrasées.
+ */
+export async function repairFifoEnrollmentActivationForMember(memberId: string): Promise<void> {
+  const enrollments = await prisma.memberPackEnrollment.findMany({
+    where: { memberId },
+    orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
+    include: {
+      pack: {
+        select: {
+          durationDays: true,
+          sessionCount: true,
+          category: true,
+          courseQuotas: { select: { courseSlug: true, sessionCount: true } },
+        },
+      },
+    },
+  });
+  if (enrollments.length === 0) return;
+
+  const allocations = await allocateConsumedSessionsAcrossMemberEnrollments({
+    memberId,
     enrollmentsAsc: enrollments,
-    courseQuotas: input.courseQuotas,
-    sessionCount: input.sessionCount,
-    category: input.category,
+    countingMode: "display",
   });
 
   for (const enrollment of enrollments) {
+    if (enrollment.status !== "PENDING_START" && enrollment.status !== "ACTIVE") continue;
+    // Prolongation admin : la date de fin stockée prime.
+    if (enrollment.prolongedAt != null) continue;
+
     const alloc = allocations.get(enrollment.id);
     if (!alloc) continue;
 
     if (alloc.consumedTotal <= 0) {
-      if (enrollment.packStartedAt != null || enrollment.status !== "PENDING_START") {
+      if (
+        enrollment.packStartedAt != null ||
+        enrollment.packExpiresAt != null ||
+        enrollment.status !== "PENDING_START"
+      ) {
         await prisma.memberPackEnrollment.update({
           where: { id: enrollment.id },
           data: {
@@ -399,22 +413,43 @@ export async function repairFifoEnrollmentActivationForPack(input: {
 
     const packStartedAt = alloc.firstSessionDate;
     if (!packStartedAt) continue;
-    const packExpiresAt = addPackDurationToStartDate(packStartedAt, input.durationDays) ?? null;
-    const startedSame =
-      enrollment.packStartedAt &&
-      enrollment.packStartedAt.getTime() === packStartedAt.getTime();
-    if (!startedSame || enrollment.status !== "ACTIVE") {
-      await prisma.memberPackEnrollment.update({
-        where: { id: enrollment.id },
-        data: {
-          packStartedAt,
-          packExpiresAt,
-          status: "ACTIVE",
-          closedAt: null,
-        },
-      });
-    }
+    const packExpiresAt =
+      addPackDurationToStartDate(packStartedAt, enrollment.pack.durationDays) ?? null;
+
+    const startedSame = samePrismaDay(enrollment.packStartedAt, packStartedAt);
+    const expiresSame = samePrismaDay(enrollment.packExpiresAt, packExpiresAt);
+    if (startedSame && expiresSame && enrollment.status === "ACTIVE") continue;
+
+    await prisma.memberPackEnrollment.update({
+      where: { id: enrollment.id },
+      data: {
+        packStartedAt,
+        packExpiresAt,
+        status: "ACTIVE",
+        closedAt: null,
+      },
+    });
   }
+}
+
+/**
+ * @deprecated Préférer `repairFifoEnrollmentActivationForMember` (source unique FIFO).
+ * Conservé pour compat : délègue au réalignement adhérente entière.
+ */
+export async function repairFifoEnrollmentActivationForPack(input: {
+  memberId: string;
+  packId: string;
+  durationDays: string | null;
+  courseQuotas: { courseSlug: string; sessionCount: number }[];
+  sessionCount: number | null;
+  category?: string | null;
+}): Promise<void> {
+  void input.packId;
+  void input.durationDays;
+  void input.courseQuotas;
+  void input.sessionCount;
+  void input.category;
+  await repairFifoEnrollmentActivationForMember(input.memberId);
 }
 
 /**
