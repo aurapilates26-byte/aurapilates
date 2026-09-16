@@ -22,6 +22,8 @@ function toPrismaDateLocal(d: Date): Date {
  * - Début : renouvellement / PENDING_START → date d'achat.
  *   Premier pack catalogue : pas de borne basse, même si `packStartedAt` est renseigné.
  *   Sinon les présences legacy (`debitedPackId` null) avant la 1ʳᵉ réservation sortent du compteur.
+ *   Si le pack précédent (même catalogue) est déjà plein, `assignConsumedReservationsToEnrollments`
+ *   rattache quand même les séances « trou » au renouvellement (rétro-FIFO avant date d'achat).
  */
 export function getEnrollmentPeriodBounds(
   enrollment: EnrollmentPeriodRow,

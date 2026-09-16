@@ -40,6 +40,39 @@ function sessionInPeriod(
   return true;
 }
 
+/**
+ * Si le pack précédent (même catalogue) est déjà plein, les présences entre
+ * son épuisement et la date d'achat du renouvellement ne doivent pas rester
+ * orphelines : on les rattache au renouvellement (rétro-FIFO).
+ */
+function canBackfillOntoRenewalBeforePurchase(
+  enrollment: EnrollmentConsumptionTarget,
+  sessionDate: Date,
+  enrollmentsAsc: EnrollmentConsumptionTarget[],
+  result: Map<string, EnrollmentConsumptionAlloc>,
+  bounds: { periodStart: Date | null; periodEndExclusive: Date | null },
+): boolean {
+  const day = toPrismaDateLocal(sessionDate);
+  if (bounds.periodEndExclusive && day.getTime() >= bounds.periodEndExclusive.getTime()) {
+    return false;
+  }
+  if (!bounds.periodStart || day.getTime() >= bounds.periodStart.getTime()) {
+    return false;
+  }
+
+  const idx = enrollmentsAsc.findIndex((row) => row.id === enrollment.id);
+  if (idx <= 0) return false;
+
+  let hasPriorSamePack = false;
+  for (let i = 0; i < idx; i++) {
+    const prev = enrollmentsAsc[i]!;
+    if (prev.packId !== enrollment.packId) continue;
+    hasPriorSamePack = true;
+    if ((result.get(prev.id)?.remainingTotal ?? 0) > 0) return false;
+  }
+  return hasPriorSamePack;
+}
+
 function catalogPackCap(pack: EnrollmentConsumptionTarget["pack"]): number | null {
   if (pack.courseQuotas.length > 0) {
     return pack.courseQuotas.reduce((sum, q) => sum + q.sessionCount, 0);
@@ -96,7 +129,19 @@ export function assignConsumedReservationsToEnrollments(
       const alloc = result.get(enrollment.id)!;
       if (alloc.remainingTotal <= 0) return false;
       const bounds = boundsById.get(enrollment.id)!;
-      if (!sessionInPeriod(reservation.sessionDate, bounds)) return false;
+      const inPeriod = sessionInPeriod(reservation.sessionDate, bounds);
+      if (
+        !inPeriod &&
+        !canBackfillOntoRenewalBeforePurchase(
+          enrollment,
+          reservation.sessionDate,
+          enrollmentsAsc,
+          result,
+          bounds,
+        )
+      ) {
+        return false;
+      }
       const eligibility = getEligibilityForPack({
         category: enrollment.pack.category ?? null,
         courseQuotas: enrollment.pack.courseQuotas,
