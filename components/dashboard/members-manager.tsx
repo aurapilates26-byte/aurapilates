@@ -31,6 +31,8 @@ import {
   sortPacksBySessionAsc,
 } from "@/lib/public-pack-display";
 import { computePersonalDiscountPreviewFromForm } from "@/lib/member-personal-discount";
+import { fetchNextAvailableQrCode } from "@/lib/admin/fetch-next-available-qr";
+import { QrIdInputField } from "@/components/dashboard/member-form/qr-id-input-field";
 import type { PackDisplayPricing } from "@/lib/pack-pricing";
 import type { PersonalDiscountType } from "@/types/admin/pack-payment";
 
@@ -332,6 +334,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
   const [qrStatus, setQrStatus] = useState<"UNKNOWN" | "UNASSIGNED" | "ASSIGNED" | "NOT_FOUND">("UNKNOWN");
   const [qrAssignedMemberId, setQrAssignedMemberId] = useState<string | null>(null);
   const [isFetchingQrKey, setIsFetchingQrKey] = useState(false);
+  const [isPickingQr, setIsPickingQr] = useState(false);
 
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -427,6 +430,31 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     }
     return "Identifiant introuvable";
   }, [qrStatus, isFetchingQrKey, editingMemberId, qrAssignedMemberId, qrId]);
+
+  const clearQrAssignment = () => {
+    setQrId("");
+    setQrKey(null);
+    setQrStatus("UNKNOWN");
+    setQrAssignedMemberId(null);
+    setModalError(null);
+    setIsFetchingQrKey(false);
+  };
+
+  const pickAvailableQr = async () => {
+    setIsPickingQr(true);
+    setModalError(null);
+    try {
+      const data = await fetchNextAvailableQrCode();
+      setQrId(data.qrId);
+      setQrKey(data.qrKey);
+      setQrStatus("UNASSIGNED");
+      setQrAssignedMemberId(null);
+    } catch (e) {
+      setModalError(e instanceof Error ? e.message : "Impossible de récupérer un QR disponible.");
+    } finally {
+      setIsPickingQr(false);
+    }
+  };
 
   const loadPackStates = async () => {
     try {
@@ -709,6 +737,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
 
       const paymentMode = String(createBody.paymentMode ?? "full");
       const createdWithPartial = paymentMode === "deposit" || paymentMode === "credit";
+      const hadQr = Boolean(createBody.qrId);
       await loadMembers();
       await refreshUnpaidCount();
       onChangeViewMode("list");
@@ -723,8 +752,12 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
             : "Acompte enregistré"
           : "Adhérente créée",
         description: createdWithPartial
-          ? "L'adhérente reste dans la liste et peut consommer ses séances. Finalisez le solde quand le reste est payé."
-          : "La nouvelle adhérente a été ajoutée et le QR code a été assigné.",
+          ? hadQr
+            ? "QR assigné. L'adhérente peut consommer ses séances ; finalisez le solde quand le reste est payé."
+            : "L'adhérente reste dans la liste et peut consommer ses séances. Finalisez le solde quand le reste est payé."
+          : hadQr
+            ? "La nouvelle adhérente a été ajoutée et le QR code a été assigné."
+            : "La nouvelle adhérente a été ajoutée.",
       });
     } finally {
       setIsSubmitting(false);
@@ -1409,8 +1442,8 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
           <p className="mt-2 text-sm text-brand-dark/70">
             {isEditingDepositPending ? (
               <>
-                Corrigez les informations de l&apos;adhérente. Le QR et l&apos;activation se feront lors de la
-                finalisation du solde.
+                Corrigez les informations de l&apos;adhérente, le pack ou le QR code. Finalisez le solde quand le reste
+                est payé.
               </>
             ) : (
               <>Mettez à jour les infos, le pack ou le QR code associé si nécessaire.</>
@@ -1426,30 +1459,24 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
 
           <div className="mt-5 space-y-4">
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <div>
-                  <Input
-                    id="member-qrid"
-                    label={
-                      isEditingDepositPending
-                        ? "Identifiant QR — assigné à la finalisation"
-                        : `Identifiant QR (${qrIdentifyStatusText}) — optionnel`
+                <QrIdInputField
+                  id="member-qrid"
+                  label={`Identifiant QR (${qrIdentifyStatusText}) — optionnel`}
+                  value={qrId}
+                  isPicking={isPickingQr}
+                  onChange={(next) => {
+                    setQrId(next);
+                    if (next.trim().length < 10) {
+                      setQrKey(null);
+                      setQrStatus("UNKNOWN");
+                      setQrAssignedMemberId(null);
+                      setModalError(null);
                     }
-                    value={qrId}
-                    disabled={isEditingDepositPending}
-                    onChange={(e) => {
-                      const next = e.target.value;
-                      setQrId(next);
-
-                      if (next.trim().length < 10) {
-                        setQrKey(null);
-                        setQrStatus("UNKNOWN");
-                        setQrAssignedMemberId(null);
-                        setModalError(null);
-                      }
-                    }}
-                    placeholder="Ex: identifiant qr code"
-                  />
-                </div>
+                  }}
+                  onPickAvailable={pickAvailableQr}
+                  onClear={clearQrAssignment}
+                  placeholder="Ex: identifiant qr code"
+                />
 
                 <div>
                   <label htmlFor="member-qrkey" className="text-sm font-medium text-brand-dark">
@@ -1459,7 +1486,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                     id="member-qrkey"
                     className="mt-2 min-h-[42px] w-full rounded-xl border border-brand-medium/35 bg-zinc-50 px-4 py-2.5 text-sm text-brand-dark/80"
                   >
-                    {isFetchingQrKey ? "Chargement..." : qrKey ?? "—"}
+                    {isFetchingQrKey || isPickingQr ? "Chargement..." : qrKey ?? "—"}
                   </div>
                 </div>
               </div>

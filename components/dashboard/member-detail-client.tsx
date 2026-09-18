@@ -31,6 +31,8 @@ import { MemberOwnedPacksPanel } from "@/components/dashboard/member-owned-packs
 import { useMemberDetailStore } from "@/store/admin/member-detail-store";
 import { subscribeMemberOwnedPacksChanged } from "@/store/admin/member-owned-packs-store";
 import { displayMemberEmail } from "@/lib/member-display-email";
+import { fetchNextAvailableQrCode } from "@/lib/admin/fetch-next-available-qr";
+import { QrIdInputField } from "@/components/dashboard/member-form/qr-id-input-field";
 import {
   computePersonalDiscountPreview,
   computePersonalDiscountPreviewFromForm,
@@ -262,6 +264,7 @@ export function MemberDetailClient({
   const [qrStatus, setQrStatus] = useState<"UNKNOWN" | "UNASSIGNED" | "ASSIGNED" | "NOT_FOUND">("UNKNOWN");
   const [qrAssignedMemberId, setQrAssignedMemberId] = useState<string | null>(null);
   const [isFetchingQrKey, setIsFetchingQrKey] = useState(false);
+  const [isPickingQr, setIsPickingQr] = useState(false);
 
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -548,7 +551,15 @@ export function MemberDetailClient({
 
   useEffect(() => {
     const trimmed = qrId.trim();
-    if (panelMode !== "edit" || trimmed.length < 10) return;
+    if (panelMode !== "edit") return;
+    if (!trimmed) {
+      setQrKey(null);
+      setQrStatus("UNKNOWN");
+      setQrAssignedMemberId(null);
+      setIsFetchingQrKey(false);
+      return;
+    }
+    if (trimmed.length < 10) return;
 
     let cancelled = false;
     (async () => {
@@ -590,6 +601,43 @@ export function MemberDetailClient({
       cancelled = true;
     };
   }, [qrId, panelMode]);
+
+  const qrIdentifyStatusText = useMemo(() => {
+    if (!qrId.trim()) return "optionnel";
+    if (qrStatus === "UNKNOWN") return isFetchingQrKey ? "Vérification..." : "Non vérifié";
+    if (qrStatus === "UNASSIGNED") return "Disponible";
+    if (qrStatus === "ASSIGNED") {
+      return qrAssignedMemberId && member?.id && qrAssignedMemberId === member.id
+        ? "Assigné"
+        : "Déjà assigné";
+    }
+    return "Identifiant introuvable";
+  }, [isFetchingQrKey, member?.id, qrAssignedMemberId, qrId, qrStatus]);
+
+  const clearQrAssignment = () => {
+    setQrId("");
+    setQrKey(null);
+    setQrStatus("UNKNOWN");
+    setQrAssignedMemberId(null);
+    setFormError(null);
+    setIsFetchingQrKey(false);
+  };
+
+  const pickAvailableQr = async () => {
+    setIsPickingQr(true);
+    setFormError(null);
+    try {
+      const data = await fetchNextAvailableQrCode();
+      setQrId(data.qrId);
+      setQrKey(data.qrKey);
+      setQrStatus("UNASSIGNED");
+      setQrAssignedMemberId(null);
+    } catch (e) {
+      setFormError(e instanceof Error ? e.message : "Impossible de récupérer un QR disponible.");
+    } finally {
+      setIsPickingQr(false);
+    }
+  };
 
   const handlePackCategoryChange = (value: string) => {
     setPackCategory(value);
@@ -1136,22 +1184,30 @@ export function MemberDetailClient({
           ) : panelMode === "edit" ? (
             <div className="mt-5 space-y-4">
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <Input
+                <QrIdInputField
                   id="detail-qrid"
-                  label="Identifiant QR"
+                  label={`Identifiant QR (${qrIdentifyStatusText}) — optionnel`}
                   value={qrId}
-                  onChange={(e) => setQrId(e.target.value)}
-                  placeholder="Identifiant QR"
+                  isPicking={isPickingQr}
+                  onChange={(next) => {
+                    setQrId(next);
+                    if (next.trim().length < 10) {
+                      setFormError(null);
+                    }
+                  }}
+                  onPickAvailable={pickAvailableQr}
+                  onClear={clearQrAssignment}
+                  placeholder="Ex: identifiant qr code"
                 />
                 <div>
                   <label htmlFor="detail-qrkey" className="text-sm font-medium text-brand-dark">
-                    Clé QR
+                    Clé QR (optionnel)
                   </label>
                   <div
                     id="detail-qrkey"
                     className="mt-2 min-h-[42px] w-full rounded-xl border border-brand-medium/35 bg-zinc-50 px-4 py-2.5 text-sm text-brand-dark/80"
                   >
-                    {isFetchingQrKey ? "Chargement..." : qrKey ?? "—"}
+                    {isFetchingQrKey || isPickingQr ? "Chargement..." : qrKey ?? "—"}
                   </div>
                 </div>
               </div>

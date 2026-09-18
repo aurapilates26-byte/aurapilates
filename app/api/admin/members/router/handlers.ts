@@ -403,10 +403,6 @@ export async function createAdminMember(request: Request) {
   const isCreditMode = paymentMode === "credit";
   const hasOpenBalance = isDepositMode || isCreditMode;
 
-  if (isDepositMode && qrId) {
-    return errorResponse("Le QR code est assigné lors de la finalisation du paiement (acompte).", 400);
-  }
-
   let qr: { id: string; publicId: string; qrKey: string; assignedMemberId: string | null } | null = null;
   if (qrId) {
     const qrRow = await db.qrCode.findUnique({
