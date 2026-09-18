@@ -1,5 +1,3 @@
-import "server-only";
-
 import type { Prisma } from "@prisma/client";
 import { formatYmdLocal, parseYmdToPrismaDate } from "@/lib/calendar-day";
 import { addPackDurationToStartDate } from "@/lib/pack-duration";
