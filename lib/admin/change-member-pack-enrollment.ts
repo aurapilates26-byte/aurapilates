@@ -724,7 +724,23 @@ export async function changeMemberPackEnrollment(input: ChangeMemberPackEnrollme
 }
 
 export async function changeMemberPackEnrollmentAndList(input: ChangeMemberPackEnrollmentInput) {
-  await changeMemberPackEnrollment(input);
+  const result = await changeMemberPackEnrollment(input);
+  const { reclaimSessionsOntoEnrollmentFromNewerPacks } = await import(
+    "@/lib/admin/reclaim-pack-sessions-fifo"
+  );
+  const { syncBalancesFromOpenEnrollments } = await import("@/lib/admin/member-owned-packs");
+  const { repairFifoEnrollmentActivationForMember } = await import(
+    "@/lib/admin/member-pack-enrollment"
+  );
+
+  // Upgrade START→GLOW (même catégorie) : rapatrier les séances encore sur un pack plus récent.
+  await reclaimSessionsOntoEnrollmentFromNewerPacks({
+    memberId: input.memberId,
+    enrollmentId: result.enrollmentId,
+  });
+  await syncBalancesFromOpenEnrollments(input.memberId);
+  await repairFifoEnrollmentActivationForMember(input.memberId);
+
   const items = await listMemberOwnedPacks(input.memberId);
   return items;
 }
