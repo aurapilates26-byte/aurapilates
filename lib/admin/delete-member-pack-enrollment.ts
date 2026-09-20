@@ -1,9 +1,10 @@
 import "server-only";
 
 import { Prisma } from "@prisma/client";
-import { countEnrollmentConsumedSessionsInPeriod } from "@/lib/admin/member-pack-enrollment";
+import { allocateConsumedSessionsAcrossMemberEnrollments } from "@/lib/admin/member-pack-enrollment";
 import { listMemberOwnedPacks, syncBalancesFromOpenEnrollments } from "@/lib/admin/member-owned-packs";
 import { startOfLocalToday } from "@/lib/calendar-day";
+import { getEnrollmentPeriodBounds } from "@/lib/member-pack-enrollment-period";
 import { creditMemberPackSession } from "@/lib/member-pack-session-ledger";
 import { prisma } from "@/lib/prisma";
 
@@ -120,7 +121,8 @@ async function cancelFutureReservationsForPackPeriod(
 
 /**
  * Supprime une inscription pack + les encaissements caisse liés (PackPayment).
- * Refuse si des séances ont déjà été consommées.
+ * Refuse si des séances ont déjà été consommées **sur cette inscription**
+ * (même attribution FIFO que l'affichage « 0 / 5 séances »).
  */
 export async function deleteMemberPackEnrollment(
   input: DeleteMemberPackEnrollmentInput,
@@ -133,7 +135,10 @@ export async function deleteMemberPackEnrollment(
         packId: true,
         packPaymentId: true,
         purchasedAt: true,
+        packStartedAt: true,
         closedAt: true,
+        status: true,
+        additionalSessionsCredit: true,
         pack: {
           select: {
             sessionCount: true,
@@ -145,38 +150,48 @@ export async function deleteMemberPackEnrollment(
     });
     if (!enrollment) throw new Error("NOT_FOUND");
 
-    const siblings = await tx.memberPackEnrollment.findMany({
-      where: { memberId: input.memberId, packId: enrollment.packId },
+    // Toutes les inscriptions de l'adhérente : le FIFO doit voir le pack
+    // précédent (ex. AURA START terminé 5/5) pour ne pas compter ses séances
+    // sur le renouvellement « En attente » (0/5).
+    const allEnrollmentsAsc = await tx.memberPackEnrollment.findMany({
+      where: { memberId: input.memberId },
       orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
       select: {
         id: true,
+        packId: true,
         purchasedAt: true,
         packStartedAt: true,
         closedAt: true,
+        status: true,
+        additionalSessionsCredit: true,
+        pack: {
+          select: {
+            sessionCount: true,
+            category: true,
+            courseQuotas: { select: { courseSlug: true, sessionCount: true } },
+          },
+        },
       },
     });
-    const idx = siblings.findIndex((row) => row.id === enrollment.id);
-    const next = idx >= 0 ? siblings[idx + 1] : null;
-    const periodStart = enrollment.purchasedAt;
-    const periodEndExclusive = next
-      ? (next.packStartedAt ?? next.purchasedAt)
-      : enrollment.closedAt;
 
-    const consumed = await countEnrollmentConsumedSessionsInPeriod({
+    const consumptionByEnrollment = await allocateConsumedSessionsAcrossMemberEnrollments({
       memberId: input.memberId,
-      packId: enrollment.packId,
-      courseQuotas: enrollment.pack.courseQuotas,
-      sessionCount: enrollment.pack.sessionCount,
-      category: enrollment.pack.category,
-      periodStart,
-      periodEndExclusive,
+      enrollmentsAsc: allEnrollmentsAsc,
+      countingMode: "display",
+      db: tx,
     });
+    const consumed = consumptionByEnrollment.get(enrollment.id)?.consumedTotal ?? 0;
     if (consumed > 0) throw new Error("HAS_CONSUMED_SESSIONS");
+
+    const { periodStart, periodEndExclusive } = getEnrollmentPeriodBounds(
+      enrollment,
+      allEnrollmentsAsc,
+    );
 
     await cancelFutureReservationsForPackPeriod(tx, {
       memberId: input.memberId,
       packId: enrollment.packId,
-      periodStart,
+      periodStart: periodStart ?? enrollment.purchasedAt,
       periodEndExclusive,
     });
 
