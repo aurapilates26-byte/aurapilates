@@ -269,16 +269,25 @@ function buildPackPaymentCreateData(
   paidAt: Date,
   resolved: PackPaymentAmounts,
 ): Prisma.PackPaymentUncheckedCreateInput {
-  if (input.amountDinars != null && input.personalDiscount) {
+  // Crédit : amountDinars=0 = « rien encaissé », pas une surcharge manuelle du prix catalogue.
+  // On applique la remise perso sur le prix résolu, tout en enregistrant 0 DT payés.
+  const isCreditPlaceholder =
+    (input.paymentKind ?? "FULL") === "CREDIT" && input.amountDinars === 0;
+
+  if (input.amountDinars != null && input.personalDiscount && !isCreditPlaceholder) {
     throw new Error("Montant manuel et remise personnalisée ne peuvent pas être combinés.");
   }
 
-  const amountBeforePersonalDiscount = input.amountDinars ?? resolved.amountDinars;
+  const amountBeforePersonalDiscount = isCreditPlaceholder
+    ? resolved.amountDinars
+    : (input.amountDinars ?? resolved.amountDinars);
   if (!Number.isInteger(amountBeforePersonalDiscount) || amountBeforePersonalDiscount < 0) {
     throw new Error("Montant invalide");
   }
   const personalDiscountDinars = computePersonalDiscountDinars(amountBeforePersonalDiscount, input.personalDiscount);
-  const amountDinars = Math.max(0, amountBeforePersonalDiscount - personalDiscountDinars);
+  const amountDinars = isCreditPlaceholder
+    ? 0
+    : Math.max(0, amountBeforePersonalDiscount - personalDiscountDinars);
 
   return {
     memberId: input.memberId,
