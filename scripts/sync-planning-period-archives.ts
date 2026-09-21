@@ -71,10 +71,15 @@ async function main() {
         updated += 1;
       }
     } else {
-      await prisma.studioPlanningPeriodArchive.create({
-        data: {
+      await prisma.studioPlanningPeriodArchive.upsert({
+        where: { periodStartDate: start },
+        create: {
           bookingWindow: seed.bookingWindow,
           periodStartDate: start,
+          periodEndDate,
+        },
+        update: {
+          bookingWindow: seed.bookingWindow,
           periodEndDate,
         },
       });

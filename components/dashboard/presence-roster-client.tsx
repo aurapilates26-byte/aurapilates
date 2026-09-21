@@ -13,6 +13,7 @@ import {
 } from "@/components/dashboard/reservations/prospect-row-actions";
 import { planningLevelLabelFr } from "@/lib/planning-public-labels";
 import { Input } from "@/components/ui";
+import { AdminWhatsAppOpenButton } from "@/components/dashboard/admin-whatsapp-open-button";
 
 type RosterMember = {
   id: string;
@@ -824,6 +825,16 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                                 onMark={() => void markPresent(row.id)}
                                 onUnmark={() => void removePresence(row.id, memberName)}
                               />
+                              {isPresent ? (
+                                <AdminWhatsAppOpenButton
+                                  fetchUrl={`/api/admin/presence/pack-whatsapp?reservationId=${encodeURIComponent(row.id)}`}
+                                  ariaLabel={`Confirmation présence WhatsApp — ${memberName}`}
+                                  title="WhatsApp — confirmation de présence"
+                                  hasPhone={Boolean(row.member.phone?.trim())}
+                                  missingPhoneDescription={`Aucun numéro enregistré pour ${memberName}.`}
+                                  disabled={markingId === row.id || deletingId === row.id}
+                                />
+                              ) : null}
                               {convertedByMemberId.has(row.member.id) ? <ConvertedProspectBadge /> : null}
                             </div>
                           </li>

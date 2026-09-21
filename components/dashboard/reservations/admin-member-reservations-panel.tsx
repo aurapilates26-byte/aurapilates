@@ -22,6 +22,7 @@ import {
   EditMemberPackEnrollmentDialog,
   PackEnrollmentEditButton,
 } from "@/components/dashboard/edit-member-pack-enrollment-dialog";
+import { AdminWhatsAppOpenButton } from "@/components/dashboard/admin-whatsapp-open-button";
 import { PaymentMethodBadge } from "@/components/dashboard/payment-method-badge";
 import { packCategoryMenuLabel } from "@/lib/pack-categories";
 import type { MemberOwnedPackDto } from "@/lib/admin/member-owned-packs";
@@ -73,6 +74,8 @@ function toListItem(
 
 type AdminMemberReservationsPanelProps = {
   memberId: string;
+  /** Téléphone adhérente pour l'icône WhatsApp historique pack. */
+  memberPhone?: string | null;
   reloadToken?: number;
   /** Slugs des quotas cours du pack (ex. reformer + mat) pour le détail Historique. */
   courseQuotaSlugs?: string[];
@@ -88,6 +91,7 @@ type AdminMemberReservationsPanelProps = {
 
 export function AdminMemberReservationsPanel({
   memberId,
+  memberPhone = null,
   reloadToken = 0,
   courseQuotaSlugs,
   personalDiscount = null,
@@ -264,6 +268,14 @@ export function AdminMemberReservationsPanel({
                   <div className="flex shrink-0 items-center gap-1.5">
                     <PaymentMethodBadge method={pack.packPaymentMethod} fallback="Paiement non renseigné" />
                     <PackEnrollmentEditButton onClick={() => setPackToEdit(pack)} />
+                    <AdminWhatsAppOpenButton
+                      fetchUrl={`/api/admin/members/${encodeURIComponent(memberId)}/owned-packs/${encodeURIComponent(pack.enrollmentId)}/whatsapp`}
+                      ariaLabel={`Envoyer l'historique WhatsApp du pack ${pack.packName}`}
+                      title="WhatsApp — historique de ce pack"
+                      hasPhone={Boolean(memberPhone?.trim())}
+                      missingPhoneDescription="Aucun numéro enregistré pour cette adhérente."
+                      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-emerald-200 bg-[#25D366]/15 text-[#128C7E] transition hover:bg-[#25D366]/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200 disabled:cursor-not-allowed disabled:opacity-50"
+                    />
                   </div>
                 </div>
                 <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">

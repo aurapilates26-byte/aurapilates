@@ -1171,6 +1171,7 @@ export function MemberDetailClient({
 
               <AdminMemberReservationsPanel
                 memberId={memberId}
+                memberPhone={member?.phone}
                 reloadToken={reservationsReloadToken}
                 courseQuotaSlugs={member.pack?.courseQuotas?.map((q) => q.courseSlug)}
                 personalDiscount={member.personalDiscount}

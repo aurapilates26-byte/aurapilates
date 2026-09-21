@@ -77,7 +77,9 @@ export async function maybeRollForwardExpiredPublishedPeriod(): Promise<boolean>
       break;
     }
 
-    await archiveCurrentPublishedPeriod();
+    // Archive uniquement la période lue ci-dessus (évite d'archiver la suivante
+    // si un autre request a déjà basculé le singleton).
+    await archivePublishedPeriodStartingAt(config.periodStartYmd);
 
     const next = proposeNextPlanningPeriod(config);
     const nextStart = parseYmdToPrismaDate(next.periodStartYmd);
@@ -104,28 +106,43 @@ export async function maybeRollForwardExpiredPublishedPeriod(): Promise<boolean>
   return rolled;
 }
 
+/**
+ * Archive une période publiée dont le début est `periodStartYmd`.
+ * No-op si le singleton a déjà avancé (course entre requêtes).
+ * Idempotent : upsert sur `periodStartDate` (évite P2002).
+ */
+export async function archivePublishedPeriodStartingAt(periodStartYmd: string): Promise<void> {
+  const row = await prisma.studioPlanningPeriod.findUnique({ where: { id: SINGLETON_ID } });
+  if (!row) return;
+
+  const currentStartYmd = formatYmdPrismaDate(row.periodStartDate);
+  if (currentStartYmd !== periodStartYmd.trim()) return;
+
+  const bookingWindow = toPlanningBookingWindow(row.bookingWindow);
+  const config = buildPlanningPeriodConfig(bookingWindow, periodStartFromRow(row.periodStartDate));
+  const periodStartDate = parseYmdToPrismaDate(currentStartYmd);
+  const periodEndDate = parseYmdToPrismaDate(config.periodEndYmd);
+  if (!periodStartDate || !periodEndDate) return;
+
+  await prisma.studioPlanningPeriodArchive.upsert({
+    where: { periodStartDate },
+    create: {
+      bookingWindow: row.bookingWindow,
+      periodStartDate,
+      periodEndDate,
+    },
+    update: {
+      bookingWindow: row.bookingWindow,
+      periodEndDate,
+    },
+  });
+}
+
 /** Archive la période publiée actuelle avant renouvellement (idempotent par date de début). */
 export async function archiveCurrentPublishedPeriod(): Promise<void> {
   const row = await prisma.studioPlanningPeriod.findUnique({ where: { id: SINGLETON_ID } });
   if (!row) return;
-
-  const bookingWindow = toPlanningBookingWindow(row.bookingWindow);
-  const config = buildPlanningPeriodConfig(bookingWindow, periodStartFromRow(row.periodStartDate));
-  const periodEndDate = parseYmdToPrismaDate(config.periodEndYmd);
-  if (!periodEndDate) return;
-
-  const existing = await prisma.studioPlanningPeriodArchive.findUnique({
-    where: { periodStartDate: row.periodStartDate },
-  });
-  if (existing) return;
-
-  await prisma.studioPlanningPeriodArchive.create({
-    data: {
-      bookingWindow: row.bookingWindow,
-      periodStartDate: row.periodStartDate,
-      periodEndDate,
-    },
-  });
+  await archivePublishedPeriodStartingAt(formatYmdPrismaDate(row.periodStartDate));
 }
 
 async function readPublishedPeriodConfigWithoutSideEffects(): Promise<PlanningPeriodConfig | null> {
@@ -309,13 +326,13 @@ export async function syncKnownPlanningPeriodArchives(): Promise<SyncPlanningPer
     const periodEndDate = parseYmdToPrismaDate(config.periodEndYmd);
     if (!periodEndDate) continue;
 
+    const bookingWindow = seed.bookingWindow as BookingWindow;
     const existing = await prisma.studioPlanningPeriodArchive.findUnique({
       where: { periodStartDate: start },
     });
 
     if (existing) {
       const endYmd = formatYmdPrismaDate(existing.periodEndDate);
-      const bookingWindow = seed.bookingWindow as BookingWindow;
       if (endYmd !== config.periodEndYmd || existing.bookingWindow !== bookingWindow) {
         await prisma.studioPlanningPeriodArchive.update({
           where: { periodStartDate: start },
@@ -327,10 +344,16 @@ export async function syncKnownPlanningPeriodArchives(): Promise<SyncPlanningPer
         updated += 1;
       }
     } else {
-      await prisma.studioPlanningPeriodArchive.create({
-        data: {
-          bookingWindow: seed.bookingWindow,
+      // upsert : race possible si sync + roll-forward tournent en parallèle
+      await prisma.studioPlanningPeriodArchive.upsert({
+        where: { periodStartDate: start },
+        create: {
+          bookingWindow,
           periodStartDate: start,
+          periodEndDate,
+        },
+        update: {
+          bookingWindow,
           periodEndDate,
         },
       });
