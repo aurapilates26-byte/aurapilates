@@ -7,13 +7,19 @@ import {
   listHistoricalPresenceRoster,
   markHistoricalPresence,
 } from "@/lib/admin/mark-historical-presence";
-import {
-  unmarkHistoricalPresence,
-  unmarkHistoricalPresenceErrorMessage,
-} from "@/lib/admin/unmark-historical-presence";
 import { listMemberOwnedPacks } from "@/lib/admin/member-owned-packs";
+import {
+  unmarkAdminPresence,
+  unmarkLivePresenceErrorMessage,
+} from "@/lib/admin/unmark-live-presence";
+import { unmarkHistoricalPresenceErrorMessage } from "@/lib/admin/unmark-historical-presence";
 import { broadcastMemberBookingRefresh } from "@/lib/member-booking-stream";
 import type { PlanningPeriodConfig } from "@/types/admin/planning";
+
+function unmarkPresenceErrorMessage(code: string): string {
+  if (code === "NOT_HISTORICAL") return unmarkHistoricalPresenceErrorMessage(code);
+  return unmarkLivePresenceErrorMessage(code);
+}
 
 function errorResponse(message: string, status: number) {
   return Response.json({ error: message }, { status });
@@ -98,7 +104,8 @@ export async function DELETE(request: Request) {
   if (!parsed.success) return errorResponse("Données invalides", 400);
 
   try {
-    const result = await unmarkHistoricalPresence(parsed.data.reservationId);
+    // Historique ou live (STAFF_KEY) : même poubelle dans le modal planning.
+    const result = await unmarkAdminPresence(parsed.data.reservationId);
     const [items, ownedPacks] = await Promise.all([
       listHistoricalPresenceRoster(result.planningId, result.sessionDateYmd),
       listMemberOwnedPacks(result.memberId),
@@ -107,6 +114,7 @@ export async function DELETE(request: Request) {
     return Response.json({ ok: true, result, items, ownedPacks });
   } catch (e) {
     const code = e instanceof Error ? e.message : "UNKNOWN";
-    return errorResponse(unmarkHistoricalPresenceErrorMessage(code), 409);
+    if (code === "NOT_FOUND") return errorResponse(unmarkPresenceErrorMessage(code), 404);
+    return errorResponse(unmarkPresenceErrorMessage(code), 409);
   }
 }
