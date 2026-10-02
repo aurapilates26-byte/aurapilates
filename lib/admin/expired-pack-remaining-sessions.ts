@@ -1,6 +1,6 @@
 import "server-only";
 
-import { startOfLocalToday } from "@/lib/calendar-day";
+import { formatYmdLocal, parseYmdLocal, startOfLocalToday } from "@/lib/calendar-day";
 import { listMemberOwnedPacks, type MemberOwnedPackDto } from "@/lib/admin/member-owned-packs";
 import { findFirstEnrollmentConsumedSessionDate } from "@/lib/admin/member-pack-enrollment";
 import { buildMemberSearchWhere } from "@/lib/admin/member-search-filter";
@@ -34,6 +34,13 @@ function isPackExpiredByDate(packExpiresAt: string | null): boolean {
   return expiresDay.getTime() < today.getTime();
 }
 
+function packExpiresDay(packExpiresAt: string | null): Date | null {
+  if (!packExpiresAt) return null;
+  const expires = new Date(packExpiresAt);
+  if (Number.isNaN(expires.getTime())) return null;
+  return new Date(expires.getFullYear(), expires.getMonth(), expires.getDate());
+}
+
 /** Pack dont la validité est dépassée mais il reste des séances à consommer. */
 export function isExpiredPackWithRemainingSessions(pack: MemberOwnedPackDto): boolean {
   if (pack.remainingSessions <= 0) return false;
@@ -41,6 +48,27 @@ export function isExpiredPackWithRemainingSessions(pack: MemberOwnedPackDto): bo
   if (pack.enrollmentStatus === "EXPIRED") return true;
   if (pack.status === "expired") return true;
   return isPackExpiredByDate(pack.packExpiresAt);
+}
+
+/**
+ * Prolongation autorisée pour une réservation dont la date dépasse la validité,
+ * même si le pack n'est pas encore expiré « aujourd'hui ».
+ */
+export function canProlongPackForSessionDate(
+  pack: MemberOwnedPackDto,
+  sessionDateLocal: Date,
+): boolean {
+  if (pack.remainingSessions <= 0) return false;
+  if (pack.prolongedAt) return false;
+  if (isExpiredPackWithRemainingSessions(pack)) return true;
+  const expiresDay = packExpiresDay(pack.packExpiresAt);
+  if (!expiresDay) return false;
+  const sessionDay = new Date(
+    sessionDateLocal.getFullYear(),
+    sessionDateLocal.getMonth(),
+    sessionDateLocal.getDate(),
+  );
+  return sessionDay.getTime() > expiresDay.getTime();
 }
 
 function toResultPack(pack: MemberOwnedPackDto): ExpiredPackMemberPackDto {
@@ -102,6 +130,8 @@ export async function searchMembersWithExpiredPackRemainingSessions(
 export async function prolongExpiredPackEnrollment(input: {
   memberId: string;
   enrollmentId: string;
+  /** Si fourni : autorise la prolongation quand la séance dépasse la validité (pas encore expiré aujourd'hui). */
+  forSessionDate?: string | null;
 }): Promise<{ packExpiresAt: string | null }> {
   const enrollment = await prisma.memberPackEnrollment.findFirst({
     where: { id: input.enrollmentId, memberId: input.memberId },
@@ -119,12 +149,22 @@ export async function prolongExpiredPackEnrollment(input: {
 
   const owned = await listMemberOwnedPacks(input.memberId);
   const packDto = owned.find((p) => p.enrollmentId === input.enrollmentId);
-  if (!packDto || !isExpiredPackWithRemainingSessions(packDto)) {
+  const sessionDateLocal = input.forSessionDate ? parseYmdLocal(input.forSessionDate) : null;
+  const eligible =
+    packDto != null &&
+    (sessionDateLocal
+      ? canProlongPackForSessionDate(packDto, sessionDateLocal)
+      : isExpiredPackWithRemainingSessions(packDto));
+  if (!eligible) {
     throw new Error("PACK_NOT_ELIGIBLE");
   }
 
   const today = startOfLocalToday();
-  const packExpiresAt = addPackDurationToStartDate(today, enrollment.pack.durationDays);
+  const fromToday = addPackDurationToStartDate(today, enrollment.pack.durationDays);
+  const packExpiresAt =
+    sessionDateLocal && (!fromToday || sessionDateLocal.getTime() > fromToday.getTime())
+      ? sessionDateLocal
+      : fromToday;
   const prolongedFromExpiresAt = enrollment.packExpiresAt;
 
   let packStartedAt = enrollment.packStartedAt;
@@ -167,6 +207,45 @@ export async function prolongExpiredPackEnrollment(input: {
   });
 
   return { packExpiresAt: packExpiresAt?.toISOString() ?? null };
+}
+
+/** Pack expiré (ou bientôt à la date de séance) avec séances restantes, pour proposer une prolongation à la réservation. */
+export async function findProlongOfferForBooking(input: {
+  memberId: string;
+  courseSlug: string;
+  sessionDateLocal: Date;
+}): Promise<{
+  enrollmentId: string;
+  packId: string;
+  packName: string;
+  packExpiresAt: string | null;
+  remainingSessions: number;
+  sessionDate: string;
+} | null> {
+  const owned = await listMemberOwnedPacks(input.memberId);
+  const eligible = owned.filter((pack) => {
+    if (!canProlongPackForSessionDate(pack, input.sessionDateLocal)) return false;
+    if (pack.courseQuotas.length > 0) {
+      return pack.courseQuotas.some((q) => q.courseSlug === input.courseSlug);
+    }
+    return true;
+  });
+  if (eligible.length === 0) return null;
+
+  const chosen = [...eligible].sort((a, b) => {
+    const aTime = new Date(a.purchasedAt).getTime();
+    const bTime = new Date(b.purchasedAt).getTime();
+    return aTime - bTime;
+  })[0]!;
+
+  return {
+    enrollmentId: chosen.enrollmentId,
+    packId: chosen.packId,
+    packName: chosen.packName,
+    packExpiresAt: chosen.packExpiresAt,
+    remainingSessions: chosen.remainingSessions,
+    sessionDate: formatYmdLocal(input.sessionDateLocal),
+  };
 }
 
 export async function cancelProlongedPackEnrollment(input: {

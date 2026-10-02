@@ -29,7 +29,10 @@ import type { AdminMemberReservationItem } from "@/lib/admin/member-reservations
 import { AdminMemberReservationsPanel } from "@/components/dashboard/reservations/admin-member-reservations-panel";
 import { MemberOwnedPacksPanel } from "@/components/dashboard/member-owned-packs-panel";
 import { useMemberDetailStore } from "@/store/admin/member-detail-store";
-import { subscribeMemberOwnedPacksChanged } from "@/store/admin/member-owned-packs-store";
+import {
+  dispatchMemberOwnedPacksChanged,
+  subscribeMemberOwnedPacksChanged,
+} from "@/store/admin/member-owned-packs-store";
 import { displayMemberEmail } from "@/lib/member-display-email";
 import { fetchNextAvailableQrCode } from "@/lib/admin/fetch-next-available-qr";
 import { QrIdInputField } from "@/components/dashboard/member-form/qr-id-input-field";
@@ -75,6 +78,21 @@ type PendingAdminBooking = {
   packOptions: BookablePackOption[];
   selectedPackId: string;
   packsLoading: boolean;
+};
+
+type BookablePackProlongOffer = {
+  enrollmentId: string;
+  packId: string;
+  packName: string;
+  packExpiresAt: string | null;
+  remainingSessions: number;
+  sessionDate: string;
+};
+
+type PendingProlongBooking = {
+  planningId: string;
+  slot: SlotRow;
+  offer: BookablePackProlongOffer;
 };
 
 type PanelMode = "view" | "edit" | "book" | "renew";
@@ -300,6 +318,10 @@ export function MemberDetailClient({
   const [slotsPublishedPeriodLabel, setSlotsPublishedPeriodLabel] = useState<string | null>(null);
   const [bookingPlanningId, setBookingPlanningId] = useState<string | null>(null);
   const [pendingBooking, setPendingBooking] = useState<PendingAdminBooking | null>(null);
+  const [pendingProlongBooking, setPendingProlongBooking] = useState<PendingProlongBooking | null>(
+    null,
+  );
+  const [isProlongingForBooking, setIsProlongingForBooking] = useState(false);
 
   const [upcomingReservations, setUpcomingReservations] = useState<AdminMemberReservationItem[]>([]);
 
@@ -948,14 +970,53 @@ export function MemberDetailClient({
     await submitBook(pendingBooking.planningId, pendingBooking.selectedPackId);
   };
 
+  const confirmProlongAndBook = async () => {
+    if (!pendingProlongBooking || isProlongingForBooking) return;
+    const { planningId, offer } = pendingProlongBooking;
+    setIsProlongingForBooking(true);
+    try {
+      const prolongRes = await fetch(
+        `/api/admin/members/${encodeURIComponent(memberId)}/owned-packs/${encodeURIComponent(offer.enrollmentId)}/prolong`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ forSessionDate: offer.sessionDate }),
+        },
+      );
+      const prolongData = (await prolongRes.json().catch(() => null)) as {
+        error?: string;
+        packExpiresAt?: string | null;
+      } | null;
+      if (!prolongRes.ok) {
+        throw new Error(prolongData?.error ?? "Prolongation impossible.");
+      }
+
+      dispatchMemberOwnedPacksChanged({ memberId });
+      setOwnedPacksReloadToken((t) => t + 1);
+      setPendingProlongBooking(null);
+
+      toast({
+        variant: "success",
+        title: "Pack prolongé",
+        description: `${offer.packName} — nouvelle fin ${formatDateFr(prolongData?.packExpiresAt ?? null)}. Réservation en cours…`,
+      });
+
+      await submitBook(planningId, offer.packId);
+    } catch (e) {
+      toast({
+        variant: "error",
+        title: "Prolongation",
+        description: e instanceof Error ? e.message : "Erreur",
+        durationMs: 14000,
+      });
+    } finally {
+      setIsProlongingForBooking(false);
+    }
+  };
+
   const handleBookSlot = async (slot: SlotRow) => {
-    setPendingBooking({
-      planningId: slot.planningId,
-      slot,
-      packOptions: [],
-      selectedPackId: "",
-      packsLoading: true,
-    });
+    setPendingProlongBooking(null);
+    setBookingPlanningId(slot.planningId);
 
     try {
       const params = new URLSearchParams({
@@ -973,24 +1034,30 @@ export function MemberDetailClient({
       const data = (await response.json()) as {
         items: BookablePackOption[];
         emptyMessage?: string;
+        prolongOffer?: BookablePackProlongOffer;
       };
       const options = selectBookablePackOptions(data.items ?? []);
       if (options.length === 0) {
+        if (data.prolongOffer) {
+          setPendingProlongBooking({
+            planningId: slot.planningId,
+            slot,
+            offer: data.prolongOffer,
+          });
+          return;
+        }
         throw new Error(
           data.emptyMessage ??
             "Aucun pack utilisable pour ce cours à cette date. Vérifiez l'expiration, les séances restantes et le type de cours couvert.",
         );
       }
-      setPendingBooking((prev) =>
-        prev
-          ? {
-              ...prev,
-              packOptions: options,
-              selectedPackId: options[0]!.packId,
-              packsLoading: false,
-            }
-          : prev,
-      );
+      setPendingBooking({
+        planningId: slot.planningId,
+        slot,
+        packOptions: options,
+        selectedPackId: options[0]!.packId,
+        packsLoading: false,
+      });
     } catch (e) {
       setPendingBooking(null);
       toast({
@@ -999,6 +1066,8 @@ export function MemberDetailClient({
         description: e instanceof Error ? e.message : "Erreur",
         durationMs: 14000,
       });
+    } finally {
+      setBookingPlanningId(null);
     }
   };
 
@@ -1736,6 +1805,24 @@ export function MemberDetailClient({
           if (!isDeleting) setShowDeleteConfirm(false);
         }}
         onConfirm={() => void handleDelete()}
+      />
+
+      <ConfirmDialog
+        isOpen={pendingProlongBooking != null}
+        title="Prolongation du pack requise"
+        description={
+          pendingProlongBooking
+            ? `La date de réservation choisie (${formatDateFr(parseYmdLocal(pendingProlongBooking.offer.sessionDate) ?? pendingProlongBooking.offer.sessionDate)}) dépasse la date de validité du pack ${pendingProlongBooking.offer.packName} (valide jusqu’au ${formatDateFr(pendingProlongBooking.offer.packExpiresAt)}). À cette date, le pack est considéré comme expiré. Souhaitez-vous faire une prolongation pour passer cette réservation ? (${pendingProlongBooking.offer.remainingSessions} séance${pendingProlongBooking.offer.remainingSessions > 1 ? "s" : ""} restante${pendingProlongBooking.offer.remainingSessions > 1 ? "s" : ""})`
+            : undefined
+        }
+        confirmText="Prolongation"
+        confirmingText="Prolongation…"
+        cancelText="Annuler"
+        isConfirming={isProlongingForBooking || Boolean(bookingPlanningId)}
+        onClose={() => {
+          if (!isProlongingForBooking && !bookingPlanningId) setPendingProlongBooking(null);
+        }}
+        onConfirm={() => void confirmProlongAndBook()}
       />
 
       <Modal

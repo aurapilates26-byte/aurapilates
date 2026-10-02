@@ -2,7 +2,12 @@ import "server-only";
 
 import type { Prisma } from "@prisma/client";
 import { courseLabel } from "@/lib/course-labels";
-import { startOfLocalToday, formatYmdPrismaDate, parseYmdLocal } from "@/lib/calendar-day";
+import {
+  formatYmdLocal,
+  formatYmdPrismaDate,
+  parseYmdLocal,
+  startOfLocalToday,
+} from "@/lib/calendar-day";
 import { PACK_ERRORS } from "@/lib/create-member-reservation";
 import {
   getEligibilityForPack,
@@ -22,6 +27,7 @@ import {
   consumeOldestOpenEnrollmentOnDebit,
 } from "@/lib/admin/member-pack-enrollment";
 import { ensureMemberParallelPackStockForDebit } from "@/lib/admin/member-owned-packs";
+import { findProlongOfferForBooking } from "@/lib/admin/expired-pack-remaining-sessions";
 import type { EnrollmentConsumptionAlloc } from "@/lib/member-pack-consumption-assign";
 import {
   remainingForCourseFromBalances,
@@ -57,6 +63,8 @@ export type BookablePackOptionDto = {
 type PackCandidate = {
   packId: string;
   packName: string;
+  /** Inscription FIFO / ouverte utilisée pour ce candidat (prolongation). */
+  enrollmentId: string | null;
   pack: {
     id: string;
     name: string;
@@ -323,6 +331,7 @@ async function loadPackCandidates(
         where: { status: { in: ["PENDING_START", "ACTIVE"] } },
         orderBy: [{ purchasedAt: "desc" }, { createdAt: "desc" }],
         select: {
+          id: true,
           packId: true,
           purchasedAt: true,
           packStartedAt: true,
@@ -475,6 +484,7 @@ async function loadPackCandidates(
       candidates.push({
         packId: pack.id,
         packName: pack.name,
+        enrollmentId: openEnrollment?.id ?? null,
         pack,
         purchasedAt: openEnrollment?.purchasedAt ?? new Date(0),
         packStartedAt: period.packStartedAt,
@@ -508,6 +518,7 @@ async function loadPackCandidates(
     candidates.push({
       packId: pack.id,
       packName: pack.name,
+      enrollmentId: fifoEnrollment.id,
       pack,
       purchasedAt: fifoEnrollment.purchasedAt,
       packStartedAt: period.packStartedAt,
@@ -619,10 +630,22 @@ export async function getMemberCombinedPackEligibility(memberId: string): Promis
   };
 }
 
+/** Pack utilisable après prolongation (date de séance hors validité). */
+export type BookablePackProlongOfferDto = {
+  enrollmentId: string;
+  packId: string;
+  packName: string;
+  packExpiresAt: string | null;
+  remainingSessions: number;
+  sessionDate: string;
+};
+
 export type ListBookablePacksResult = {
   items: BookablePackOptionDto[];
   /** Message clair pour l'admin quand aucun pack n'est réservable. */
   emptyMessage?: string;
+  /** Proposition de prolongation pour passer la réservation à la date choisie. */
+  prolongOffer?: BookablePackProlongOfferDto;
 };
 
 function formatDateFrShort(d: Date): string {
@@ -783,6 +806,32 @@ async function diagnoseEmptyBookablePacks(input: {
   return `Aucun pack utilisable pour ${courseLabelFr} à cette date. Vérifiez l'expiration, les séances restantes et le type de cours couvert.`;
 }
 
+function buildProlongOfferForSessionDate(
+  candidates: PackCandidate[],
+  sessionDateLocal: Date,
+): BookablePackProlongOfferDto | undefined {
+  const expiredForSession = candidates.filter((c) => {
+    if (c.isProlonged || !c.enrollmentId) return false;
+    if (c.remainingSessions <= 0 || c.remainingForCourse <= 0) return false;
+    if (!c.packStartedAt || isPackUnused(c)) return false;
+    const expiresAt = resolveCandidateExpiresAt(c);
+    return expiresAt != null && sessionDateLocal.getTime() > expiresAt.getTime();
+  });
+  if (expiredForSession.length === 0) return undefined;
+
+  const chosen = pickDefaultPackCandidate(expiredForSession);
+  if (!chosen.enrollmentId) return undefined;
+  const expiresAt = resolveCandidateExpiresAt(chosen);
+  return {
+    enrollmentId: chosen.enrollmentId,
+    packId: chosen.packId,
+    packName: chosen.packName,
+    packExpiresAt: expiresAt?.toISOString() ?? null,
+    remainingSessions: chosen.remainingSessions,
+    sessionDate: formatYmdLocal(sessionDateLocal),
+  };
+}
+
 export async function listBookablePacksForMember(
   memberId: string,
   courseSlug: string,
@@ -796,13 +845,29 @@ export async function listBookablePacksForMember(
   const items = filtered.map(toBookablePackOptionDto);
   if (items.length > 0) return { items };
 
+  let prolongOffer = sessionDateLocal
+    ? buildProlongOfferForSessionDate(candidates, sessionDateLocal)
+    : undefined;
+  if (!prolongOffer && sessionDateLocal) {
+    const fromOwned = await findProlongOfferForBooking({
+      memberId,
+      courseSlug,
+      sessionDateLocal,
+    });
+    if (fromOwned) prolongOffer = fromOwned;
+  }
+
   const emptyMessage = await diagnoseEmptyBookablePacks({
     memberId,
     courseSlug,
     sessionDateLocal,
     eligibleCandidates: candidates,
   });
-  return { items, emptyMessage };
+  return {
+    items,
+    emptyMessage,
+    ...(prolongOffer ? { prolongOffer } : {}),
+  };
 }
 
 export async function resolvePackForMemberBooking(

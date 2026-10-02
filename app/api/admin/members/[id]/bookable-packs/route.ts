@@ -42,5 +42,6 @@ export async function GET(request: Request, { params }: Params) {
   return Response.json({
     items: result.items,
     ...(result.emptyMessage ? { emptyMessage: result.emptyMessage } : {}),
+    ...(result.prolongOffer ? { prolongOffer: result.prolongOffer } : {}),
   });
 }

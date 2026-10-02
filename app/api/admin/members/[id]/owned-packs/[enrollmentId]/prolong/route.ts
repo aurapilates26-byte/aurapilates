@@ -1,4 +1,5 @@
 import { getServerSession } from "next-auth";
+import { z } from "zod";
 import { authOptions } from "@/auth";
 import { isStaffRole } from "@/lib/admin/access";
 import { prolongExpiredPackEnrollment } from "@/lib/admin/expired-pack-remaining-sessions";
@@ -12,18 +13,31 @@ const ERROR_MESSAGES: Record<string, string> = {
   PACK_NOT_ELIGIBLE: "Ce pack ne peut pas être prolongé (pas expiré ou plus de séances).",
 };
 
+const bodySchema = z
+  .object({
+    forSessionDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  })
+  .optional();
+
 type Params = { params: Promise<{ id: string; enrollmentId: string }> };
 
-export async function POST(_request: Request, { params }: Params) {
+export async function POST(request: Request, { params }: Params) {
   const session = await getServerSession(authOptions);
   if (!session?.user || !isStaffRole(session.user.role)) {
     return errorResponse("Forbidden", 403);
   }
 
   const { id: memberId, enrollmentId } = await params;
+  const rawBody = await request.json().catch(() => null);
+  const parsed = bodySchema.safeParse(rawBody ?? undefined);
+  if (!parsed.success) return errorResponse("Paramètres invalides", 400);
 
   try {
-    const result = await prolongExpiredPackEnrollment({ memberId, enrollmentId });
+    const result = await prolongExpiredPackEnrollment({
+      memberId,
+      enrollmentId,
+      forSessionDate: parsed.data?.forSessionDate,
+    });
     return Response.json({ ok: true, ...result });
   } catch (e) {
     const code = e instanceof Error ? e.message : "UNKNOWN";
