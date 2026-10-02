@@ -45,7 +45,8 @@ function packExpiresDay(packExpiresAt: string | null): Date | null {
 /** Pack dont la validité est dépassée mais il reste des séances à consommer. */
 export function isExpiredPackWithRemainingSessions(pack: MemberOwnedPackDto): boolean {
   if (!packHasUnconsumedSessions(pack)) return false;
-  if (pack.prolongedAt) return false;
+  // Prolongation incomplète : prolongedAt posé mais la date de fin est encore dépassée.
+  if (pack.prolongedAt && !isPackExpiredByDate(pack.packExpiresAt)) return false;
   if (pack.enrollmentStatus === "EXPIRED") return true;
   if (pack.status === "expired") return true;
   return isPackExpiredByDate(pack.packExpiresAt);
@@ -60,7 +61,7 @@ export function canProlongPackForSessionDate(
   sessionDateLocal: Date,
 ): boolean {
   if (!packHasUnconsumedSessions(pack)) return false;
-  if (pack.prolongedAt) return false;
+  if (pack.prolongedAt && !isPackExpiredByDate(pack.packExpiresAt)) return false;
   if (isExpiredPackWithRemainingSessions(pack)) return true;
   const expiresDay = packExpiresDay(pack.packExpiresAt);
   if (!expiresDay) return false;

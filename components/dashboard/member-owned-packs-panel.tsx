@@ -91,7 +91,8 @@ function packBadgeLabel(kind: PackBadgeKind): string {
 /** Pack expiré avec séances restantes (8/10 compte autant que remainingSessions). */
 function canProlongExpiredPack(pack: MemberOwnedPackDto): boolean {
   if (!packHasUnconsumedSessions(pack)) return false;
-  if (pack.prolongedAt) return false;
+  // Si déjà prolongé ET toujours dans les dates, ne pas reproposer. Si la fin est encore dépassée, si.
+  if (pack.prolongedAt && !isPackDateExpired(pack)) return false;
   if (getPackBadgeKind(pack) !== "expired") return false;
   return true;
 }
