@@ -2,6 +2,7 @@ import "server-only";
 
 import { formatYmdLocal, parseYmdLocal, startOfLocalToday } from "@/lib/calendar-day";
 import { listMemberOwnedPacks, type MemberOwnedPackDto } from "@/lib/admin/member-owned-packs";
+import { packHasUnconsumedSessions } from "@/lib/member-pack-remaining";
 import { findFirstEnrollmentConsumedSessionDate } from "@/lib/admin/member-pack-enrollment";
 import { buildMemberSearchWhere } from "@/lib/admin/member-search-filter";
 import { addPackDurationToStartDate } from "@/lib/pack-duration";
@@ -43,7 +44,7 @@ function packExpiresDay(packExpiresAt: string | null): Date | null {
 
 /** Pack dont la validité est dépassée mais il reste des séances à consommer. */
 export function isExpiredPackWithRemainingSessions(pack: MemberOwnedPackDto): boolean {
-  if (pack.remainingSessions <= 0) return false;
+  if (!packHasUnconsumedSessions(pack)) return false;
   if (pack.prolongedAt) return false;
   if (pack.enrollmentStatus === "EXPIRED") return true;
   if (pack.status === "expired") return true;
@@ -58,7 +59,7 @@ export function canProlongPackForSessionDate(
   pack: MemberOwnedPackDto,
   sessionDateLocal: Date,
 ): boolean {
-  if (pack.remainingSessions <= 0) return false;
+  if (!packHasUnconsumedSessions(pack)) return false;
   if (pack.prolongedAt) return false;
   if (isExpiredPackWithRemainingSessions(pack)) return true;
   const expiresDay = packExpiresDay(pack.packExpiresAt);

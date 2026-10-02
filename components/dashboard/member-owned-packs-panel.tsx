@@ -5,6 +5,7 @@ import { PaymentMethodBadge } from "@/components/dashboard/payment-method-badge"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast-provider";
 import type { MemberOwnedPackDto } from "@/lib/admin/member-owned-packs";
+import { packHasUnconsumedSessions } from "@/lib/member-pack-remaining";
 import { formatPackPriceDt } from "@/lib/public-pack-display";
 import { packCategoryMenuLabel } from "@/lib/pack-categories";
 import {
@@ -47,25 +48,20 @@ function isPackDateExpired(pack: MemberOwnedPackDto): boolean {
 
 /** Expiré · Terminé · Prolongé · En cours · En attente. */
 function getPackBadgeKind(pack: MemberOwnedPackDto): PackBadgeKind {
-  const hasRemaining =
-    pack.remainingSessions > 0 ||
-    (pack.totalSessions != null && pack.consumedSessions < pack.totalSessions);
+  const hasRemaining = packHasUnconsumedSessions(pack);
 
-  if (pack.totalSessions != null && pack.remainingSessions <= 0) return "finished";
-  if (pack.consumedSessions > 0 && pack.remainingSessions <= 0) return "finished";
+  // Terminé = plus rien à consommer (10/10). Un 8/10 n'est jamais terminé.
+  if (!hasRemaining) return "finished";
 
-  if (hasRemaining && pack.packStartedAt && isPackDateExpired(pack)) {
+  if (pack.packStartedAt && isPackDateExpired(pack)) {
     return "expired";
   }
 
-  if (hasRemaining && pack.prolongedAt) return "prolonged";
+  if (pack.prolongedAt) return "prolonged";
 
-  if (hasRemaining && !pack.packStartedAt) return "pending";
+  if (!pack.packStartedAt) return "pending";
 
-  if (hasRemaining) return "consuming";
-
-  if (pack.status === "expired" || isPackDateExpired(pack)) return "expired";
-  return "finished";
+  return "consuming";
 }
 
 function packBadgeClass(kind: PackBadgeKind): string {
@@ -92,9 +88,9 @@ function packBadgeLabel(kind: PackBadgeKind): string {
   return "Expiré";
 }
 
-/** Pack expiré avec séances restantes — même critère que Réservations. */
+/** Pack expiré avec séances restantes (8/10 compte autant que remainingSessions). */
 function canProlongExpiredPack(pack: MemberOwnedPackDto): boolean {
-  if (pack.remainingSessions <= 0) return false;
+  if (!packHasUnconsumedSessions(pack)) return false;
   if (pack.prolongedAt) return false;
   if (getPackBadgeKind(pack) !== "expired") return false;
   return true;
