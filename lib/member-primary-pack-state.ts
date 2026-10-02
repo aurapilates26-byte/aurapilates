@@ -116,10 +116,12 @@ export function classifyPrimaryPackKind(input: {
   if (input.totalSessions != null && input.remainingSessions <= 0) return "finished";
   if (input.consumedSessions > 0 && input.remainingSessions <= 0) return "finished";
 
+  // Même ordre que la fiche : Prolongé avant Expiré (une date de fin périmée
+  // après prolongation ne doit pas renvoyer le pack dans « expiré »).
+  if (hasRemaining && input.prolongedAt) return "prolonged";
   if (hasRemaining && input.packStartedAt && isPackDateExpired(input.packExpiresAt)) {
     return "expired";
   }
-  if (hasRemaining && input.prolongedAt) return "prolonged";
   if (hasRemaining && !input.packStartedAt) return "pending";
   if (hasRemaining) return "consuming";
 

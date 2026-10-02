@@ -53,11 +53,11 @@ function getPackBadgeKind(pack: MemberOwnedPackDto): PackBadgeKind {
   // Terminé = plus rien à consommer (10/10). Un 8/10 n'est jamais terminé.
   if (!hasRemaining) return "finished";
 
+  if (hasRemaining && pack.prolongedAt) return "prolonged";
+
   if (pack.packStartedAt && isPackDateExpired(pack)) {
     return "expired";
   }
-
-  if (pack.prolongedAt) return "prolonged";
 
   if (!pack.packStartedAt) return "pending";
 

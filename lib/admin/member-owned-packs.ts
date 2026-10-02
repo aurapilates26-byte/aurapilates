@@ -1,7 +1,7 @@
 import "server-only";
 
 import type { MemberPackEnrollmentStatus, Prisma } from "@prisma/client";
-import { startOfLocalToday, formatYmdLocal, parseYmdToPrismaDate } from "@/lib/calendar-day";
+import { startOfLocalToday, formatYmdLocal, formatYmdPrismaDate, parseYmdToPrismaDate } from "@/lib/calendar-day";
 import {
   allocateConsumedSessionsAcrossMemberEnrollments,
   ensureMemberPackEnrollmentsBackfilled,
@@ -84,6 +84,7 @@ function mapEnrollmentStatusToDisplay(
   enrollmentStatus: MemberPackEnrollmentStatus,
   remainingSessions: number,
   packExpiresAt: Date | null,
+  prolongedAt: Date | null,
 ): MemberOwnedPackStatus {
   // Pack parallèle encore marqué remplacé mais avec séances → traiter comme en cours.
   if (enrollmentStatus === "REPLACED" && remainingSessions > 0) return "pending";
@@ -93,6 +94,8 @@ function mapEnrollmentStatusToDisplay(
 
   // 0 séance restante = terminé côté badge (pas « expiré » calendaire).
   if (remainingSessions <= 0) return "expired";
+  // Prolongation admin : ne pas reclasser « expiré » tant que l’ancienne date de fin n’a pas été recalculée.
+  if (prolongedAt) return "active";
   if (packExpiresAt) {
     const today = startOfLocalToday();
     const expiresDay = new Date(
@@ -144,6 +147,31 @@ async function repairEnrollmentStartsBeforePurchase(memberId: string): Promise<v
     const started = toPrismaDateLocal(enrollment.packStartedAt);
     const purchased = toPrismaDateLocal(enrollment.purchasedAt);
     if (started.getTime() >= purchased.getTime()) continue;
+    // Ne jamais écraser packExpiresAt d'une prolongation (sinon GLOW redevient « expiré »
+    // et les séances suivantes partent sur le pack suivant).
+    if (enrollment.prolongedAt) {
+      const { periodStart, periodEndExclusive } = getEnrollmentPeriodBounds(
+        enrollment,
+        enrollmentsAsc,
+      );
+      const firstSessionDate = await findFirstEnrollmentConsumedSessionDate({
+        memberId,
+        packId: enrollment.packId,
+        courseQuotas: enrollment.pack.courseQuotas,
+        periodStart,
+        periodEndExclusive,
+      });
+      if (
+        firstSessionDate &&
+        toPrismaDateLocal(firstSessionDate).getTime() >= purchased.getTime()
+      ) {
+        await prisma.memberPackEnrollment.update({
+          where: { id: enrollment.id },
+          data: { packStartedAt: firstSessionDate },
+        });
+      }
+      continue;
+    }
 
     const { periodStart, periodEndExclusive } = getEnrollmentPeriodBounds(enrollment, enrollmentsAsc);
     const firstSessionDate = await findFirstEnrollmentConsumedSessionDate({
@@ -309,43 +337,6 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
     let enrollmentStatus = enrollment.status;
     const isProlonged = enrollment.prolongedAt != null;
 
-    if (isProlonged) {
-      const { periodEndExclusive } = getEnrollmentPeriodBounds(enrollment, enrollmentsAsc);
-      const firstConsumed = await findFirstEnrollmentConsumedSessionDate({
-        memberId,
-        packId: pack.id,
-        courseQuotas: pack.courseQuotas,
-        periodStart: enrollment.purchasedAt,
-        periodEndExclusive,
-      });
-      if (firstConsumed) {
-        const firstDay = toPrismaDateLocal(firstConsumed);
-        const startDay = packStartedAt ? toPrismaDateLocal(packStartedAt) : null;
-        if (!startDay || startDay.getTime() > firstDay.getTime()) {
-          packStartedAt = firstConsumed;
-          await prisma.memberPackEnrollment.update({
-            where: { id: enrollment.id },
-            data: { packStartedAt: firstConsumed },
-          });
-          if (isPrimary) {
-            const memberRow = await prisma.member.findUnique({
-              where: { id: memberId },
-              select: { packStartedAt: true },
-            });
-            const memberStartDay = memberRow?.packStartedAt
-              ? toPrismaDateLocal(memberRow.packStartedAt)
-              : null;
-            if (!memberStartDay || memberStartDay.getTime() > firstDay.getTime()) {
-              await prisma.member.update({
-                where: { id: memberId },
-                data: { packStartedAt: firstConsumed },
-              });
-            }
-          }
-        }
-      }
-    }
-
     let consumedSessions: number;
     let remainingSessions: number;
     let courseQuotaRemaining: MemberOwnedPackDto["courseQuotaRemaining"] = [];
@@ -456,9 +447,43 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
           });
         }
       } else if (isProlonged) {
-        packStartedAt = enrollment.packStartedAt ?? packStartedAt;
+        const purchasedDay = toPrismaDateLocal(enrollment.purchasedAt);
+        const firstDay = fifoAlloc.firstSessionDate
+          ? toPrismaDateLocal(fifoAlloc.firstSessionDate)
+          : null;
+        const alignedStart =
+          firstDay && firstDay.getTime() >= purchasedDay.getTime()
+            ? firstDay
+            : purchasedDay;
+        const startDay = packStartedAt ? toPrismaDateLocal(packStartedAt) : null;
+        if (!startDay || startDay.getTime() !== alignedStart.getTime()) {
+          packStartedAt = alignedStart;
+          await prisma.memberPackEnrollment.update({
+            where: { id: enrollment.id },
+            data: { packStartedAt: alignedStart },
+          });
+          if (isPrimary) {
+            await prisma.member.update({
+              where: { id: memberId },
+              data: { packStartedAt: alignedStart },
+            });
+          }
+        }
         packExpiresAt = enrollment.packExpiresAt ?? packExpiresAt;
         enrollmentStatus = "ACTIVE";
+        const today = startOfLocalToday();
+        const expiresYmd = packExpiresAt ? formatYmdPrismaDate(packExpiresAt) : null;
+        const todayYmd = formatYmdLocal(today);
+        if (remainingSessions > 0 && expiresYmd && expiresYmd < todayYmd) {
+          const healed = addPackDurationToStartDate(today, pack.durationDays);
+          if (healed) {
+            packExpiresAt = healed;
+            await prisma.memberPackEnrollment.update({
+              where: { id: enrollment.id },
+              data: { packExpiresAt: healed, status: "ACTIVE" },
+            });
+          }
+        }
       }
     } else {
       consumedSessions = 0;
@@ -479,6 +504,7 @@ export async function listMemberOwnedPacks(memberId: string): Promise<MemberOwne
       enrollmentStatus,
       remainingSessions,
       packExpiresAt,
+      enrollment.prolongedAt,
     );
 
     items.push({

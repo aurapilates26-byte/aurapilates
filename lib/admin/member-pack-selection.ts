@@ -199,8 +199,14 @@ function isPackUnused(candidate: PackCandidate): boolean {
  * Prolongation admin → date stockée.
  */
 function resolveCandidateExpiresAt(candidate: PackCandidate): Date | null {
-  if (candidate.isProlonged && candidate.packExpiresAt) {
-    return packStartDateLocal(candidate.packExpiresAt);
+  if (candidate.isProlonged) {
+    const stored = candidate.packExpiresAt
+      ? packStartDateLocal(candidate.packExpiresAt)
+      : null;
+    const today = startOfLocalToday();
+    if (stored && stored.getTime() >= today.getTime()) return stored;
+    // Date de fin encore périmée malgré prolongedAt : ne plus borner la bookabilité.
+    return null;
   }
   const fromDuration = packExpiresAtLocal(candidate.packStartedAt, candidate.pack.durationDays);
   if (fromDuration) return fromDuration;
@@ -226,9 +232,13 @@ function resolveBookingPeriodFromDisplayFifo(input: {
   memberPackStartedAt: Date | null;
 }): { packStartedAt: Date | null; packExpiresAt: Date | null } {
   if (input.enrollment.prolongedAt) {
+    const stored = input.enrollment.packExpiresAt;
+    const storedLocal = stored ? packStartDateLocal(stored) : null;
+    const today = startOfLocalToday();
+    const stale = storedLocal != null && storedLocal.getTime() < today.getTime();
     return {
       packStartedAt: input.enrollment.packStartedAt,
-      packExpiresAt: input.enrollment.packExpiresAt,
+      packExpiresAt: stale ? null : stored,
     };
   }
 
@@ -276,15 +286,21 @@ function isCandidateValidForSessionDate(
   // Pack jamais consommé : la 1ʳᵉ réservation démarre le pack (ignorer une date de début fantôme).
   if (!candidate.packStartedAt || isPackUnused(candidate)) return true;
 
+  const start = packStartDateLocal(candidate.packStartedAt);
+  if (start && sessionDateLocal.getTime() < start.getTime()) {
+    return options?.allowSessionBeforePackStart === true;
+  }
+
+  // Pack prolongé avec séances restantes : on consomme d'abord celui-là,
+  // même si l'ancienne date de fin n'a pas été recalculée.
+  if (candidate.isProlonged && candidate.remainingForCourse > 0) {
+    return true;
+  }
+
   const expiresAt = resolveCandidateExpiresAt(candidate);
 
   if (expiresAt && sessionDateLocal.getTime() > expiresAt.getTime()) {
     return false;
-  }
-
-  const start = packStartDateLocal(candidate.packStartedAt);
-  if (start && sessionDateLocal.getTime() < start.getTime()) {
-    return options?.allowSessionBeforePackStart === true;
   }
 
   if (options?.allowSessionBeforePackStart) {
@@ -541,11 +557,15 @@ function consumedSessionsForCandidate(candidate: PackCandidate): number {
 
 /**
  * Choix auto quand plusieurs packs couvrent le cours :
- * prioriser le pack acheté le plus tôt (FIFO) pour épuiser l'ancien avant le suivant.
- * À date d'achat égale : celui déjà le plus consommé.
+ * 1. pack prolongé encore débitable (avant le pack « en attente / suivant »)
+ * 2. sinon le plus ancien à l'achat (FIFO)
+ * 3. à date d'achat égale : le plus déjà consommé
  */
 function pickDefaultPackCandidate(candidates: PackCandidate[]): PackCandidate {
   return [...candidates].sort((a, b) => {
+    const aProlonged = a.isProlonged && a.remainingForCourse > 0 ? 0 : 1;
+    const bProlonged = b.isProlonged && b.remainingForCourse > 0 ? 0 : 1;
+    if (aProlonged !== bProlonged) return aProlonged - bProlonged;
     const purchaseDiff = a.purchasedAt.getTime() - b.purchasedAt.getTime();
     if (purchaseDiff !== 0) return purchaseDiff;
     return consumedSessionsForCandidate(b) - consumedSessionsForCandidate(a);
@@ -895,8 +915,12 @@ export async function resolvePackForMemberBooking(
 
   if (input.preferredPackId) {
     const selected = valid.find((c) => c.packId === input.preferredPackId);
-    if (!selected) throw new Error(PACK_ERRORS.noSessionsLeft);
-    return selected;
+    if (selected) return selected;
+    // Pack demandé inutilisable (remplacé, expiré, plus de séances) : ne pas
+    // masquer un autre pack encore ouvert derrière « plus de séances ».
+    if (!input.autoPickWhenAmbiguous) {
+      throw new Error(PACK_ERRORS.noSessionsLeft);
+    }
   }
 
   if (valid.length === 1) return valid[0]!;

@@ -1,12 +1,13 @@
 import "server-only";
 
-import { formatYmdLocal, parseYmdLocal, startOfLocalToday } from "@/lib/calendar-day";
+import { formatYmdLocal, parseYmdLocal, parseYmdToPrismaDate, startOfLocalToday } from "@/lib/calendar-day";
 import { listMemberOwnedPacks, type MemberOwnedPackDto } from "@/lib/admin/member-owned-packs";
 import { packHasUnconsumedSessions } from "@/lib/member-pack-remaining";
 import { findFirstEnrollmentConsumedSessionDate } from "@/lib/admin/member-pack-enrollment";
 import { buildMemberSearchWhere } from "@/lib/admin/member-search-filter";
 import { addPackDurationToStartDate } from "@/lib/pack-duration";
 import { prisma } from "@/lib/prisma";
+import { repairMemberParallelPackDebitsFifo } from "@/lib/admin/reclaim-pack-sessions-fifo";
 
 export type ExpiredPackMemberPackDto = {
   enrollmentId: string;
@@ -163,10 +164,12 @@ export async function prolongExpiredPackEnrollment(input: {
 
   const today = startOfLocalToday();
   const fromToday = addPackDurationToStartDate(today, enrollment.pack.durationDays);
-  const packExpiresAt =
+  const expiresLocal =
     sessionDateLocal && (!fromToday || sessionDateLocal.getTime() > fromToday.getTime())
       ? sessionDateLocal
-      : fromToday;
+      : fromToday ?? sessionDateLocal ?? today;
+  const packExpiresAt =
+    parseYmdToPrismaDate(formatYmdLocal(expiresLocal)) ?? expiresLocal;
   const prolongedFromExpiresAt = enrollment.packExpiresAt;
 
   let packStartedAt = enrollment.packStartedAt;
@@ -207,6 +210,8 @@ export async function prolongExpiredPackEnrollment(input: {
       });
     }
   });
+
+  await repairMemberParallelPackDebitsFifo(input.memberId);
 
   return { packExpiresAt: packExpiresAt?.toISOString() ?? null };
 }

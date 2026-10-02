@@ -198,7 +198,13 @@ export async function markHistoricalPresence(input: {
             },
           });
 
-          const preferredPackId = input.preferredPackId ?? existing?.debitedPackId ?? null;
+          // Annulation remboursée : l'ancien pack débité n'est plus à réutiliser
+          // (souvent un pack remplacé / 1 séance). Débiter le pack encore ouvert.
+          const preferredPackId =
+            input.preferredPackId ??
+            (existing?.status === "CANCELLED" && existing.packRefundedAt
+              ? null
+              : (existing?.debitedPackId ?? null));
 
           if (existing?.status === "ATTENDED") {
             if (existing.attendance) {

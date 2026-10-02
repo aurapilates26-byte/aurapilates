@@ -163,6 +163,7 @@ export async function promoteNextWaitlistReservation(
         courseSlug: params.courseSlug,
         sessionDateLocal,
         preferredPackId: waiter.debitedPackId,
+        autoPickWhenAmbiguous: true,
       });
       await debitSelectedPackSession(tx, {
         memberId: waiter.memberId,

@@ -82,8 +82,10 @@ export async function reclaimSessionsOntoEnrollmentFromNewerPacks(input: {
     alloc?.firstSessionDate ?? enrollment.packStartedAt ?? enrollment.purchasedAt,
   );
   let windowEnd: Date | null = null;
-  if (enrollment.prolongedAt && enrollment.packExpiresAt) {
-    windowEnd = toDay(enrollment.packExpiresAt);
+  if (enrollment.prolongedAt) {
+    // Après prolongation, l'ancienne packExpiresAt ne doit pas bloquer le rapatriement
+    // (séances déjà prises sur le pack suivant pendant que le pack était « expiré »).
+    windowEnd = null;
   } else {
     const startForDuration =
       alloc?.firstSessionDate ?? enrollment.packStartedAt ?? enrollment.purchasedAt;
