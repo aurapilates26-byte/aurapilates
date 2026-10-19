@@ -136,7 +136,9 @@ function mapMember(
           }
         : null,
     isActive: record.isActive,
-    isProspectTrial: (record.convertedFromProspects?.length ?? 0) > 0,
+    isProspectTrial: record.convertedFromProspects?.some((prospect) => prospect.status === "PAID_TRIAL") ?? false,
+    isConvertedFromProspect:
+      record.convertedFromProspects?.some((prospect) => prospect.status === "CONVERTED") ?? false,
     enrollmentStatus: record.enrollmentStatus,
     expectedPackAmountDinars: record.expectedPackAmountDinars,
     totalPaidDinars: paymentTotals?.totalPaid ?? null,
@@ -201,9 +203,8 @@ const memberListInclude = {
     select: { publicId: true, qrKey: true, status: true, updatedAt: true },
   },
   convertedFromProspects: {
-    where: { status: "PAID_TRIAL" },
+    where: { status: { in: ["PAID_TRIAL", "CONVERTED"] } },
     select: { id: true, status: true },
-    take: 1,
   },
 } satisfies Prisma.MemberInclude;
 
@@ -1097,4 +1098,3 @@ export async function completeAdminMemberDepositById(id: string, request: Reques
 
   return Response.json({ item: mapMember(updated, paymentTotals) });
 }
-

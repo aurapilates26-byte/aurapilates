@@ -3,6 +3,7 @@ import "server-only";
 import {
   classifyPrimaryPackKind,
   emptyMemberPrimaryPackStateCounts,
+  hasConsumedPrimaryPackSessions,
   isPackDateExpired,
   resolveEffectivePackExpiresAt,
   type MemberPrimaryPackKind,
@@ -84,6 +85,7 @@ function remainingSessionsForPack(
 
 export async function loadMemberPrimaryPackStates(): Promise<{
   byMemberId: Record<string, MemberPrimaryPackKind>;
+  hasConsumedSessionsByMemberId: Record<string, boolean>;
   counts: MemberPrimaryPackStateCounts;
 }> {
   const members = await prisma.member.findMany({
@@ -92,7 +94,11 @@ export async function loadMemberPrimaryPackStates(): Promise<{
 
   const memberIds = members.map((m) => m.id);
   if (memberIds.length === 0) {
-    return { byMemberId: {}, counts: emptyMemberPrimaryPackStateCounts() };
+    return {
+      byMemberId: {},
+      hasConsumedSessionsByMemberId: {},
+      counts: emptyMemberPrimaryPackStateCounts(),
+    };
   }
 
   const enrollments = await prisma.memberPackEnrollment.findMany({
@@ -141,11 +147,13 @@ export async function loadMemberPrimaryPackStates(): Promise<{
   }
 
   const byMemberId: Record<string, MemberPrimaryPackKind> = {};
+  const hasConsumedSessionsByMemberId: Record<string, boolean> = {};
   const counts = emptyMemberPrimaryPackStateCounts();
   counts.total = members.length;
 
   for (const member of members) {
     let kind: MemberPrimaryPackKind = "none";
+    let hasConsumedSessions = false;
 
     if (member.packId) {
       const enrollment = pickPrimaryEnrollment(member.id, member.packId, enrollmentsByMember);
@@ -159,6 +167,11 @@ export async function loadMemberPrimaryPackStates(): Promise<{
         );
         const consumedSessions =
           totalSessions != null ? Math.max(0, totalSessions - remainingSessions) : 0;
+        hasConsumedSessions = hasConsumedPrimaryPackSessions({
+          totalSessions,
+          remainingSessions,
+          packStartedAt: enrollment.packStartedAt,
+        });
 
         const packExpiresAt = resolveEffectivePackExpiresAt({
           packStartedAt: enrollment.packStartedAt,
@@ -182,8 +195,9 @@ export async function loadMemberPrimaryPackStates(): Promise<{
     }
 
     byMemberId[member.id] = kind;
+    hasConsumedSessionsByMemberId[member.id] = hasConsumedSessions;
     counts[kind] += 1;
   }
 
-  return { byMemberId, counts };
+  return { byMemberId, hasConsumedSessionsByMemberId, counts };
 }

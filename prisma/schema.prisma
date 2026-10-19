@@ -323,6 +323,8 @@ model CashExpense {
   kind             CashExpenseKind
   label            String
   amountDinars     Int
+  /// Pour une charge fixe, date de fin inclusive de la récurrence mensuelle. Null = active sans fin.
+  endDate          DateTime?        @db.Date
   expenseDate      DateTime         @db.Date
   note             String?
   recordedByUserId String?

@@ -12,7 +12,7 @@ function kindLabel(kind: CaisseLedgerKind): string {
     case "EXPENSE_COACH_MONTHLY":
       return "Coach (mois)";
     case "EXPENSE_MANUAL_FIXED":
-      return "Charge fixe";
+      return "Charge fixe · mensuelle";
     case "EXPENSE_MANUAL_VARIABLE":
       return "Charge variable";
   }
@@ -21,7 +21,7 @@ function kindLabel(kind: CaisseLedgerKind): string {
 export function cashExpenseToLedgerEntry(ex: CashExpenseDto): CaisseLedgerEntryDto {
   const kind = ex.kind === "FIXED" ? "EXPENSE_MANUAL_FIXED" : "EXPENSE_MANUAL_VARIABLE";
   return {
-    id: `expense-${ex.id}`,
+    id: `expense-${ex.id}-${ex.expenseDateYmd}`,
     kind,
     dateYmd: ex.expenseDateYmd,
     label: ex.label,

@@ -39,14 +39,6 @@ import type { PersonalDiscountType } from "@/types/admin/pack-payment";
 const MEMBERS_PAGE_SIZE = 20;
 const MEMBERS_FETCH_PAGE_SIZE = 5000;
 
-function MemberProspectTrialBadge() {
-  return (
-    <span className="inline-flex rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-xs font-semibold text-violet-900">
-      Prospect
-    </span>
-  );
-}
-
 function memberMatchesSearch(member: MemberItem, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
@@ -253,6 +245,7 @@ type MemberItem = {
   packExpiresAt: string | null;
   isActive: boolean;
   isProspectTrial?: boolean;
+  isConvertedFromProspect?: boolean;
   enrollmentStatus?: "ACTIVE" | "DEPOSIT_PENDING";
   paymentStatus?: MemberPaymentStatus;
   expectedPackAmountDinars?: number | null;
@@ -324,6 +317,9 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
   const [packFilterId, setPackFilterId] = useState<string>("ALL");
   const [packStateFilter, setPackStateFilter] = useState<MemberPackStateFilter>("ALL");
   const [packStates, setPackStates] = useState<Record<string, MemberPrimaryPackKind>>({});
+  const [hasConsumedSessionsByMemberId, setHasConsumedSessionsByMemberId] = useState<
+    Record<string, boolean>
+  >({});
   const [packStateCounts, setPackStateCounts] = useState<MemberPrimaryPackStateCounts>(
     emptyMemberPrimaryPackStateCounts,
   );
@@ -399,11 +395,23 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
         }
         if (statusFilter === "ALL") return true;
         if (statusFilter === "PROSPECT") return Boolean(m.isProspectTrial);
-        if (statusFilter === "ACTIVE") return m.isActive;
-        return !m.isActive;
+        const hasConsumedSessions = hasConsumedSessionsByMemberId[m.id] ?? false;
+        if (statusFilter === "ACTIVE") return hasConsumedSessions;
+        return !hasConsumedSessions;
       }),
     );
-  }, [items, search, statusFilter, packFilterId, packCategoryFilter, packs, paymentStatusFilter, packStateFilter, packStates]);
+  }, [
+    items,
+    search,
+    statusFilter,
+    packFilterId,
+    packCategoryFilter,
+    packs,
+    paymentStatusFilter,
+    packStateFilter,
+    packStates,
+    hasConsumedSessionsByMemberId,
+  ]);
 
   const visibleItems = useMemo(() => {
     const start = (page - 1) * MEMBERS_PAGE_SIZE;
@@ -457,18 +465,21 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
   };
 
   const loadPackStates = async () => {
-    try {
-      const response = await fetch("/api/admin/members/pack-states", { cache: "no-store" });
-      if (!response.ok) return;
-      const data = (await response.json()) as {
-        byMemberId?: Record<string, MemberPrimaryPackKind>;
-        counts?: MemberPrimaryPackStateCounts;
-      };
-      setPackStates(data.byMemberId ?? {});
-      setPackStateCounts(data.counts ?? emptyMemberPrimaryPackStateCounts());
-    } catch {
-      // ignore pack state refresh errors
+    const response = await fetch("/api/admin/members/pack-states", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error("Impossible de charger l’état des packs des adhérentes.");
     }
+    const data = (await response.json()) as {
+      byMemberId?: Record<string, MemberPrimaryPackKind>;
+      hasConsumedSessionsByMemberId?: Record<string, boolean>;
+      counts?: MemberPrimaryPackStateCounts;
+    };
+    if (!data.byMemberId || !data.hasConsumedSessionsByMemberId) {
+      throw new Error("Les données de consommation des packs sont indisponibles.");
+    }
+    setPackStates(data.byMemberId);
+    setHasConsumedSessionsByMemberId(data.hasConsumedSessionsByMemberId);
+    setPackStateCounts(data.counts ?? emptyMemberPrimaryPackStateCounts());
   };
 
   const loadMembers = async () => {
@@ -1186,27 +1197,26 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                         </p>
                       </div>
                       <div className="flex flex-wrap items-center gap-1.5">
-                        {m.isProspectTrial ? (
-                          <MemberProspectTrialBadge />
-                        ) : (
-                          <>
-                            <span
-                              className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
-                                m.isActive
-                                  ? "border border-emerald-200 bg-emerald-50 text-emerald-900"
-                                  : "border border-zinc-200 bg-zinc-50 text-zinc-800"
-                              }`}
-                            >
-                              {m.isActive ? "Active" : "Inactive"}
-                            </span>
-                            {(m.paymentStatus ?? "PAID") !== "PAID" ? (
-                              <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-900">
-                                {memberPaymentRemainingBadgeLabel(m.paymentStatus ?? "ADVANCE")}
-                                {m.remainingDinars != null ? ` · ${m.remainingDinars} DT` : ""}
-                              </span>
-                            ) : null}
-                          </>
-                        )}
+                        <span
+                          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
+                            hasConsumedSessionsByMemberId[m.id]
+                              ? "border border-emerald-200 bg-emerald-50 text-emerald-900"
+                              : "border border-zinc-200 bg-zinc-50 text-zinc-800"
+                          }`}
+                        >
+                          {hasConsumedSessionsByMemberId[m.id] ? "Active" : "Inactive"}
+                        </span>
+                        {m.isConvertedFromProspect ? (
+                          <span className="inline-flex rounded-full border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-900">
+                            Prospect converti
+                          </span>
+                        ) : null}
+                        {(m.paymentStatus ?? "PAID") !== "PAID" ? (
+                          <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-900">
+                            {memberPaymentRemainingBadgeLabel(m.paymentStatus ?? "ADVANCE")}
+                            {m.remainingDinars != null ? ` · ${m.remainingDinars} DT` : ""}
+                          </span>
+                        ) : null}
                       </div>
                     </div>
                     <div className="text-xs text-brand-dark/75">
@@ -1333,27 +1343,26 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                           <>
                             <td className="px-4 py-4 text-center">
                               <div className="flex flex-col items-center gap-1">
-                                {m.isProspectTrial ? (
-                                  <MemberProspectTrialBadge />
-                                ) : (
-                                  <>
-                                    <span
-                                      className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
-                                        m.isActive
-                                          ? "border border-emerald-200 bg-emerald-50 text-emerald-900"
-                                          : "border border-zinc-200 bg-zinc-50 text-zinc-800"
-                                      }`}
-                                    >
-                                      {m.isActive ? "Active" : "Inactive"}
-                                    </span>
-                                    {(m.paymentStatus ?? "PAID") !== "PAID" ? (
-                                      <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-900">
-                                        {memberPaymentRemainingBadgeLabel(m.paymentStatus ?? "ADVANCE")}
-                                        {m.remainingDinars != null ? ` · ${m.remainingDinars} DT` : ""}
-                                      </span>
-                                    ) : null}
-                                  </>
-                                )}
+                                <span
+                                  className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
+                                    hasConsumedSessionsByMemberId[m.id]
+                                      ? "border border-emerald-200 bg-emerald-50 text-emerald-900"
+                                      : "border border-zinc-200 bg-zinc-50 text-zinc-800"
+                                  }`}
+                                >
+                                  {hasConsumedSessionsByMemberId[m.id] ? "Active" : "Inactive"}
+                                </span>
+                                {m.isConvertedFromProspect ? (
+                                  <span className="inline-flex rounded-full border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-900">
+                                    Prospect converti
+                                  </span>
+                                ) : null}
+                                {(m.paymentStatus ?? "PAID") !== "PAID" ? (
+                                  <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-900">
+                                    {memberPaymentRemainingBadgeLabel(m.paymentStatus ?? "ADVANCE")}
+                                    {m.remainingDinars != null ? ` · ${m.remainingDinars} DT` : ""}
+                                  </span>
+                                ) : null}
                               </div>
                             </td>
                             <td className="px-4 py-4 text-center text-brand-dark/80">
@@ -1688,4 +1697,3 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     </div>
   );
 });
-

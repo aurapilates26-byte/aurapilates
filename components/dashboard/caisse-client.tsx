@@ -5,7 +5,8 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { memberAttendanceLabel } from "@/lib/member-label-fr";
 import { packCategoryMenuLabel } from "@/lib/pack-categories";
 import { DashboardHeader } from "@/components/dashboard/header";
-import { Button, DatePicker, Modal, MonthPicker } from "@/components/ui";
+import { Button, ConfirmDialog, DatePicker, Modal, MonthPicker } from "@/components/ui";
+import { useToast } from "@/components/ui/toast-provider";
 import type { CaisseMonthSnapshot } from "@/types/admin/caisse";
 import type {
   CaisseBreakdownRowDto,
@@ -287,10 +288,6 @@ function sourceLabel(source: PackPaymentDto["source"]): string {
   return source === "AUTO" ? "Auto" : "Manuel";
 }
 
-function expenseKindLabel(kind: CashExpenseDto["kind"]): string {
-  return kind === "FIXED" ? "Fixe" : "Variable";
-}
-
 function ledgerKindLabelFr(kind: CaisseLedgerKind): string {
   switch (kind) {
     case "INCOME_PACK":
@@ -314,6 +311,7 @@ const CAISSE_HEADER_BTN_PRIMARY =
   "rounded-full bg-brand-dark px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-60";
 
 export function CaisseClient({ initial }: CaisseClientProps) {
+  const { toast } = useToast();
   const [snapshot, setSnapshot] = useState(initial);
   const [yearMonth, setYearMonth] = useState(() => clampHistoryYearMonth(initial.yearMonth));
   const [monthLoading, setMonthLoading] = useState(false);
@@ -364,15 +362,20 @@ export function CaisseClient({ initial }: CaisseClientProps) {
 
   const [caisseViewMode, setCaisseViewMode] = useState<CaisseViewMode>("main");
   const [expenseKind, setExpenseKind] = useState<"FIXED" | "VARIABLE">("VARIABLE");
+  const [returnToExpenseKind, setReturnToExpenseKind] = useState<"FIXED" | "VARIABLE" | null>(null);
   const [expenseLabel, setExpenseLabel] = useState("");
   const [expenseAmount, setExpenseAmount] = useState("");
   const [expenseDateYmd, setExpenseDateYmd] = useState("");
   const [expenseNote, setExpenseNote] = useState("");
   const [savingExpense, setSavingExpense] = useState(false);
+  const [editingExpense, setEditingExpense] = useState<CashExpenseDto | null>(null);
+  const [deletingExpense, setDeletingExpense] = useState<CashExpenseDto | null>(null);
+  const [deletingExpenseBusy, setDeletingExpenseBusy] = useState(false);
+  const [expenseModalError, setExpenseModalError] = useState<string | null>(null);
 
-  const openExpenseForm = useCallback(() => {
+  const openExpenseForm = useCallback((kind: "FIXED" | "VARIABLE") => {
     setCaisseViewMode("expense-form");
-    setExpenseKind("VARIABLE");
+    setExpenseKind(kind);
     setExpenseLabel("");
     setExpenseAmount("");
     setExpenseNote("");
@@ -381,12 +384,43 @@ export function CaisseClient({ initial }: CaisseClientProps) {
   }, [yearMonth]);
 
   const closeExpenseForm = useCallback(() => {
+    setReturnToExpenseKind(expenseKind);
     setCaisseViewMode("main");
+  }, [expenseKind]);
+
+  const openEditExpense = useCallback((expense: CashExpenseDto) => {
+    setError(null);
+    setEditingExpense(expense);
+    setExpenseKind(expense.kind);
+    setExpenseLabel(expense.label);
+    setExpenseAmount(String(expense.amountDinars));
+    setExpenseDateYmd(expense.expenseDateYmd);
+    setExpenseNote(expense.note ?? "");
+    setExpenseModalError(null);
   }, []);
+
+  const closeEditExpense = useCallback(() => {
+    if (savingExpense) return;
+    setEditingExpense(null);
+    setExpenseModalError(null);
+  }, [savingExpense]);
 
   useEffect(() => {
     void fetchHistory();
   }, [fetchHistory]);
+
+  useEffect(() => {
+    if (caisseViewMode !== "main" || !returnToExpenseKind) return;
+
+    const frame = requestAnimationFrame(() => {
+      document
+        .getElementById(`caisse-expense-group-${returnToExpenseKind.toLowerCase()}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      setReturnToExpenseKind(null);
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [caisseViewMode, returnToExpenseKind]);
 
   const loadMonth = useCallback(async (ym: string) => {
     setMonthLoading(true);
@@ -433,16 +467,85 @@ export function CaisseClient({ initial }: CaisseClientProps) {
 
       if (data.item) appendHistoryExpense(data.item);
 
-      setCaisseViewMode("main");
       setExpenseLabel("");
       setExpenseAmount("");
       setExpenseNote("");
       setExpenseDateYmd("");
       await loadMonth(yearMonth);
+      closeExpenseForm();
+      toast({ variant: "success", title: "Charge ajoutée" });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erreur");
     } finally {
       setSavingExpense(false);
+    }
+  };
+
+  const submitEditedExpense = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingExpense) return;
+
+    const amount = Number(expenseAmount);
+    if (!expenseLabel.trim() || !Number.isInteger(amount) || amount <= 0 || !expenseDateYmd) {
+      setExpenseModalError("Vérifiez le libellé, la date et le montant de la charge.");
+      return;
+    }
+
+    setSavingExpense(true);
+    setExpenseModalError(null);
+    try {
+      const res = await fetch(`/api/admin/caisse/expenses/${encodeURIComponent(editingExpense.id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind: expenseKind,
+          label: expenseLabel.trim(),
+          amountDinars: amount,
+          expenseDateYmd,
+          effectiveFromYmd: `${yearMonth}-01`,
+          note: expenseNote.trim(),
+        }),
+      });
+      const data = (await res.json()) as { item?: CashExpenseDto; error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Modification impossible");
+      if (!data.item) throw new Error("La charge modifiée n’a pas été renvoyée par le serveur.");
+
+      setEditingExpense(null);
+      await loadMonth(yearMonth);
+      await fetchHistory({ force: true });
+      toast({ variant: "success", title: "Charge modifiée" });
+    } catch (e) {
+      setExpenseModalError(e instanceof Error ? e.message : "Modification impossible");
+    } finally {
+      setSavingExpense(false);
+    }
+  };
+
+  const confirmDeleteExpense = async () => {
+    if (!deletingExpense) return;
+
+    setDeletingExpenseBusy(true);
+    try {
+      const fromYmd = `${yearMonth}-01`;
+      const res = await fetch(
+        `/api/admin/caisse/expenses/${encodeURIComponent(deletingExpense.id)}?fromYmd=${encodeURIComponent(fromYmd)}`,
+        { method: "DELETE" },
+      );
+      const data = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Suppression impossible");
+
+      setDeletingExpense(null);
+      await loadMonth(yearMonth);
+      await fetchHistory({ force: true });
+      toast({ variant: "success", title: "Charge supprimée" });
+    } catch (e) {
+      toast({
+        variant: "error",
+        title: "Suppression impossible",
+        description: e instanceof Error ? e.message : "Une erreur est survenue.",
+      });
+    } finally {
+      setDeletingExpenseBusy(false);
     }
   };
 
@@ -484,7 +587,9 @@ export function CaisseClient({ initial }: CaisseClientProps) {
         title="Caisse"
         description={
           caisseViewMode === "expense-form"
-            ? "Déclarez une charge (loyer, fournitures, etc.) pour le mois sélectionné."
+            ? expenseKind === "FIXED"
+              ? "Ajoutez une charge mensuelle récurrente à partir de sa date de début."
+              : "Ajoutez une dépense ponctuelle, comptabilisée uniquement dans le mois de sa date."
             : contentView === "historique"
               ? "Journal chronologique des écritures par mois et par jour."
               : "Comptabilité mensuelle : ventes, charges coachs et résultat du mois."
@@ -512,14 +617,6 @@ export function CaisseClient({ initial }: CaisseClientProps) {
                 >
                   {contentView === "historique" ? "Caisse" : "Historique"}
                 </button>
-                <button
-                  type="button"
-                  disabled={monthLoading}
-                  onClick={openExpenseForm}
-                  className={CAISSE_HEADER_BTN_PRIMARY}
-                >
-                  + Ajouter une charge
-                </button>
               </>
             )}
           </div>
@@ -534,7 +631,6 @@ export function CaisseClient({ initial }: CaisseClientProps) {
         <CaisseExpenseFormCard
           yearMonth={yearMonth}
           expenseKind={expenseKind}
-          onExpenseKindChange={setExpenseKind}
           expenseLabel={expenseLabel}
           onExpenseLabelChange={setExpenseLabel}
           expenseAmount={expenseAmount}
@@ -625,6 +721,11 @@ export function CaisseClient({ initial }: CaisseClientProps) {
             snapshot={snapshot}
             onOpenHistorique={() => setContentView("historique")}
             onDeclareCharge={openExpenseForm}
+            onEditExpense={openEditExpense}
+            onDeleteExpense={(expense) => {
+              setError(null);
+              setDeletingExpense(expense);
+            }}
           />
         </div>
       ) : (
@@ -649,6 +750,68 @@ export function CaisseClient({ initial }: CaisseClientProps) {
       )}
         </>
       )}
+      <Modal
+        isOpen={editingExpense != null}
+        title="Modifier la charge"
+        description={
+          expenseKind === "FIXED"
+            ? `Cette charge est récurrente chaque mois. La modification s’appliquera à partir de ${formatMonthLabel(yearMonth)} ; les mois précédents seront conservés.`
+            : "La modification sera prise en compte dans la synthèse et l’historique du mois concerné."
+        }
+        onClose={closeEditExpense}
+      >
+        <form onSubmit={submitEditedExpense} className="space-y-4">
+          <CashExpenseFields
+            idPrefix="edit-caisse-expense"
+            expenseKind={expenseKind}
+            expenseLabel={expenseLabel}
+            onExpenseLabelChange={setExpenseLabel}
+            expenseAmount={expenseAmount}
+            onExpenseAmountChange={setExpenseAmount}
+            expenseDateYmd={expenseDateYmd}
+            onExpenseDateYmdChange={setExpenseDateYmd}
+            expenseDateDisabled={expenseKind === "FIXED"}
+            expenseNote={expenseNote}
+            onExpenseNoteChange={setExpenseNote}
+          />
+          {expenseModalError ? (
+            <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+              {expenseModalError}
+            </p>
+          ) : null}
+          <div className="flex flex-wrap justify-end gap-2">
+            <button
+              type="button"
+              onClick={closeEditExpense}
+              disabled={savingExpense}
+              className="rounded-full border border-brand-medium/30 bg-white px-4 py-2 text-sm font-medium text-brand-dark transition hover:bg-zinc-50 disabled:opacity-60"
+            >
+              Annuler
+            </button>
+            <Button type="submit" disabled={savingExpense}>
+              {savingExpense ? "Enregistrement…" : "Enregistrer les modifications"}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+      <ConfirmDialog
+        isOpen={deletingExpense != null}
+        title="Supprimer cette charge ?"
+        description={
+          deletingExpense
+            ? deletingExpense.kind === "FIXED"
+              ? `La récurrence mensuelle de « ${deletingExpense.label} » sera arrêtée à partir de ${formatMonthLabel(yearMonth)}. Les occurrences des mois précédents seront conservées.`
+              : `La charge « ${deletingExpense.label} » de ${formatDt(deletingExpense.amountDinars)} sera supprimée définitivement.`
+            : undefined
+        }
+        confirmText={deletingExpense?.kind === "FIXED" ? "Arrêter la récurrence" : "Supprimer la charge"}
+        confirmingText="Suppression…"
+        isConfirming={deletingExpenseBusy}
+        onClose={() => {
+          if (!deletingExpenseBusy) setDeletingExpense(null);
+        }}
+        onConfirm={() => void confirmDeleteExpense()}
+      />
     </div>
   );
 }
@@ -657,10 +820,14 @@ function CaisseSyntheseTab({
   snapshot,
   onOpenHistorique,
   onDeclareCharge,
+  onEditExpense,
+  onDeleteExpense,
 }: {
   snapshot: CaisseMonthSnapshot;
   onOpenHistorique: () => void;
-  onDeclareCharge: () => void;
+  onDeclareCharge: (kind: "FIXED" | "VARIABLE") => void;
+  onEditExpense: (expense: CashExpenseDto) => void;
+  onDeleteExpense: (expense: CashExpenseDto) => void;
 }) {
   return (
     <div className="space-y-5">
@@ -679,6 +846,8 @@ function CaisseSyntheseTab({
         expenses={snapshot.expenses}
         totalDinars={snapshot.manualExpenseTotalDinars}
         onDeclareCharge={onDeclareCharge}
+        onEditExpense={onEditExpense}
+        onDeleteExpense={onDeleteExpense}
       />
 
       <section className="rounded-2xl border border-brand-medium/30 bg-white p-5 shadow-sm ring-1 ring-brand-medium/15 sm:p-6">
@@ -875,13 +1044,13 @@ function CaisseDetailTab(props: {
 function CaisseExpenseFormCard({
   yearMonth,
   expenseKind,
-  onExpenseKindChange,
   expenseLabel,
   onExpenseLabelChange,
   expenseAmount,
   onExpenseAmountChange,
   expenseDateYmd,
   onExpenseDateYmdChange,
+  expenseDateDisabled = false,
   expenseNote,
   onExpenseNoteChange,
   savingExpense,
@@ -890,13 +1059,13 @@ function CaisseExpenseFormCard({
 }: {
   yearMonth: string;
   expenseKind: "FIXED" | "VARIABLE";
-  onExpenseKindChange: (k: "FIXED" | "VARIABLE") => void;
   expenseLabel: string;
   onExpenseLabelChange: (v: string) => void;
   expenseAmount: string;
   onExpenseAmountChange: (v: string) => void;
   expenseDateYmd: string;
   onExpenseDateYmdChange: (v: string) => void;
+  expenseDateDisabled?: boolean;
   expenseNote: string;
   onExpenseNoteChange: (v: string) => void;
   savingExpense: boolean;
@@ -905,63 +1074,30 @@ function CaisseExpenseFormCard({
 }) {
   return (
     <section className="rounded-2xl border border-brand-medium/20 bg-white p-6 shadow-sm sm:p-8">
-      <h2 className="text-xl font-semibold text-brand-dark">Ajouter une charge</h2>
+      <h2 className="text-xl font-semibold text-brand-dark">
+        Ajouter une charge {expenseKind === "FIXED" ? "fixe" : "variable"}
+      </h2>
       <p className="mt-2 text-sm text-brand-dark/70">
-        Enregistrez une dépense pour <strong>{formatMonthLabel(yearMonth)}</strong> (loyer, fournitures, etc.). Elle
-        apparaîtra dans Autres charges et l&apos;historique du mois.
+        Pour <strong>{formatMonthLabel(yearMonth)}</strong>,{" "}
+        {expenseKind === "FIXED"
+          ? "cette charge sera comptabilisée chaque mois à partir de sa date de début."
+          : "cette charge sera comptabilisée uniquement dans le mois de sa date."}
       </p>
 
       <form onSubmit={onSubmit} className="mt-6 grid gap-4 sm:grid-cols-2">
-        <label className="block text-sm">
-          <span className="font-medium text-brand-dark">Type</span>
-          <select
-            value={expenseKind}
-            onChange={(e) => onExpenseKindChange(e.target.value as "FIXED" | "VARIABLE")}
-            className="mt-1 w-full rounded-lg border border-brand-medium/25 bg-white px-3 py-2 text-sm"
-          >
-            <option value="FIXED">Charge fixe</option>
-            <option value="VARIABLE">Charge variable</option>
-          </select>
-        </label>
-        <label className="block text-sm">
-          <span className="font-medium text-brand-dark">Libellé</span>
-          <input
-            required
-            type="text"
-            value={expenseLabel}
-            onChange={(e) => onExpenseLabelChange(e.target.value)}
-            placeholder="Ex. Loyer studio"
-            className="mt-1 w-full rounded-lg border border-brand-medium/25 bg-white px-3 py-2 text-sm"
-          />
-        </label>
-        <label className="block text-sm">
-          <span className="font-medium text-brand-dark">Montant (DT)</span>
-          <input
-            required
-            type="number"
-            min={1}
-            step={1}
-            value={expenseAmount}
-            onChange={(e) => onExpenseAmountChange(e.target.value)}
-            className="mt-1 w-full rounded-lg border border-brand-medium/25 bg-white px-3 py-2 text-sm"
-          />
-        </label>
-        <DatePicker
-          id="caisse-expense-date"
-          label="Date"
-          value={expenseDateYmd}
-          onChange={onExpenseDateYmdChange}
-          placeholder="JJ/MM/AAAA"
+        <CashExpenseFields
+          idPrefix="caisse-expense"
+          expenseKind={expenseKind}
+          expenseLabel={expenseLabel}
+          onExpenseLabelChange={onExpenseLabelChange}
+          expenseAmount={expenseAmount}
+          onExpenseAmountChange={onExpenseAmountChange}
+          expenseDateYmd={expenseDateYmd}
+          onExpenseDateYmdChange={onExpenseDateYmdChange}
+          expenseDateDisabled={expenseDateDisabled}
+          expenseNote={expenseNote}
+          onExpenseNoteChange={onExpenseNoteChange}
         />
-        <label className="block text-sm sm:col-span-2">
-          <span className="font-medium text-brand-dark">Note (optionnel)</span>
-          <input
-            type="text"
-            value={expenseNote}
-            onChange={(e) => onExpenseNoteChange(e.target.value)}
-            className="mt-1 w-full rounded-lg border border-brand-medium/25 bg-white px-3 py-2 text-sm"
-          />
-        </label>
         <div className="flex flex-wrap gap-2 sm:col-span-2">
           <button
             type="submit"
@@ -980,6 +1116,85 @@ function CaisseExpenseFormCard({
         </div>
       </form>
     </section>
+  );
+}
+
+function CashExpenseFields({
+  idPrefix,
+  expenseKind,
+  expenseLabel,
+  onExpenseLabelChange,
+  expenseAmount,
+  onExpenseAmountChange,
+  expenseDateYmd,
+  onExpenseDateYmdChange,
+  expenseDateDisabled,
+  expenseNote,
+  onExpenseNoteChange,
+}: {
+  idPrefix: string;
+  expenseKind: "FIXED" | "VARIABLE";
+  expenseLabel: string;
+  onExpenseLabelChange: (value: string) => void;
+  expenseAmount: string;
+  onExpenseAmountChange: (value: string) => void;
+  expenseDateYmd: string;
+  onExpenseDateYmdChange: (value: string) => void;
+  expenseDateDisabled?: boolean;
+  expenseNote: string;
+  onExpenseNoteChange: (value: string) => void;
+}) {
+  return (
+    <>
+      <div className="rounded-lg border border-brand-medium/15 bg-zinc-50 px-3 py-2 text-sm sm:col-span-2">
+        <span className="font-medium text-brand-dark">Type de charge : </span>
+        <span className="text-brand-dark/70">
+          {expenseKind === "FIXED" ? "Fixe — comptabilisée chaque mois" : "Variable — ponctuelle"}
+        </span>
+      </div>
+      <label className="block text-sm">
+        <span className="font-medium text-brand-dark">Libellé</span>
+        <input
+          required
+          maxLength={120}
+          type="text"
+          value={expenseLabel}
+          onChange={(e) => onExpenseLabelChange(e.target.value)}
+          placeholder="Ex. Loyer studio"
+          className="mt-1 w-full rounded-lg border border-brand-medium/25 bg-white px-3 py-2 text-sm"
+        />
+      </label>
+      <label className="block text-sm">
+        <span className="font-medium text-brand-dark">Montant (DT)</span>
+        <input
+          required
+          type="number"
+          min={1}
+          step={1}
+          value={expenseAmount}
+          onChange={(e) => onExpenseAmountChange(e.target.value)}
+          className="mt-1 w-full rounded-lg border border-brand-medium/25 bg-white px-3 py-2 text-sm"
+        />
+      </label>
+      <DatePicker
+        id={`${idPrefix}-date`}
+        label="Date"
+        value={expenseDateYmd}
+        onChange={onExpenseDateYmdChange}
+        placeholder="JJ/MM/AAAA"
+        disabled={expenseDateDisabled}
+      />
+      <label className="block text-sm sm:col-span-2">
+        <span className="font-medium text-brand-dark">Note (optionnel)</span>
+        <input
+          maxLength={500}
+          type="text"
+          value={expenseNote}
+          onChange={(e) => onExpenseNoteChange(e.target.value)}
+          className="mt-1 w-full rounded-lg border border-brand-medium/25 bg-white px-3 py-2 text-sm"
+        />
+      </label>
+    </>
   );
 }
 
@@ -1356,70 +1571,7 @@ function CoachChargeAmountCell({ line }: { line: CoachPayrollLineDto }) {
   return <p className="font-bold tabular-nums text-amber-900">{formatDt(line.monthlyCostDinars)}</p>;
 }
 
-function CaisseSectionEmptyState({
-  title,
-  description,
-  actionLabel,
-  onAction,
-}: {
-  title: string;
-  description: string;
-  actionLabel?: string;
-  onAction?: () => void;
-}) {
-  return (
-    <div className="mt-4 flex flex-col items-center justify-center rounded-xl border border-dashed border-brand-medium/25 bg-gradient-to-b from-zinc-50/90 to-white px-6 py-10 text-center">
-      <div
-        className="flex h-14 w-14 items-center justify-center rounded-2xl border border-brand-medium/15 bg-white shadow-sm"
-        aria-hidden="true"
-      >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          className="h-7 w-7 text-brand-dark/35"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M9 14h6m-5 4h4M7 19h10a2 2 0 0 0 2-2V7.414a2 2 0 0 0-.586-1.414l-4.414-4.414A2 2 0 0 0 11.586 1H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2Z"
-          />
-          <path strokeLinecap="round" strokeLinejoin="round" d="M13 1v5a1 1 0 0 0 1 1h5" />
-        </svg>
-      </div>
-      <p className="mt-4 text-sm font-semibold text-brand-dark">{title}</p>
-      <p className="mt-1.5 max-w-sm text-xs leading-relaxed text-brand-dark/55">{description}</p>
-      {actionLabel && onAction ? (
-        <button
-          type="button"
-          onClick={onAction}
-          className="mt-4 rounded-xl border border-brand-medium/25 bg-brand-dark px-4 py-2 text-xs font-semibold text-white transition hover:bg-brand-dark/90"
-        >
-          {actionLabel}
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
 const OTHER_CHARGE_CELL = "px-2 py-3 align-middle text-center";
-
-function ExpenseKindBadge({ kind }: { kind: CashExpenseDto["kind"] }) {
-  const isFixed = kind === "FIXED";
-  return (
-    <span
-      className={`inline-flex rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-        isFixed
-          ? "border-violet-200 bg-violet-50 text-violet-900"
-          : "border-amber-200 bg-amber-50 text-amber-900"
-      }`}
-    >
-      {expenseKindLabel(kind)}
-    </span>
-  );
-}
 
 function sortOtherCharges(expenses: CashExpenseDto[]): CashExpenseDto[] {
   return [...expenses].sort((a, b) => {
@@ -1429,15 +1581,53 @@ function sortOtherCharges(expenses: CashExpenseDto[]): CashExpenseDto[] {
   });
 }
 
-function OtherChargeTableRow({ expense: ex }: { expense: CashExpenseDto }) {
+function OtherChargeActions({
+  expense,
+  onEdit,
+  onDelete,
+}: {
+  expense: CashExpenseDto;
+  onEdit: (expense: CashExpenseDto) => void;
+  onDelete: (expense: CashExpenseDto) => void;
+}) {
+  return (
+    <div className="flex items-center justify-end gap-2">
+      <button
+        type="button"
+        onClick={() => onEdit(expense)}
+        aria-label={`Modifier la charge ${expense.label}`}
+        title="Modifier"
+        className="rounded-lg border border-brand-medium/25 bg-white px-2.5 py-1.5 text-xs font-semibold text-brand-dark transition hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-medium/40"
+      >
+        Modifier
+      </button>
+      <button
+        type="button"
+        onClick={() => onDelete(expense)}
+        aria-label={`Supprimer la charge ${expense.label}`}
+        title="Supprimer"
+        className="rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs font-semibold text-red-800 transition hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200"
+      >
+        Supprimer
+      </button>
+    </div>
+  );
+}
+
+function OtherChargeTableRow({
+  expense: ex,
+  onEdit,
+  onDelete,
+}: {
+  expense: CashExpenseDto;
+  onEdit: (expense: CashExpenseDto) => void;
+  onDelete: (expense: CashExpenseDto) => void;
+}) {
   return (
     <tr className="border-b border-brand-medium/8">
       <td className={`${OTHER_CHARGE_CELL} text-left`}>
         <p className="font-medium text-brand-dark">{ex.label}</p>
         {ex.note ? <p className="mt-0.5 text-[11px] text-brand-dark/55">{ex.note}</p> : null}
-      </td>
-      <td className={OTHER_CHARGE_CELL}>
-        <ExpenseKindBadge kind={ex.kind} />
       </td>
       <td className={`${OTHER_CHARGE_CELL} text-brand-dark/80`}>
         <p className="whitespace-nowrap tabular-nums">{formatYmdFr(ex.expenseDateYmd)}</p>
@@ -1445,17 +1635,27 @@ function OtherChargeTableRow({ expense: ex }: { expense: CashExpenseDto }) {
       <td className={OTHER_CHARGE_CELL}>
         <p className="font-bold tabular-nums text-amber-900">{formatDt(ex.amountDinars)}</p>
       </td>
+      <td className={`${OTHER_CHARGE_CELL} text-right`}>
+        <OtherChargeActions expense={ex} onEdit={onEdit} onDelete={onDelete} />
+      </td>
     </tr>
   );
 }
 
-function OtherChargeCard({ expense: ex }: { expense: CashExpenseDto }) {
+function OtherChargeCard({
+  expense: ex,
+  onEdit,
+  onDelete,
+}: {
+  expense: CashExpenseDto;
+  onEdit: (expense: CashExpenseDto) => void;
+  onDelete: (expense: CashExpenseDto) => void;
+}) {
   return (
     <li className="rounded-xl border border-brand-medium/15 bg-zinc-50/60 p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <ExpenseKindBadge kind={ex.kind} />
-          <p className="mt-2 font-semibold text-brand-dark">{ex.label}</p>
+          <p className="font-semibold text-brand-dark">{ex.label}</p>
           {ex.note ? <p className="mt-1 text-xs text-brand-dark/60">{ex.note}</p> : null}
         </div>
         <p className="shrink-0 font-bold tabular-nums text-amber-900">{formatDt(ex.amountDinars)}</p>
@@ -1464,6 +1664,9 @@ function OtherChargeCard({ expense: ex }: { expense: CashExpenseDto }) {
         <span className="font-semibold uppercase tracking-wide text-brand-dark/45">Date · </span>
         {formatYmdFr(ex.expenseDateYmd)}
       </p>
+      <div className="mt-3">
+        <OtherChargeActions expense={ex} onEdit={onEdit} onDelete={onDelete} />
+      </div>
     </li>
   );
 }
@@ -1472,67 +1675,157 @@ function OtherChargesSection({
   expenses,
   totalDinars,
   onDeclareCharge,
+  onEditExpense,
+  onDeleteExpense,
 }: {
   expenses: CashExpenseDto[];
   totalDinars: number;
-  onDeclareCharge: () => void;
+  onDeclareCharge: (kind: "FIXED" | "VARIABLE") => void;
+  onEditExpense: (expense: CashExpenseDto) => void;
+  onDeleteExpense: (expense: CashExpenseDto) => void;
 }) {
-  const sorted = useMemo(() => sortOtherCharges(expenses), [expenses]);
-  const fixedCount = expenses.filter((e) => e.kind === "FIXED").length;
-  const variableCount = expenses.length - fixedCount;
+  const fixedExpenses = expenses.filter((expense) => expense.kind === "FIXED");
+  const variableExpenses = expenses.filter((expense) => expense.kind === "VARIABLE");
+  const fixedTotal = fixedExpenses.reduce((sum, expense) => sum + expense.amountDinars, 0);
+  const variableTotal = variableExpenses.reduce((sum, expense) => sum + expense.amountDinars, 0);
 
   return (
     <section className="rounded-2xl border border-brand-medium/20 bg-white p-5 shadow-sm sm:p-6">
       <div className="border-b border-brand-medium/10 pb-4">
         <h2 className="text-base font-semibold text-brand-dark">Autres charges</h2>
         <p className="mt-1 text-xs text-brand-dark/55">
-          {expenses.length === 0
-            ? "Loyer, fournitures et dépenses déclarées du mois — utilisez + Ajouter une charge en haut de page"
-            : `${expenses.length} charge${expenses.length > 1 ? "s" : ""} · ${fixedCount} fixe${fixedCount > 1 ? "s" : ""} · ${variableCount} variable${variableCount > 1 ? "s" : ""} · total ${formatDt(totalDinars)}`}
+          {fixedExpenses.length} charge{fixedExpenses.length === 1 ? "" : "s"} fixe
+          {fixedExpenses.length === 1 ? "" : "s"} · {variableExpenses.length} charge
+          {variableExpenses.length === 1 ? "" : "s"} variable{variableExpenses.length === 1 ? "" : "s"} · total{" "}
+          {formatDt(totalDinars)}
         </p>
       </div>
 
-      {sorted.length === 0 ? (
-        <CaisseSectionEmptyState
-          title="Aucune charge déclarée"
-          description="Les dépenses du studio (loyer, fournitures, etc.) s'affichent ici dès qu'elles sont enregistrées pour ce mois."
-          actionLabel="Déclarer une charge"
-          onAction={onDeclareCharge}
+      <div className="mt-5 space-y-5">
+        <OtherChargeGroup
+          title="Charges fixes — mensuelles"
+          description="Chaque charge est comptabilisée une fois par mois à partir de sa date de début. L’arrêt de la récurrence conserve les mois précédents."
+          emptyDescription="Aucune charge fixe pour ce mois. Ajoutez ici les dépenses récurrentes comme le loyer."
+          addLabel="Ajouter une charge fixe"
+          kind="FIXED"
+          expenses={fixedExpenses}
+          totalDinars={fixedTotal}
+          onDeclareCharge={onDeclareCharge}
+          onEdit={onEditExpense}
+          onDelete={onDeleteExpense}
         />
+        <OtherChargeGroup
+          title="Charges variables — ponctuelles"
+          description="Chaque charge variable est comptabilisée uniquement dans le mois de sa date."
+          emptyDescription="Aucune charge variable pour ce mois. Ajoutez ici les dépenses ponctuelles."
+          addLabel="Ajouter une charge variable"
+          kind="VARIABLE"
+          expenses={variableExpenses}
+          totalDinars={variableTotal}
+          onDeclareCharge={onDeclareCharge}
+          onEdit={onEditExpense}
+          onDelete={onDeleteExpense}
+        />
+      </div>
+    </section>
+  );
+}
+
+function OtherChargeGroup({
+  title,
+  description,
+  emptyDescription,
+  addLabel,
+  kind,
+  expenses,
+  totalDinars,
+  onDeclareCharge,
+  onEdit,
+  onDelete,
+}: {
+  title: string;
+  description: string;
+  emptyDescription: string;
+  addLabel: string;
+  kind: "FIXED" | "VARIABLE";
+  expenses: CashExpenseDto[];
+  totalDinars: number;
+  onDeclareCharge: (kind: "FIXED" | "VARIABLE") => void;
+  onEdit: (expense: CashExpenseDto) => void;
+  onDelete: (expense: CashExpenseDto) => void;
+}) {
+  const sorted = useMemo(() => sortOtherCharges(expenses), [expenses]);
+
+  return (
+    <div
+      id={`caisse-expense-group-${kind.toLowerCase()}`}
+      className="rounded-xl border border-brand-medium/15 bg-white p-4"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-brand-medium/10 pb-3">
+        <div>
+          <h3 className="text-sm font-semibold text-brand-dark">{title}</h3>
+          <p className="mt-1 max-w-3xl text-xs leading-relaxed text-brand-dark/55">{description}</p>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-3">
+          <p className="text-xs font-semibold tabular-nums text-brand-dark/70">
+            {expenses.length} · {formatDt(totalDinars)}
+          </p>
+          <button
+            type="button"
+            onClick={() => onDeclareCharge(kind)}
+            className="rounded-xl bg-brand-dark px-3 py-2 text-xs font-semibold text-white transition hover:bg-brand-dark/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-medium/40"
+          >
+            + {addLabel}
+          </button>
+        </div>
+      </div>
+
+      {sorted.length === 0 ? (
+        <p className="py-5 text-sm text-brand-dark/50">{emptyDescription}</p>
       ) : (
         <>
-          <div className="mt-4 hidden md:block">
-            <table className="w-full table-fixed text-sm">
+          <div className="mt-3 hidden overflow-x-auto md:block">
+            <table className="w-full min-w-[700px] table-fixed text-sm">
               <colgroup>
-                <col className="w-[40%]" />
-                <col className="w-[18%]" />
-                <col className="w-[22%]" />
+                <col className="w-[38%]" />
                 <col className="w-[20%]" />
+                <col className="w-[18%]" />
+                <col className="w-[24%]" />
               </colgroup>
               <thead>
                 <tr className="border-b border-brand-medium/15 text-center text-xs font-semibold uppercase tracking-wide text-brand-dark/50">
                   <th className={`${OTHER_CHARGE_CELL} text-left`}>Libellé</th>
-                  <th className={OTHER_CHARGE_CELL}>Type</th>
                   <th className={OTHER_CHARGE_CELL}>Date</th>
                   <th className={OTHER_CHARGE_CELL}>Montant</th>
+                  <th className={`${OTHER_CHARGE_CELL} text-right`}>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {sorted.map((ex) => (
-                  <OtherChargeTableRow key={ex.id} expense={ex} />
+                {sorted.map((expense) => (
+                  <OtherChargeTableRow
+                    key={`${expense.id}-${expense.expenseDateYmd}`}
+                    expense={expense}
+                    onEdit={onEdit}
+                    onDelete={onDelete}
+                  />
                 ))}
               </tbody>
             </table>
           </div>
 
-          <ul className="mt-4 space-y-3 md:hidden">
-            {sorted.map((ex) => (
-              <OtherChargeCard key={ex.id} expense={ex} />
+          <ul className="mt-3 space-y-3 md:hidden">
+            {sorted.map((expense) => (
+              <OtherChargeCard
+                key={`${expense.id}-${expense.expenseDateYmd}`}
+                expense={expense}
+                onEdit={onEdit}
+                onDelete={onDelete}
+              />
             ))}
           </ul>
         </>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -2093,7 +2386,12 @@ function CaisseMonthBreakdownTable({
   balanceDinars: number;
   className?: string;
 }) {
-  const mainRows = rows.filter((r) => !r.label.startsWith("↳"));
+  const visibleRows = rows.filter(
+    (row) =>
+      !row.label.startsWith("↳") ||
+      row.key === "expense-fixed" ||
+      row.key === "expense-variable",
+  );
 
   return (
     <div className={className}>
@@ -2105,9 +2403,20 @@ function CaisseMonthBreakdownTable({
           </tr>
         </thead>
         <tbody>
-          {mainRows.map((row) => (
-            <tr key={row.key} className="border-b border-brand-medium/8">
-              <td className="py-2.5 pr-4 text-brand-dark">{row.label}</td>
+          {visibleRows.map((row) => {
+            const isExpenseDetail = row.key === "expense-fixed" || row.key === "expense-variable";
+            return (
+            <tr
+              key={row.key}
+              className={`border-b border-brand-medium/8 ${isExpenseDetail ? "bg-zinc-50/70" : ""}`}
+            >
+              <td
+                className={`py-2.5 pr-4 text-brand-dark ${
+                  isExpenseDetail ? "pl-6 text-xs text-brand-dark/70" : ""
+                }`}
+              >
+                {row.label}
+              </td>
               <td
                 className={`py-2.5 text-right font-semibold tabular-nums ${
                   row.kind === "income" ? "text-emerald-800" : "text-amber-900"
@@ -2117,7 +2426,8 @@ function CaisseMonthBreakdownTable({
                 {formatDt(row.amountDinars)}
               </td>
             </tr>
-          ))}
+              );
+          })}
           <tr className="font-bold text-brand-dark">
             <td className="pt-3">Solde</td>
             <td
@@ -2170,5 +2480,3 @@ function SummaryCard({
     </article>
   );
 }
-
-

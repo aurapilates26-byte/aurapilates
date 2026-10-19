@@ -17,7 +17,7 @@ function kindLabel(kind: CaisseLedgerKind): string {
     case "EXPENSE_COACH_MONTHLY":
       return "Coach (mois)";
     case "EXPENSE_MANUAL_FIXED":
-      return "Charge fixe";
+      return "Charge fixe · mensuelle";
     case "EXPENSE_MANUAL_VARIABLE":
       return "Charge variable";
   }
@@ -119,7 +119,7 @@ export function buildCaisseLedger(input: {
 
   for (const ex of input.expenses) {
     entries.push({
-      id: `expense-${ex.id}`,
+      id: `expense-${ex.id}-${ex.expenseDateYmd}`,
       kind: ex.kind === "FIXED" ? "EXPENSE_MANUAL_FIXED" : "EXPENSE_MANUAL_VARIABLE",
       dateYmd: ex.expenseDateYmd,
       label: ex.label,
@@ -165,7 +165,7 @@ export function buildCaisseBreakdown(input: {
     },
     {
       key: "expense-manual",
-      label: "Autres charges",
+      label: "Autres charges (total)",
       amountDinars: input.manualExpenseTotalDinars,
       kind: "expense",
     },
@@ -200,12 +200,8 @@ export function buildCaisseBreakdown(input: {
 
   const fixed = input.expenses.filter((e) => e.kind === "FIXED").reduce((s, e) => s + e.amountDinars, 0);
   const variable = input.expenses.filter((e) => e.kind === "VARIABLE").reduce((s, e) => s + e.amountDinars, 0);
-  if (fixed > 0) {
-    rows.push({ key: "expense-fixed", label: "↳ Charges fixes", amountDinars: fixed, kind: "expense" });
-  }
-  if (variable > 0) {
-    rows.push({ key: "expense-variable", label: "↳ Charges variables", amountDinars: variable, kind: "expense" });
-  }
+  rows.push({ key: "expense-fixed", label: "↳ Charges fixes", amountDinars: fixed, kind: "expense" });
+  rows.push({ key: "expense-variable", label: "↳ Charges variables", amountDinars: variable, kind: "expense" });
 
   return rows;
 }

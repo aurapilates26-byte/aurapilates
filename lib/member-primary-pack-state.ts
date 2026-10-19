@@ -48,6 +48,17 @@ export function emptyMemberPrimaryPackStateCounts(): MemberPrimaryPackStateCount
   };
 }
 
+export function hasConsumedPrimaryPackSessions(input: {
+  totalSessions: number | null;
+  remainingSessions: number;
+  packStartedAt: Date | null;
+}): boolean {
+  if (input.totalSessions != null) {
+    return input.remainingSessions < input.totalSessions;
+  }
+  return input.packStartedAt != null;
+}
+
 /** Jour calendaire d'une date pack (@db.Date Prisma ou Date locale). */
 function packCalendarYmd(d: Date): string {
   const isPrismaDateUtcMidnight =

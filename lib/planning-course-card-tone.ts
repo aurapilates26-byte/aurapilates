@@ -6,34 +6,34 @@ type CourseTone = {
 
 const COURSE_TONES: Record<string, CourseTone> = {
   "pilates-reformer": {
-    surface: "border-amber-200/90 bg-amber-50/90",
-    statIdle: "border-amber-200/80 bg-amber-50/40 hover:bg-amber-50/70",
-    statActive: "border-amber-300 bg-amber-50 ring-2 ring-amber-200",
+    surface: "border-brand-medium/25 bg-amber-100/90",
+    statIdle: "border-amber-300 bg-amber-50/70 hover:bg-amber-100",
+    statActive: "border-amber-400 bg-amber-100 ring-2 ring-amber-300",
   },
   "mat-pilates": {
-    surface: "border-stone-200/90 bg-stone-50/90",
-    statIdle: "border-stone-200/80 bg-stone-50/40 hover:bg-stone-50/70",
-    statActive: "border-stone-300 bg-stone-50 ring-2 ring-stone-200",
+    surface: "border-brand-medium/25 bg-stone-100/90",
+    statIdle: "border-stone-300 bg-stone-50/70 hover:bg-stone-100",
+    statActive: "border-stone-400 bg-stone-100 ring-2 ring-stone-300",
   },
   yoga: {
-    surface: "border-sky-200/90 bg-sky-50/90",
-    statIdle: "border-sky-200/80 bg-sky-50/40 hover:bg-sky-50/70",
-    statActive: "border-sky-300 bg-sky-50 ring-2 ring-sky-200",
+    surface: "border-brand-medium/25 bg-sky-100/90",
+    statIdle: "border-sky-300 bg-sky-50/70 hover:bg-sky-100",
+    statActive: "border-sky-400 bg-sky-100 ring-2 ring-sky-300",
   },
   dance: {
-    surface: "border-pink-200/90 bg-pink-50/90",
-    statIdle: "border-pink-200/80 bg-pink-50/40 hover:bg-pink-50/70",
-    statActive: "border-pink-300 bg-pink-50 ring-2 ring-pink-200",
+    surface: "border-brand-medium/25 bg-pink-100/90",
+    statIdle: "border-pink-300 bg-pink-50/70 hover:bg-pink-100",
+    statActive: "border-pink-400 bg-pink-100 ring-2 ring-pink-300",
   },
   "coaching-prive": {
-    surface: "border-orange-200/90 bg-orange-50/90",
-    statIdle: "border-orange-200/80 bg-orange-50/40 hover:bg-orange-50/70",
-    statActive: "border-orange-300 bg-orange-50 ring-2 ring-orange-200",
+    surface: "border-brand-medium/25 bg-orange-100/90",
+    statIdle: "border-orange-300 bg-orange-50/70 hover:bg-orange-100",
+    statActive: "border-orange-400 bg-orange-100 ring-2 ring-orange-300",
   },
   "sans-cours": {
-    surface: "border-zinc-200/90 bg-zinc-100/90",
-    statIdle: "border-zinc-200 bg-zinc-50/80 hover:bg-zinc-100/80",
-    statActive: "border-zinc-300 bg-zinc-100 ring-2 ring-zinc-200",
+    surface: "border-brand-medium/25 bg-zinc-200/90",
+    statIdle: "border-zinc-300 bg-zinc-100/90 hover:bg-zinc-200",
+    statActive: "border-zinc-400 bg-zinc-200 ring-2 ring-zinc-300",
   },
 };
 
