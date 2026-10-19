@@ -1253,8 +1253,8 @@ function PackRevenueSection({ payments, totalDinars }: { payments: PackPaymentDt
   const saleCount = blocks.length;
 
   return (
-    <section className="rounded-2xl border border-brand-medium/20 bg-white p-5 shadow-sm sm:p-6">
-      <div className="flex flex-wrap items-end justify-between gap-2 border-b border-brand-medium/10 pb-4">
+    <details className="rounded-2xl border border-brand-medium/20 bg-white p-5 shadow-sm sm:p-6">
+      <summary className="cursor-pointer border-b border-brand-medium/10 pb-4">
         <div>
           <h2 className="text-base font-semibold text-brand-dark">Recette packs</h2>
           <p className="mt-1 text-xs text-brand-dark/55">
@@ -1262,10 +1262,10 @@ function PackRevenueSection({ payments, totalDinars }: { payments: PackPaymentDt
             {payments.length > 0 ? ` · total ${formatDt(totalDinars)}` : ""}
           </p>
         </div>
-      </div>
+      </summary>
 
       {payments.length === 0 ? (
-        <p className="mt-4 text-sm text-brand-dark/65">Aucune vente ce mois.</p>
+        <p className="pt-4 text-sm text-brand-dark/65">Aucune vente ce mois.</p>
       ) : (
         <>
           <div className="mt-4 hidden overflow-x-auto md:block">
@@ -1367,7 +1367,7 @@ function PackRevenueSection({ payments, totalDinars }: { payments: PackPaymentDt
           </ul>
         </>
       )}
-    </section>
+    </details>
   );
 }
 
@@ -1757,19 +1757,22 @@ function OtherChargeGroup({
   const sorted = useMemo(() => sortOtherCharges(expenses), [expenses]);
 
   return (
-    <div
+    <details
       id={`caisse-expense-group-${kind.toLowerCase()}`}
       className="rounded-xl border border-brand-medium/15 bg-white p-4"
     >
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-brand-medium/10 pb-3">
+      <summary className="cursor-pointer border-b border-brand-medium/10 pb-3">
         <div>
           <h3 className="text-sm font-semibold text-brand-dark">{title}</h3>
-          <p className="mt-1 max-w-3xl text-xs leading-relaxed text-brand-dark/55">{description}</p>
         </div>
+        <p className="mt-1 text-xs font-semibold tabular-nums text-brand-dark/70">
+          {expenses.length} charge{expenses.length === 1 ? "" : "s"} · {formatDt(totalDinars)}
+        </p>
+      </summary>
+
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-brand-medium/10 py-3">
+        <p className="max-w-3xl text-xs leading-relaxed text-brand-dark/55">{description}</p>
         <div className="flex shrink-0 flex-wrap items-center gap-3">
-          <p className="text-xs font-semibold tabular-nums text-brand-dark/70">
-            {expenses.length} · {formatDt(totalDinars)}
-          </p>
           <button
             type="button"
             onClick={() => onDeclareCharge(kind)}
@@ -1825,7 +1828,7 @@ function OtherChargeGroup({
           </ul>
         </>
       )}
-    </div>
+    </details>
   );
 }
 
@@ -1848,8 +1851,8 @@ function CoachChargesSection({
   const [sessionsDetailLine, setSessionsDetailLine] = useState<CoachPayrollLineDto | null>(null);
 
   return (
-    <section className="rounded-2xl border border-brand-medium/20 bg-white p-5 shadow-sm sm:p-6">
-      <div className="flex flex-wrap items-end justify-between gap-2 border-b border-brand-medium/10 pb-4">
+    <details className="rounded-2xl border border-brand-medium/20 bg-white p-5 shadow-sm sm:p-6">
+      <summary className="cursor-pointer border-b border-brand-medium/10 pb-4">
         <div>
           <h2 className="text-base font-semibold text-brand-dark">Charges coachs</h2>
           <p className="mt-1 text-xs text-brand-dark/55">
@@ -1862,15 +1865,18 @@ function CoachChargesSection({
             ) : null}
           </p>
         </div>
+      </summary>
+
+      <CoachSessionsDetailModal line={sessionsDetailLine} onClose={() => setSessionsDetailLine(null)} />
+
+      <div className="mt-4">
         <Link
           href="/dashboard/coachs"
-          className="rounded-xl border border-brand-medium/25 px-3 py-1.5 text-xs font-semibold text-brand-dark/80 transition hover:bg-zinc-50"
+          className="inline-flex rounded-xl border border-brand-medium/25 px-3 py-1.5 text-xs font-semibold text-brand-dark/80 transition hover:bg-zinc-50"
         >
           Gérer les coachs
         </Link>
       </div>
-
-      <CoachSessionsDetailModal line={sessionsDetailLine} onClose={() => setSessionsDetailLine(null)} />
 
       {lines.length === 0 ? (
         <div className="mt-4 space-y-2 text-sm text-brand-dark/65">
@@ -1928,7 +1934,7 @@ function CoachChargesSection({
           </ul>
         </>
       )}
-    </section>
+    </details>
   );
 }
 
