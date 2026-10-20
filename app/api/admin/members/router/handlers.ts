@@ -860,6 +860,11 @@ export async function deleteAdminMemberById(id: string) {
 
   try {
     await db.$transaction(async (tx) => {
+      await tx.sessionProspect.updateMany({
+        where: { convertedMemberId: member.id },
+        data: { memberLinkDeletedAt: new Date() },
+      });
+
       const assignedQrCodes = await tx.qrCode.findMany({
         where: { assignedMemberId: member.id },
         select: { id: true },

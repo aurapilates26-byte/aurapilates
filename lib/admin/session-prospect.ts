@@ -444,39 +444,61 @@ async function createPaidTrialProspectMember(
   return member;
 }
 
+async function lockSessionProspect(tx: Prisma.TransactionClient, prospectId: string): Promise<void> {
+  // Serialize member creation for the same prospect across concurrent requests.
+  await tx.$queryRaw`SELECT "id" FROM "session_prospects" WHERE "id" = ${prospectId} FOR UPDATE`;
+}
+
 /** Rattache une fiche adhérente aux prospects déjà encaissés avant cette fonctionnalité. */
 export async function ensurePaidTrialProspectMembersLinked(): Promise<void> {
   const orphans = await prisma.sessionProspect.findMany({
-    where: { status: "PAID_TRIAL", convertedMemberId: null, trialPackId: { not: null } },
-    select: {
-      id: true,
-      firstName: true,
-      lastName: true,
-      phone: true,
-      sessionDate: true,
-      trialPackId: true,
-      trialPersonalDiscountType: true,
-      trialPersonalDiscountValue: true,
-      trialPersonalDiscountReason: true,
+    where: {
+      status: "PAID_TRIAL",
+      convertedMemberId: null,
+      memberLinkDeletedAt: null,
+      trialPackId: { not: null },
     },
+    select: { id: true },
   });
 
   for (const prospect of orphans) {
     await prisma.$transaction(async (tx) => {
+      await lockSessionProspect(tx, prospect.id);
       const fresh = await tx.sessionProspect.findUnique({
         where: { id: prospect.id },
-        select: { id: true, status: true, convertedMemberId: true },
+        select: {
+          id: true,
+          status: true,
+          convertedMemberId: true,
+          memberLinkDeletedAt: true,
+          firstName: true,
+          lastName: true,
+          phone: true,
+          sessionDate: true,
+          trialPackId: true,
+          trialPersonalDiscountType: true,
+          trialPersonalDiscountValue: true,
+          trialPersonalDiscountReason: true,
+        },
       });
-      if (!fresh || fresh.status !== "PAID_TRIAL" || fresh.convertedMemberId) return;
+      if (
+        !fresh ||
+        fresh.status !== "PAID_TRIAL" ||
+        fresh.convertedMemberId ||
+        fresh.memberLinkDeletedAt ||
+        !fresh.trialPackId
+      ) {
+        return;
+      }
 
-      await createPaidTrialProspectMember(tx, prospect, {
-        packId: prospect.trialPackId!,
+      await createPaidTrialProspectMember(tx, fresh, {
+        packId: fresh.trialPackId,
         personalDiscount:
-          prospect.trialPersonalDiscountType && prospect.trialPersonalDiscountValue != null
+          fresh.trialPersonalDiscountType && fresh.trialPersonalDiscountValue != null
             ? {
-                type: prospect.trialPersonalDiscountType,
-                value: prospect.trialPersonalDiscountValue,
-                reason: prospect.trialPersonalDiscountReason ?? undefined,
+                type: fresh.trialPersonalDiscountType,
+                value: fresh.trialPersonalDiscountValue,
+                reason: fresh.trialPersonalDiscountReason ?? undefined,
               }
             : undefined,
       });
@@ -512,6 +534,7 @@ export async function recordSessionProspectTrialPayment(input: {
     : null;
 
   const { updated, memberId } = await prisma.$transaction(async (tx) => {
+    await lockSessionProspect(tx, input.prospectId);
     const freshProspect = await tx.sessionProspect.findUnique({
       where: { id: input.prospectId },
     });

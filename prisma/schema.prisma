@@ -513,6 +513,8 @@ model SessionProspect {
   courseSlug          String
   status              SessionProspectStatus @default(ACTIVE)
   convertedMemberId   String?
+  /// Empêche le rattachement automatique après suppression volontaire de la fiche membre.
+  memberLinkDeletedAt DateTime?
   trialPaymentDinars  Int?
   trialPaymentMethod  PackPaymentMethod?
   trialPaidAt         DateTime?
