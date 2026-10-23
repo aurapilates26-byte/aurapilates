@@ -317,7 +317,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
   const [packFilterId, setPackFilterId] = useState<string>("ALL");
   const [packStateFilter, setPackStateFilter] = useState<MemberPackStateFilter>("ALL");
   const [packStates, setPackStates] = useState<Record<string, MemberPrimaryPackKind>>({});
-  const [hasConsumedSessionsByMemberId, setHasConsumedSessionsByMemberId] = useState<
+  const [hasAttendedSessionsByMemberId, setHasAttendedSessionsByMemberId] = useState<
     Record<string, boolean>
   >({});
   const [packStateCounts, setPackStateCounts] = useState<MemberPrimaryPackStateCounts>(
@@ -395,9 +395,9 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
         }
         if (statusFilter === "ALL") return true;
         if (statusFilter === "PROSPECT") return Boolean(m.isProspectTrial);
-        const hasConsumedSessions = hasConsumedSessionsByMemberId[m.id] ?? false;
-        if (statusFilter === "ACTIVE") return hasConsumedSessions;
-        return !hasConsumedSessions;
+        const hasAttendedSessions = hasAttendedSessionsByMemberId[m.id] ?? false;
+        if (statusFilter === "ACTIVE") return hasAttendedSessions;
+        return !hasAttendedSessions;
       }),
     );
   }, [
@@ -410,7 +410,7 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     paymentStatusFilter,
     packStateFilter,
     packStates,
-    hasConsumedSessionsByMemberId,
+    hasAttendedSessionsByMemberId,
   ]);
 
   const visibleItems = useMemo(() => {
@@ -471,14 +471,14 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
     }
     const data = (await response.json()) as {
       byMemberId?: Record<string, MemberPrimaryPackKind>;
-      hasConsumedSessionsByMemberId?: Record<string, boolean>;
+      hasAttendedSessionsByMemberId?: Record<string, boolean>;
       counts?: MemberPrimaryPackStateCounts;
     };
-    if (!data.byMemberId || !data.hasConsumedSessionsByMemberId) {
-      throw new Error("Les données de consommation des packs sont indisponibles.");
+    if (!data.byMemberId || !data.hasAttendedSessionsByMemberId) {
+      throw new Error("Les données de présence des packs sont indisponibles.");
     }
     setPackStates(data.byMemberId);
-    setHasConsumedSessionsByMemberId(data.hasConsumedSessionsByMemberId);
+    setHasAttendedSessionsByMemberId(data.hasAttendedSessionsByMemberId);
     setPackStateCounts(data.counts ?? emptyMemberPrimaryPackStateCounts());
   };
 
@@ -1199,12 +1199,12 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span
                           className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
-                            hasConsumedSessionsByMemberId[m.id]
+                            hasAttendedSessionsByMemberId[m.id]
                               ? "border border-emerald-200 bg-emerald-50 text-emerald-900"
                               : "border border-zinc-200 bg-zinc-50 text-zinc-800"
                           }`}
                         >
-                          {hasConsumedSessionsByMemberId[m.id] ? "Active" : "Inactive"}
+                          {hasAttendedSessionsByMemberId[m.id] ? "Active" : "Inactive"}
                         </span>
                         {m.isConvertedFromProspect ? (
                           <span className="inline-flex rounded-full border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-900">
@@ -1345,12 +1345,12 @@ export const MembersManager = forwardRef<MembersManagerHandle, MembersManagerPro
                               <div className="flex flex-col items-center gap-1">
                                 <span
                                   className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
-                                    hasConsumedSessionsByMemberId[m.id]
+                                    hasAttendedSessionsByMemberId[m.id]
                                       ? "border border-emerald-200 bg-emerald-50 text-emerald-900"
                                       : "border border-zinc-200 bg-zinc-50 text-zinc-800"
                                   }`}
                                 >
-                                  {hasConsumedSessionsByMemberId[m.id] ? "Active" : "Inactive"}
+                                  {hasAttendedSessionsByMemberId[m.id] ? "Active" : "Inactive"}
                                 </span>
                                 {m.isConvertedFromProspect ? (
                                   <span className="inline-flex rounded-full border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-900">

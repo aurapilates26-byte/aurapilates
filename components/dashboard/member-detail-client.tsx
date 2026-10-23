@@ -1199,12 +1199,12 @@ export function MemberDetailClient({
                 </div>
                 <span
                   className={`inline-flex w-fit rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-                    member.isActive
+                    member.hasAttendedPrimaryPackSession
                       ? "border border-emerald-200 bg-emerald-50 text-emerald-900"
                       : "border border-zinc-200 bg-zinc-50 text-zinc-800"
                   }`}
                 >
-                  {member.isActive ? "Actif" : "Inactif"}
+                  {member.hasAttendedPrimaryPackSession ? "Actif" : "Inactif"}
                 </span>
               </div>
 

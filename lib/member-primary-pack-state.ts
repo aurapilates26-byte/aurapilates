@@ -17,6 +17,13 @@ export type MemberPrimaryPackKind =
 
 export type MemberPackStateFilter = "ALL" | MemberPrimaryPackKind;
 
+export function isPrimaryPackOperationallyActive(input: {
+  hasPack: boolean;
+  attendedSessions: number;
+}): boolean {
+  return input.hasPack && input.attendedSessions > 0;
+}
+
 export type MemberPrimaryPackStateCounts = {
   total: number;
   consuming: number;
@@ -46,17 +53,6 @@ export function emptyMemberPrimaryPackStateCounts(): MemberPrimaryPackStateCount
     finished: 0,
     none: 0,
   };
-}
-
-export function hasConsumedPrimaryPackSessions(input: {
-  totalSessions: number | null;
-  remainingSessions: number;
-  packStartedAt: Date | null;
-}): boolean {
-  if (input.totalSessions != null) {
-    return input.remainingSessions < input.totalSessions;
-  }
-  return input.packStartedAt != null;
 }
 
 /** Jour calendaire d'une date pack (@db.Date Prisma ou Date locale). */

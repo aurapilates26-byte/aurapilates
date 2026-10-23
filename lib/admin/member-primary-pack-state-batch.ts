@@ -1,9 +1,14 @@
 import "server-only";
 
 import {
+  assignConsumedReservationsToEnrollments,
+  type ConsumedReservationToAssign,
+  type EnrollmentConsumptionTarget,
+} from "@/lib/member-pack-consumption-assign";
+import {
   classifyPrimaryPackKind,
   emptyMemberPrimaryPackStateCounts,
-  hasConsumedPrimaryPackSessions,
+  isPrimaryPackOperationallyActive,
   isPackDateExpired,
   resolveEffectivePackExpiresAt,
   type MemberPrimaryPackKind,
@@ -11,19 +16,13 @@ import {
 } from "@/lib/member-primary-pack-state";
 import { prisma } from "@/lib/prisma";
 
-type EnrollmentRow = {
+type EnrollmentRow = Omit<EnrollmentConsumptionTarget, "pack"> & {
   memberId: string;
-  packId: string;
-  status: string;
-  packStartedAt: Date | null;
   packExpiresAt: Date | null;
   prolongedAt: Date | null;
-  purchasedAt: Date;
   createdAt: Date;
-  pack: {
-    sessionCount: number | null;
+  pack: EnrollmentConsumptionTarget["pack"] & {
     durationDays: string | null;
-    courseQuotas: { sessionCount: number }[];
   };
 };
 
@@ -46,7 +45,11 @@ function pickPrimaryEnrollment(
   enrollmentsByMember: Map<string, EnrollmentRow[]>,
 ): EnrollmentRow | null {
   const list = (enrollmentsByMember.get(memberId) ?? [])
-    .filter((row) => row.packId === packId)
+    .filter(
+      (row) =>
+        row.packId === packId &&
+        (row.status === "ACTIVE" || row.status === "PENDING_START" || row.status === "EXPIRED"),
+    )
     .slice()
     .sort(
       (a, b) =>
@@ -83,30 +86,29 @@ function remainingSessionsForPack(
   return rows.reduce((sum, row) => sum + row.remaining, 0);
 }
 
-export async function loadMemberPrimaryPackStates(): Promise<{
+export async function loadMemberPrimaryPackStates(memberIds?: string[]): Promise<{
   byMemberId: Record<string, MemberPrimaryPackKind>;
-  hasConsumedSessionsByMemberId: Record<string, boolean>;
+  hasAttendedSessionsByMemberId: Record<string, boolean>;
   counts: MemberPrimaryPackStateCounts;
 }> {
   const members = await prisma.member.findMany({
+    ...(memberIds ? { where: { id: { in: memberIds } } } : {}),
     select: { id: true, packId: true },
   });
 
-  const memberIds = members.map((m) => m.id);
-  if (memberIds.length === 0) {
+  const resolvedMemberIds = members.map((m) => m.id);
+  if (resolvedMemberIds.length === 0) {
     return {
       byMemberId: {},
-      hasConsumedSessionsByMemberId: {},
+      hasAttendedSessionsByMemberId: {},
       counts: emptyMemberPrimaryPackStateCounts(),
     };
   }
 
   const enrollments = await prisma.memberPackEnrollment.findMany({
-    where: {
-      memberId: { in: memberIds },
-      status: { in: ["PENDING_START", "ACTIVE", "EXPIRED"] },
-    },
+    where: { memberId: { in: resolvedMemberIds } },
     select: {
+      id: true,
       memberId: true,
       packId: true,
       status: true,
@@ -114,21 +116,39 @@ export async function loadMemberPrimaryPackStates(): Promise<{
       packExpiresAt: true,
       prolongedAt: true,
       purchasedAt: true,
+      closedAt: true,
+      additionalSessionsCredit: true,
       createdAt: true,
       pack: {
         select: {
           sessionCount: true,
+          category: true,
           durationDays: true,
-          courseQuotas: { select: { sessionCount: true } },
+          courseQuotas: { select: { courseSlug: true, sessionCount: true } },
         },
       },
     },
-    orderBy: [{ purchasedAt: "desc" }, { createdAt: "desc" }],
+    orderBy: [{ purchasedAt: "asc" }, { createdAt: "asc" }],
   });
 
   const balances = await prisma.memberPackBalance.findMany({
-    where: { memberId: { in: memberIds } },
+    where: { memberId: { in: resolvedMemberIds } },
     select: { memberId: true, packId: true, remaining: true },
+  });
+
+  const attendedReservations = await prisma.reservation.findMany({
+    where: {
+      memberId: { in: resolvedMemberIds },
+      status: "ATTENDED",
+      attendance: { isNot: null },
+    },
+    select: {
+      memberId: true,
+      sessionDate: true,
+      debitedPackId: true,
+      planning: { select: { courseSlug: true } },
+    },
+    orderBy: [{ sessionDate: "asc" }, { createdAt: "asc" }],
   });
 
   const enrollmentsByMember = new Map<string, EnrollmentRow[]>();
@@ -136,6 +156,17 @@ export async function loadMemberPrimaryPackStates(): Promise<{
     const list = enrollmentsByMember.get(enrollment.memberId) ?? [];
     list.push(enrollment);
     enrollmentsByMember.set(enrollment.memberId, list);
+  }
+
+  const attendedReservationsByMember = new Map<string, ConsumedReservationToAssign[]>();
+  for (const reservation of attendedReservations) {
+    const list = attendedReservationsByMember.get(reservation.memberId) ?? [];
+    list.push({
+      sessionDate: reservation.sessionDate,
+      courseSlug: reservation.planning.courseSlug,
+      debitedPackId: reservation.debitedPackId,
+    });
+    attendedReservationsByMember.set(reservation.memberId, list);
   }
 
   const balancesByMemberPack = new Map<string, { remaining: number }[]>();
@@ -147,13 +178,13 @@ export async function loadMemberPrimaryPackStates(): Promise<{
   }
 
   const byMemberId: Record<string, MemberPrimaryPackKind> = {};
-  const hasConsumedSessionsByMemberId: Record<string, boolean> = {};
+  const hasAttendedSessionsByMemberId: Record<string, boolean> = {};
   const counts = emptyMemberPrimaryPackStateCounts();
   counts.total = members.length;
 
   for (const member of members) {
     let kind: MemberPrimaryPackKind = "none";
-    let hasConsumedSessions = false;
+    let attendedSessions = 0;
 
     if (member.packId) {
       const enrollment = pickPrimaryEnrollment(member.id, member.packId, enrollmentsByMember);
@@ -167,11 +198,6 @@ export async function loadMemberPrimaryPackStates(): Promise<{
         );
         const consumedSessions =
           totalSessions != null ? Math.max(0, totalSessions - remainingSessions) : 0;
-        hasConsumedSessions = hasConsumedPrimaryPackSessions({
-          totalSessions,
-          remainingSessions,
-          packStartedAt: enrollment.packStartedAt,
-        });
 
         const packExpiresAt = resolveEffectivePackExpiresAt({
           packStartedAt: enrollment.packStartedAt,
@@ -189,15 +215,29 @@ export async function loadMemberPrimaryPackStates(): Promise<{
           totalSessions,
           remainingSessions,
         });
+
+        const attendanceAllocation = assignConsumedReservationsToEnrollments(
+          enrollmentsByMember.get(member.id) ?? [],
+          attendedReservationsByMember.get(member.id) ?? [],
+        );
+        attendedSessions = attendanceAllocation.get(enrollment.id)?.consumedTotal ?? 0;
       } else {
         kind = "pending";
+        attendedSessions = (attendedReservationsByMember.get(member.id) ?? []).some(
+          (reservation) => reservation.debitedPackId === member.packId,
+        )
+          ? 1
+          : 0;
       }
     }
 
     byMemberId[member.id] = kind;
-    hasConsumedSessionsByMemberId[member.id] = hasConsumedSessions;
+    hasAttendedSessionsByMemberId[member.id] = isPrimaryPackOperationallyActive({
+      hasPack: member.packId != null,
+      attendedSessions,
+    });
     counts[kind] += 1;
   }
 
-  return { byMemberId, hasConsumedSessionsByMemberId, counts };
+  return { byMemberId, hasAttendedSessionsByMemberId, counts };
 }

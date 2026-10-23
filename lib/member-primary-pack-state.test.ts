@@ -1,9 +1,95 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { assignConsumedReservationsToEnrollments } from "./member-pack-consumption-assign";
 import {
   classifyPrimaryPackKind,
-  hasConsumedPrimaryPackSessions,
+  isPrimaryPackOperationallyActive,
 } from "./member-primary-pack-state";
+
+describe("isPrimaryPackOperationallyActive", () => {
+  it("reste inactive après l'achat et une réservation sans présence", () => {
+    assert.equal(isPrimaryPackOperationallyActive({ hasPack: true, attendedSessions: 0 }), false);
+  });
+
+  it("devient active dès qu'une présence du pack principal est marquée", () => {
+    assert.equal(isPrimaryPackOperationallyActive({ hasPack: true, attendedSessions: 1 }), true);
+  });
+
+  it("reste active lorsque les séances du pack sont terminées", () => {
+    assert.equal(isPrimaryPackOperationallyActive({ hasPack: true, attendedSessions: 12 }), true);
+  });
+
+  it("reste inactive sans pack", () => {
+    assert.equal(isPrimaryPackOperationallyActive({ hasPack: false, attendedSessions: 1 }), false);
+  });
+
+  it("un renouvellement attend sa propre présence, sans hériter de l'ancien pack", () => {
+    const pack = {
+      sessionCount: 1,
+      category: null,
+      courseQuotas: [{ courseSlug: "reformer", sessionCount: 1 }],
+    };
+    const enrollments = [
+      {
+        id: "old-enrollment",
+        memberId: "member-1",
+        packId: "pack-1",
+        purchasedAt: new Date("2026-09-01T12:00:00.000Z"),
+        closedAt: new Date("2026-10-01T12:00:00.000Z"),
+        packStartedAt: new Date("2026-09-01T12:00:00.000Z"),
+        status: "EXPIRED",
+        additionalSessionsCredit: 0,
+        pack,
+      },
+      {
+        id: "renewal",
+        memberId: "member-1",
+        packId: "pack-1",
+        purchasedAt: new Date("2026-10-02T12:00:00.000Z"),
+        closedAt: null,
+        packStartedAt: null,
+        status: "PENDING_START",
+        additionalSessionsCredit: 0,
+        pack,
+      },
+    ];
+    const previousAttendance = [
+      {
+        sessionDate: new Date("2026-09-15T12:00:00.000Z"),
+        courseSlug: "reformer",
+        debitedPackId: "pack-1",
+      },
+    ];
+
+    const beforeRenewalAttendance = assignConsumedReservationsToEnrollments(
+      enrollments,
+      previousAttendance,
+    );
+    assert.equal(
+      isPrimaryPackOperationallyActive({
+        hasPack: true,
+        attendedSessions: beforeRenewalAttendance.get("renewal")?.consumedTotal ?? 0,
+      }),
+      false,
+    );
+
+    const afterRenewalAttendance = assignConsumedReservationsToEnrollments(enrollments, [
+      ...previousAttendance,
+      {
+        sessionDate: new Date("2026-10-03T12:00:00.000Z"),
+        courseSlug: "reformer",
+        debitedPackId: "pack-1",
+      },
+    ]);
+    assert.equal(
+      isPrimaryPackOperationallyActive({
+        hasPack: true,
+        attendedSessions: afterRenewalAttendance.get("renewal")?.consumedTotal ?? 0,
+      }),
+      true,
+    );
+  });
+});
 
 describe("classifyPrimaryPackKind vs prolongation", () => {
   it("reste Prolongé si prolongedAt est posé même avec une date de fin périmée", () => {
@@ -33,60 +119,6 @@ describe("classifyPrimaryPackKind vs prolongation", () => {
         remainingSessions: 0,
       }),
       "finished",
-    );
-  });
-});
-
-describe("hasConsumedPrimaryPackSessions", () => {
-  it("reste inactive tant qu'aucune séance d'un pack à quota n'a été débitée", () => {
-    assert.equal(
-      hasConsumedPrimaryPackSessions({
-        totalSessions: 6,
-        remainingSessions: 6,
-        packStartedAt: null,
-      }),
-      false,
-    );
-  });
-
-  it("devient active dès qu'une séance du pack a été débitée", () => {
-    assert.equal(
-      hasConsumedPrimaryPackSessions({
-        totalSessions: 6,
-        remainingSessions: 5,
-        packStartedAt: new Date("2026-10-01T00:00:00.000Z"),
-      }),
-      true,
-    );
-  });
-
-  it("reste active si la dernière séance du pack a été consommée", () => {
-    assert.equal(
-      hasConsumedPrimaryPackSessions({
-        totalSessions: 1,
-        remainingSessions: 0,
-        packStartedAt: new Date("2026-10-01T00:00:00.000Z"),
-      }),
-      true,
-    );
-  });
-
-  it("utilise le démarrage du pack lorsque celui-ci n'a pas de quota de séances", () => {
-    assert.equal(
-      hasConsumedPrimaryPackSessions({
-        totalSessions: null,
-        remainingSessions: 0,
-        packStartedAt: null,
-      }),
-      false,
-    );
-    assert.equal(
-      hasConsumedPrimaryPackSessions({
-        totalSessions: null,
-        remainingSessions: 0,
-        packStartedAt: new Date("2026-10-01T00:00:00.000Z"),
-      }),
-      true,
     );
   });
 });

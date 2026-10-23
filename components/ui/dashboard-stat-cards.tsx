@@ -32,7 +32,7 @@ export function DashboardStatCards({
         const isActive = activeId === item.id;
         const surfaceClass = isActive
           ? (item.activeClass ?? "border-brand-dark/40 bg-brand-dark/5 ring-2 ring-brand-dark/15")
-          : (item.idleClass ?? "border-brand-medium/20 bg-white hover:bg-zinc-50");
+          : (item.idleClass ?? "border-brand-medium/20 bg-zinc-50");
 
         const content = (
           <>

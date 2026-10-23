@@ -52,6 +52,7 @@ function listItemToDetail(item: ListMemberPreview): MemberDetailData {
     pendingPacks: [],
     personalDiscount: item.personalDiscount,
     isActive: item.isActive,
+    hasAttendedPrimaryPackSession: false,
     note: item.note?.trim() || null,
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,

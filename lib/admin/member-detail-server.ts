@@ -9,6 +9,7 @@ import { displayMemberEmail } from "@/lib/member-display-email";
 import type { PackPaymentMethodValue } from "@/lib/pack-payment-method";
 import { prisma } from "@/lib/prisma";
 import { addPackDurationToStartDate } from "@/lib/pack-duration";
+import { loadMemberPrimaryPackStates } from "@/lib/admin/member-primary-pack-state-batch";
 
 export type MemberPendingPackItem = {
   id: string;
@@ -41,6 +42,7 @@ export type MemberDetailData = {
   personalDiscount: { type: "PERCENT" | "AMOUNT"; value: number; reason: string | null } | null;
   note: string | null;
   isActive: boolean;
+  hasAttendedPrimaryPackSession: boolean;
   createdAt: string;
   updatedAt: string;
   qrCode: { qrId: string; qrKey: string | null; status: string; updatedAt: string } | null;
@@ -93,7 +95,8 @@ function mapMemberRecord(
     packBalances: { packId: string; courseSlug: string | null; remaining: number }[];
     assignedQrCodes: { publicId: string; qrKey: string; status: string; updatedAt: Date }[];
   },
-  pendingPacks: MemberPendingPackItem[]
+  pendingPacks: MemberPendingPackItem[],
+  hasAttendedPrimaryPackSession: boolean
 ): MemberDetailData {
   const qr = record.assignedQrCodes[0] ?? null;
   const packExpiresAt =
@@ -141,6 +144,7 @@ function mapMemberRecord(
         : null,
     note: record.note?.trim() || null,
     isActive: record.isActive,
+    hasAttendedPrimaryPackSession,
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
     qrCode: qr
@@ -195,6 +199,8 @@ export async function getMemberDetailById(id: string): Promise<MemberDetailData 
     createdAt: p.createdAt.toISOString(),
   }));
 
+  const packStates = await loadMemberPrimaryPackStates([item.id]);
+
   return mapMemberRecord(
     {
       packPaymentMethod: paymentTotals.packPaymentMethod,
@@ -202,6 +208,7 @@ export async function getMemberDetailById(id: string): Promise<MemberDetailData 
     },
     item,
     pendingPacks,
+    packStates.hasAttendedSessionsByMemberId[item.id] ?? false,
   );
 }
 

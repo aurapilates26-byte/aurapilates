@@ -80,7 +80,7 @@ export function PlanningCourseStatCards({ items, value, onChange }: PlanningCour
         count: total,
         icon: <StatCalendarIcon />,
         activeClass: "border-brand-dark/40 bg-brand-dark/5 ring-2 ring-brand-dark/15",
-        idleClass: "border-brand-medium/20 bg-white hover:bg-zinc-50",
+        idleClass: "border-brand-medium/20 bg-zinc-50",
       },
       ...courseCards,
     ];
