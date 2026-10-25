@@ -14,6 +14,10 @@ function WhatsAppGlyph({ className }: { className?: string }) {
 type AdminWhatsAppOpenButtonProps = {
   /** URL relative GET qui renvoie `{ waUrl: string }`. */
   fetchUrl: string;
+  /** URL POST recevant la réservation dont l'envoi est confirmé manuellement. */
+  confirmationUrl?: string;
+  confirmationReservationId?: string;
+  sentAt?: string | null;
   ariaLabel: string;
   title: string;
   hasPhone: boolean;
@@ -25,6 +29,9 @@ type AdminWhatsAppOpenButtonProps = {
 /** Bouton lecture seule : charge un lien wa.me et l'ouvre (aucun effet métier). */
 export function AdminWhatsAppOpenButton({
   fetchUrl,
+  confirmationUrl,
+  confirmationReservationId,
+  sentAt: initialSentAt = null,
   ariaLabel,
   title,
   hasPhone,
@@ -34,16 +41,29 @@ export function AdminWhatsAppOpenButton({
 }: AdminWhatsAppOpenButtonProps) {
   const { toast } = useToast();
   const [opening, setOpening] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [hasOpenedWhatsApp, setHasOpenedWhatsApp] = useState(false);
+  const [sentAt, setSentAt] = useState(initialSentAt);
 
   const openWhatsApp = async () => {
-    if (!hasPhone) {
+    if (!hasPhone || sentAt) {
       toast({
         variant: "warning",
-        title: "Téléphone manquant",
-        description: missingPhoneDescription,
+        title: sentAt ? "Message déjà confirmé" : "Téléphone manquant",
+        description: sentAt ? "Le message est déjà confirmé pour cette séance." : missingPhoneDescription,
       });
       return;
     }
+    const whatsappWindow = window.open("about:blank", "_blank");
+    if (!whatsappWindow) {
+      toast({
+        variant: "error",
+        title: "WhatsApp",
+        description: "Autorisez les fenêtres surgissantes pour ouvrir WhatsApp.",
+      });
+      return;
+    }
+
     setOpening(true);
     try {
       const res = await fetch(fetchUrl, { cache: "no-store", credentials: "include" });
@@ -51,12 +71,21 @@ export function AdminWhatsAppOpenButton({
         ok?: boolean;
         waUrl?: string;
         error?: string;
+        whatsappSentAt?: string | null;
       };
       if (!res.ok || !data?.waUrl) {
         throw new Error(data?.error ?? "Impossible d'ouvrir WhatsApp.");
       }
-      window.open(data.waUrl, "_blank", "noopener,noreferrer");
+      if (data.whatsappSentAt) {
+        setSentAt(data.whatsappSentAt);
+        whatsappWindow.close();
+        return;
+      }
+      whatsappWindow.opener = null;
+      whatsappWindow.location.href = data.waUrl;
+      setHasOpenedWhatsApp(true);
     } catch (e) {
+      whatsappWindow.close();
       toast({
         variant: "error",
         title: "WhatsApp",
@@ -67,23 +96,75 @@ export function AdminWhatsAppOpenButton({
     }
   };
 
-  return (
-    <button
-      type="button"
-      disabled={!hasPhone || opening || disabled}
-      onClick={() => void openWhatsApp()}
-      aria-label={ariaLabel}
-      title={hasPhone ? title : "Aucun téléphone enregistré"}
-      className={
-        className ??
-        "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-emerald-200 bg-[#25D366]/15 text-[#128C7E] transition hover:bg-[#25D366]/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200 disabled:cursor-not-allowed disabled:opacity-50"
+  const confirmMessageSent = async () => {
+    if (!confirmationUrl || !confirmationReservationId || !hasOpenedWhatsApp || sentAt) return;
+    setConfirming(true);
+    try {
+      const response = await fetch(confirmationUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          reservationId: confirmationReservationId,
+        }),
+      });
+      const data = (await response.json().catch(() => null)) as {
+        whatsappSentAt?: string;
+        error?: string;
+      } | null;
+      if (!response.ok || !data?.whatsappSentAt) {
+        throw new Error(data?.error ?? "Impossible d'enregistrer la confirmation d'envoi.");
       }
-    >
-      {opening ? (
-        <span className="text-[10px] font-semibold">…</span>
-      ) : (
-        <WhatsAppGlyph className="h-4 w-4" />
-      )}
-    </button>
+      setSentAt(data.whatsappSentAt);
+      toast({
+        variant: "success",
+        title: "Envoi confirmé",
+        description: "La confirmation est enregistrée pour cette séance.",
+      });
+    } catch (e) {
+      toast({
+        variant: "error",
+        title: "WhatsApp",
+        description: e instanceof Error ? e.message : "Erreur.",
+      });
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <button
+        type="button"
+        disabled={!hasPhone || opening || disabled || Boolean(sentAt)}
+        onClick={() => void openWhatsApp()}
+        aria-label={sentAt ? `${ariaLabel} — envoyé` : ariaLabel}
+        title={sentAt ? "Message confirmé envoyé pour cette séance" : hasPhone ? title : "Aucun téléphone enregistré"}
+        className={
+          className ??
+          "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-emerald-200 bg-[#25D366]/15 text-[#128C7E] transition hover:bg-[#25D366]/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200 disabled:cursor-not-allowed disabled:opacity-50"
+        }
+      >
+        {opening ? (
+          <span className="text-[10px] font-semibold">…</span>
+        ) : (
+          <WhatsAppGlyph className="h-4 w-4" />
+        )}
+      </button>
+      {sentAt ? (
+        <span className="text-[11px] font-semibold text-emerald-800" role="status">
+          Envoyé
+        </span>
+      ) : confirmationUrl && hasOpenedWhatsApp ? (
+        <button
+          type="button"
+          disabled={confirming || disabled}
+          onClick={() => void confirmMessageSent()}
+          className="rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-900 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {confirming ? "Enregistrement…" : "Confirmer l’envoi"}
+        </button>
+      ) : null}
+    </span>
   );
 }

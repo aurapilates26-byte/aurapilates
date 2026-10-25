@@ -3,6 +3,7 @@ import { z } from "zod";
 import { authOptions } from "@/auth";
 import { isStaffRole } from "@/lib/admin/access";
 import {
+  confirmPresenceWhatsAppSent,
   getPresencePackWhatsAppPayload,
   presencePackWhatsAppErrorMessage,
 } from "@/lib/admin/presence-pack-whatsapp";
@@ -12,6 +13,10 @@ function errorResponse(message: string, status: number) {
 }
 
 const querySchema = z.object({
+  reservationId: z.string().trim().cuid(),
+});
+
+const bodySchema = z.object({
   reservationId: z.string().trim().cuid(),
 });
 
@@ -42,4 +47,26 @@ export async function GET(request: Request) {
   }
 
   return Response.json({ ok: true, ...result.value });
+}
+
+/** Enregistre la confirmation manuelle d'envoi pour cette réservation uniquement. */
+export async function POST(request: Request) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user || !isStaffRole(session.user.role)) {
+    return errorResponse("Accès refusé", 403);
+  }
+
+  const rawBody = await request.json().catch(() => null);
+  const parsed = bodySchema.safeParse(rawBody);
+  if (!parsed.success) {
+    return errorResponse("Données invalides", 400);
+  }
+
+  const result = await confirmPresenceWhatsAppSent(parsed.data.reservationId);
+  if (!result.ok) {
+    const status = result.code === "NOT_FOUND" ? 404 : 409;
+    return errorResponse(presencePackWhatsAppErrorMessage(result.code), status);
+  }
+
+  return Response.json({ ok: true, whatsappSentAt: result.whatsappSentAt });
 }

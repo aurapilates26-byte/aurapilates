@@ -90,6 +90,7 @@ type ClassRosterPayload = {
   reservations: {
     id: string;
     status: string;
+    whatsappSentAt: string | null;
     member: {
       id: string;
       firstName: string | null;
@@ -143,7 +144,7 @@ async function loadTodayClassRosters(
                 : {}),
             },
           },
-          attendance: { select: { markedAt: true } },
+          attendance: { select: { markedAt: true, whatsappSentAt: true } },
         },
       },
     },
@@ -178,7 +179,7 @@ async function loadTodayClassRosters(
                   : {}),
               },
             },
-            attendance: { select: { markedAt: true } },
+            attendance: { select: { markedAt: true, whatsappSentAt: true } },
           },
         },
       },
@@ -243,6 +244,7 @@ async function loadTodayClassRosters(
         reservations: planning.reservations.map((r) => ({
           id: r.id,
           status: r.status,
+          whatsappSentAt: r.attendance?.whatsappSentAt?.toISOString() ?? null,
           member: {
             id: r.member.id,
             firstName: r.member.firstName,

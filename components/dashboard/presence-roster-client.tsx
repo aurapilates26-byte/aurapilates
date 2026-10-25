@@ -27,6 +27,7 @@ type RosterMember = {
 type RosterRow = {
   id: string;
   status: "BOOKED" | "WAITLIST" | "CANCELLED" | "ATTENDED";
+  whatsappSentAt: string | null;
   member: RosterMember;
 };
 
@@ -832,6 +833,9 @@ export function PresenceRosterClient({ initialQrPublicId }: { initialQrPublicId:
                                   title="WhatsApp — confirmation de présence"
                                   hasPhone={Boolean(row.member.phone?.trim())}
                                   missingPhoneDescription={`Aucun numéro enregistré pour ${memberName}.`}
+                                  confirmationUrl="/api/admin/presence/pack-whatsapp"
+                                  confirmationReservationId={row.id}
+                                  sentAt={row.whatsappSentAt}
                                   disabled={markingId === row.id || deletingId === row.id}
                                 />
                               ) : null}

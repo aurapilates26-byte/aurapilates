@@ -19,6 +19,7 @@ export type PresenceWhatsAppPayload = {
   phoneDigits: string;
   waUrl: string;
   message: string;
+  whatsappSentAt: string | null;
 };
 
 function pickPresencePack(
@@ -101,6 +102,7 @@ export async function getPresencePackWhatsAppPayload(
       memberId: true,
       debitedPackId: true,
       sessionDate: true,
+      attendance: { select: { whatsappSentAt: true } },
       member: {
         select: {
           id: true,
@@ -162,15 +164,60 @@ export async function getPresencePackWhatsAppPayload(
       phoneDigits,
       waUrl: buildWaMeUrl(phoneDigits, message),
       message,
+      whatsappSentAt: reservation.attendance?.whatsappSentAt?.toISOString() ?? null,
     },
   };
 }
 
+export async function confirmPresenceWhatsAppSent(
+  reservationId: string,
+): Promise<
+  | { ok: true; whatsappSentAt: string }
+  | { ok: false; code: "NOT_FOUND" | "NOT_ATTENDED" | "NO_ATTENDANCE" }
+> {
+  return prisma.$transaction(async (tx) => {
+    const reservation = await tx.reservation.findUnique({
+      where: { id: reservationId },
+      select: {
+        status: true,
+        attendance: { select: { whatsappSentAt: true } },
+      },
+    });
+
+    if (!reservation) return { ok: false, code: "NOT_FOUND" } as const;
+    if (reservation.status !== "ATTENDED") return { ok: false, code: "NOT_ATTENDED" } as const;
+    if (!reservation.attendance) return { ok: false, code: "NO_ATTENDANCE" } as const;
+    if (reservation.attendance.whatsappSentAt) {
+      return {
+        ok: true,
+        whatsappSentAt: reservation.attendance.whatsappSentAt.toISOString(),
+      } as const;
+    }
+
+    const whatsappSentAt = new Date();
+    const update = await tx.attendance.updateMany({
+      where: { reservationId, whatsappSentAt: null },
+      data: { whatsappSentAt },
+    });
+    if (update.count === 0) {
+      const current = await tx.attendance.findUnique({
+        where: { reservationId },
+        select: { whatsappSentAt: true },
+      });
+      if (!current?.whatsappSentAt) return { ok: false, code: "NO_ATTENDANCE" } as const;
+      return { ok: true, whatsappSentAt: current.whatsappSentAt.toISOString() } as const;
+    }
+
+    return { ok: true, whatsappSentAt: whatsappSentAt.toISOString() } as const;
+  });
+}
+
 export function presencePackWhatsAppErrorMessage(
-  code: "NOT_FOUND" | "NOT_ATTENDED" | "NO_PHONE" | "NO_PACK",
+  code: "NOT_FOUND" | "NOT_ATTENDED" | "NO_PHONE" | "NO_PACK" | "NO_ATTENDANCE",
 ): string {
   if (code === "NOT_FOUND") return "Réservation introuvable";
   if (code === "NOT_ATTENDED") return "Présence non enregistrée pour cette réservation";
   if (code === "NO_PHONE") return "Aucun numéro de téléphone enregistré pour ce membre";
+  if (code === "NO_ATTENDANCE") return "Enregistrement de présence introuvable";
   return "Aucun pack associé à ce membre";
 }
