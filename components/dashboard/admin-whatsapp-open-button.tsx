@@ -138,7 +138,7 @@ export function AdminWhatsAppOpenButton({
         type="button"
         disabled={!hasPhone || opening || disabled || Boolean(sentAt)}
         onClick={() => void openWhatsApp()}
-        aria-label={sentAt ? `${ariaLabel} — envoyé` : ariaLabel}
+        aria-label={ariaLabel}
         title={sentAt ? "Message confirmé envoyé pour cette séance" : hasPhone ? title : "Aucun téléphone enregistré"}
         className={
           className ??
@@ -151,11 +151,7 @@ export function AdminWhatsAppOpenButton({
           <WhatsAppGlyph className="h-4 w-4" />
         )}
       </button>
-      {sentAt ? (
-        <span className="text-[11px] font-semibold text-emerald-800" role="status">
-          Envoyé
-        </span>
-      ) : confirmationUrl && hasOpenedWhatsApp ? (
+      {!sentAt && confirmationUrl && hasOpenedWhatsApp ? (
         <button
           type="button"
           disabled={confirming || disabled}
